@@ -1,0 +1,34 @@
+# General
+.DS_Store
+.env
+.env.*
+*.log
+*.sqlite3
+dist/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.venv/
+venv/
+
+# Node/JS
+node_modules/
+
+# Flutter/Dart
+.dart_tool/
+.packages
+.pub-cache/
+build/
+ios/Pods/
+android/.gradle/
+android/local.properties
+web/.dart_tool/
+
+# IDE
+.vscode/
+.idea/
