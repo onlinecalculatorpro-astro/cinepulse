@@ -1,0 +1,16 @@
+name: API Docker Build
+
+on:
+  push:
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/docker-api-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t cinepulse-api ./apps/api
