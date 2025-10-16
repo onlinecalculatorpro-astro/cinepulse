@@ -1,0 +1,140 @@
+# =========================
+# CinePulse content sources
+# =========================
+
+meta:
+  regions: ["US", "IN"]
+  # deep-link base for sharing inside app (web hash route handled by RootShell)
+  share_base_url: "https://your-domain.example/#/s/"
+
+# ---- YouTube Channels (official trailers, teasers, announcements) ----
+# Use the official channel_id. Leave TODOs to fill missing ones.
+youtube_channels:
+  # Hollywood
+  - name: "Netflix"
+    channel_id: "UCWOA1ZGywLbqmigxE4Qlvuw"
+    industry: "hollywood"
+  - name: "Marvel Entertainment"
+    channel_id: "UCvC4D8onUfXzvjTOM-dBfEA"
+    industry: "hollywood"
+  - name: "Sony Pictures Entertainment"
+    channel_id: "UCz97F7dMxBNOfGYu3rx8aCw"
+    industry: "hollywood"
+  - name: "Warner Bros. Pictures"
+    channel_id: "UCjmJDM5pRKbUlVIzDYYWb6g"
+    industry: "hollywood"
+  - name: "Paramount Pictures"
+    channel_id: "UCF9imwPMSGz4Vq1NiTWCC7g"
+    industry: "hollywood"
+  - name: "Universal Pictures"
+    channel_id: "UCq0OueAsdxH6b8NY18-uhug"
+    industry: "hollywood"
+
+  # Bollywood
+  - name: "T-Series"
+    channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
+    industry: "bollywood"
+  - name: "YRF"
+    channel_id: "UCI5q9xeOp2-1bV7xEtkKgzA"
+    industry: "bollywood"
+  - name: "Zee Studios"
+    channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"   # TODO: verify
+    industry: "bollywood"
+  - name: "Dharma Productions"
+    channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"   # TODO: verify
+    industry: "bollywood"
+
+  # Tollywood
+  - name: "Mythri Movie Makers"
+    channel_id: "UCwSRZ9YQ9V0-3cN0iK8gVtQ"   # TODO: verify
+    industry: "tollywood"
+  - name: "UV Creations"
+    channel_id: "UCpO4t7d4AFFqU8xM3A4J3og"   # TODO: verify
+    industry: "tollywood"
+  - name: "Geetha Arts"
+    channel_id: "UCYx3Feo0iF4cGzJpmKfOaYg"   # TODO: verify
+    industry: "tollywood"
+
+# ---- Entertainment News via RSS (free) ----
+news_feeds:
+  # Hollywood trades
+  - name: "Variety"
+    url: "https://variety.com/feed/"
+    industry: "hollywood"
+  - name: "Deadline"
+    url: "https://deadline.com/feed/"
+    industry: "hollywood"
+  - name: "The Hollywood Reporter"
+    url: "https://www.hollywoodreporter.com/feed/"
+    industry: "hollywood"
+  - name: "IndieWire"
+    url: "https://www.indiewire.com/feed/"
+    industry: "hollywood"
+
+  # Bollywood
+  - name: "Bollywood Hungama"
+    url: "https://www.bollywoodhungama.com/rss/news.xml"
+    industry: "bollywood"
+  - name: "Film Companion"
+    url: "https://www.filmcompanion.in/feed"
+    industry: "bollywood"
+  - name: "Pinkvilla (Movies)"
+    url: "https://www.pinkvilla.com/entertainment/feed"
+    industry: "bollywood"
+
+  # Tollywood
+  - name: "123Telugu"
+    url: "https://www.123telugu.com/feed"
+    industry: "tollywood"
+  - name: "Telugu360"
+    url: "https://www.telugu360.com/feed/"
+    industry: "tollywood"
+  - name: "GreatAndhra"
+    url: "https://www.greatandhra.com/rss/english/movies.xml"
+    industry: "tollywood"
+
+# ---- TMDb (free, attribution required) ----
+tmdb:
+  # Prefer reading TMDB_API_KEY from env; fall back to value here if provided.
+  api_key_env: "TMDB_API_KEY"
+  # fallback_api_key: ""   # optional: hard-code only for local dev
+  regions: ["US", "IN"]
+  enable_trending: true
+  enable_upcoming: true
+  # Optional: map provider names to "OTT" tag in your Story
+  ott_providers:
+    - "Netflix"
+    - "Amazon Prime Video"
+    - "Disney Plus Hotstar"
+    - "JioCinema"
+
+# ---- Classification rules (lightweight) ----
+rules:
+  trailer_keywords:
+    - "trailer"
+    - "teaser"
+    - "first look"
+    - "announcement"
+    - "promo"
+  ignore_keywords:
+    - "behind the scenes"
+    - "interview"
+    - "live stream"
+
+# ---- Ranking weights (used by worker when scoring stories) ----
+ranking_weights:
+  recency_half_life_minutes: 360
+  source_weight:
+    youtube: 2.0
+    tmdb: 1.2
+    rss: 1.0
+  has_video_bonus: 1.5
+  has_poster_bonus: 0.6
+  trend_bonus: 1.2
+
+# ---- Scheduler defaults (can be overridden by env) ----
+scheduler:
+  # How often to enqueue polling jobs
+  poll_interval_min: 15
+  # Only consider items published within this window
+  published_after_hours: 72

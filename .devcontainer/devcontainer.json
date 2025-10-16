@@ -1,18 +1,32 @@
 {
   "name": "CinePulse Dev",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {},
     "ghcr.io/devcontainers/features/python:1": { "version": "3.11" }
   },
-  "forwardPorts": [8000, 5432, 6379],
-  "postCreateCommand": "pip install -r apps/api/requirements.txt || true",
+  "forwardPorts": [8000, 8100, 5432, 6379, 5173],
+  "portsAttributes": {
+    "8000": { "label": "API" },
+    "8100": { "label": "Renderer" },
+    "5432": { "label": "Postgres" },
+    "6379": { "label": "Redis" },
+    "5173": { "label": "Flutter Web" }
+  },
   "customizations": {
     "vscode": {
       "extensions": [
         "ms-python.python",
         "ms-azuretools.vscode-docker",
-        "github.vscode-github-actions"
-      ]
+        "github.vscode-github-actions",
+        "Dart-Code.dart-code",
+        "Dart-Code.flutter"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "editor.formatOnSave": true
+      }
     }
-  }
+  },
+  "postCreateCommand": "bash .devcontainer/setup-flutter.sh"
 }

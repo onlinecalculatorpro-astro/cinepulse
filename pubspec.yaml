@@ -1,0 +1,41 @@
+name: cinepulse_app
+description: CinePulse Flutter client
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"   # was >=3.5.0
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  http: ^1.5.0
+  intl: ^0.20.2
+  cached_network_image: ^3.4.1
+  url_launcher: ^6.3.2
+  google_fonts: ^6.3.2
+  carousel_slider: ^4.2.1
+  shimmer: ^3.0.0
+  shared_preferences: ^2.5.3
+  connectivity_plus: ^7.0.0
+  share_plus: ^12.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
+
+flutter:
+  uses-material-design: true
+
+# Launcher icon config — add assets/icon.png before running:
+# flutter pub run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/icon.png
+  adaptive_icon_background: "#121212"
+  adaptive_icon_foreground: assets/icon.png

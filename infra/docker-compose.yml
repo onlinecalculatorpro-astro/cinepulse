@@ -1,18 +1,21 @@
 version: "3.9"
+name: cinepulse
+
+# Reusable env config shared by multiple services
+x-common-env: &common-env
+  env_file:
+    - ../.env
+  environment:
+    # fallbacks if not present in .env
+    ENV: ${ENV:-dev}
+    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    # optional: TMDB key if your backend uses it
+    TMDB_API_KEY: ${TMDB_API_KEY:-}
+    # path to your sources file (mounted below)
+    SOURCES_FILE: /app/config/source.yml
 
 services:
-  api:
-    build: ../apps/api
-    environment:
-      ENV: dev
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/cinepulse
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      - db
-      - redis
-    ports:
-      - "8000:8000"
-
   db:
     image: postgres:16
     environment:
@@ -23,11 +26,96 @@ services:
       - dbdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # FastAPI (or similar) backend: /health, /v1/feed, /v1/story/<id>, /v1/search
+  api:
+    <<: *common-env
+    build:
+      context: ../apps/api
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      # mount the sources file read-only inside the container
+      - ./source.yml:/app/config/source.yml:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)\"",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Background workers (queues: ingest YouTube RSS, fetch RSS news, TMDb trending, etc.)
+  worker:
+    <<: *common-env
+    build:
+      context: ../apps/workers
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./source.yml:/app/config/source.yml:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import os,sys; from redis import from_url; from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping(); sys.exit(0)\"",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Lightweight scheduler that enqueues periodic jobs to Redis for the worker
+  scheduler:
+    <<: *common-env
+    build:
+      context: ../apps/scheduler
+    environment:
+      # These override the defaults inside the scheduler (it can also read SOURCES_FILE)
+      POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
+      PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./source.yml:/app/config/source.yml:ro
+    restart: unless-stopped
+
+  # Optional: server-side renderer / image proxy / thumbnails (enable if you use it)
+  renderer:
+    build:
+      context: ../apps/renderer
+    ports:
+      - "8100:8000"
+    restart: unless-stopped
+    # profiles:
+    #   - extras
 
 volumes:
-  dbdata:
+  dbdata: {}
