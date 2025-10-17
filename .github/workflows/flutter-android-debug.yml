@@ -3,22 +3,31 @@ name: Android Debug (APK)
 
 on:
   workflow_dispatch:
+    inputs:
+      apiBase:
+        description: "API base URL (e.g. https://api.cinepulse.app)"
+        required: false
+        default: ""
+      deepLinkBase:
+        description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
+        required: false
+        default: ""
   push:
     branches: [ main ]
     paths:
       - "apps/flutter/cinepulse_app/**"
       - ".github/workflows/flutter-android-debug.yml"
 
-# Dart-defines: prefer repo secrets; fall back to sane defaults.
+# Dart-defines: prefer repo secrets; then manual inputs; else sane defaults.
 env:
-  API_BASE_URL: ${{ secrets.API_BASE_URL || 'http://72.60.218.209:8000' }}
-  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || 'https://cinepulse.netlify.app/#/s' }}
+  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'http://72.60.218.209:8000' }}
+  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     concurrency:
-      group: android-debug
+      group: android-debug-${{ github.ref_name }}
       cancel-in-progress: false
 
     defaults:
@@ -61,7 +70,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/flutter/cinepulse_app/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             gradle-${{ runner.os }}-
 
@@ -73,6 +82,9 @@ jobs:
           flutter build apk --debug --split-per-abi \
             --dart-define=API_BASE_URL=${{ env.API_BASE_URL }} \
             --dart-define=DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}
+
+      - name: List APKs
+        run: ls -lh build/app/outputs/flutter-apk || true
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
