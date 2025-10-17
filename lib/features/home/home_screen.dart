@@ -21,7 +21,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  // ✅ Updated tab set: All · Trailers · OTT · In Theatres · Coming Soon
+  // ✅ Tabs: All · Trailers · OTT · In Theatres · Coming Soon
   static const Map<String, String> _tabs = {
     'all': 'All',
     'trailers': 'Trailers',
@@ -34,6 +34,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       TabController(length: _tabs.length, vsync: this);
 
   final TextEditingController _search = TextEditingController();
+  final GlobalKey<RefreshIndicatorState> _refreshKey =
+      GlobalKey<RefreshIndicatorState>();
+
   final Map<String, _PagedFeed> _feeds = {
     for (final k in _tabs.keys) k: _PagedFeed(tab: k),
   };
@@ -89,13 +92,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     await _feeds[key]!.load(reset: true);
   }
 
+  // Long-press the refresh icon to force-refresh all tabs.
+  Future<void> _refreshAll() async {
+    for (final f in _feeds.values) {
+      await f.load(reset: true);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('All tabs refreshed')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isPhone = MediaQuery.of(context).size.width < 600;
 
     return RefreshIndicator.adaptive(
+      key: _refreshKey,
       onRefresh: _refresh,
+      // ✅ Allow pull-to-refresh from anywhere on the page (nice on mobile)
+      triggerMode: RefreshIndicatorTriggerMode.anywhere,
       child: NestedScrollView(
         headerSliverBuilder: (_, __) => [
           // Brand + search in a sliver app bar
@@ -116,7 +133,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               preferredSize: Size.fromHeight(isPhone ? 60 : 70),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                child: SearchBarInput(controller: _search),
+                // ✅ Search + Refresh icon row
+                child: Row(
+                  children: [
+                    Expanded(child: SearchBarInput(controller: _search)),
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: 'Refresh',
+                      child: IconButton.filledTonal(
+                        onPressed: () {
+                          _refreshKey.currentState?.show(); // show spinner
+                          _refresh();
+                        },
+                        onLongPress: _refreshAll, // optional power-user shortcut
+                        icon: const Icon(Icons.refresh_rounded),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -167,73 +201,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           controller: _tab,
           children: _tabs.keys.map((key) {
             final feed = _feeds[key]!;
-            return AnimatedBuilder(
-              animation: feed,
-              builder: (context, _) {
-                if (feed.isInitialLoading) {
-                  return ListView.builder(
-                    padding: const EdgeInsets.only(top: 8, bottom: 24),
-                    itemCount: 6,
-                    itemBuilder: (_, __) => const SkeletonCard(),
-                  );
-                }
-                if (feed.hasError && feed.items.isEmpty) {
-                  return ErrorView(
-                    message: feed.errorMessage ?? 'Something went wrong.',
-                    onRetry: () => feed.load(reset: true),
-                  );
-                }
-
-                // Local search filter
-                final q = _search.text.trim().toLowerCase();
-                final filtered = (q.isEmpty)
-                    ? feed.items
-                    : feed.items
-                        .where((s) =>
-                            s.title.toLowerCase().contains(q) ||
-                            (s.summary ?? '').toLowerCase().contains(q))
-                        .toList();
-
-                if (filtered.isEmpty) {
-                  return Center(
-                    child: Text(
-                      _offline
-                          ? 'You’re offline and no results match your search.'
-                          : 'No matching items.',
-                    ),
-                  );
-                }
-
-                // Paging toggle (kept false until API supports before/after)
-                final showLoadMore = false;
-
-                return ListView.builder(
-                  padding: const EdgeInsets.only(top: 8, bottom: 24),
-                  physics: const ClampingScrollPhysics(),
-                  itemCount: filtered.length + (showLoadMore ? 1 : 0),
-                  itemBuilder: (_, i) {
-                    if (showLoadMore && i == filtered.length) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
-                        child: Center(
-                          child: feed.isLoadingMore
-                              ? const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 16),
-                                  child: CircularProgressIndicator(),
-                                )
-                              : OutlinedButton.icon(
-                                  onPressed: feed.loadMore,
-                                  icon: const Icon(Icons.expand_more_rounded),
-                                  label: const Text('Load more'),
-                                ),
-                        ),
-                      );
-                    }
-                    return StoryCard(story: filtered[i]);
-                  },
-                );
-              },
+            return _FeedList(
+              key: PageStorageKey('feed-$key'), // ✅ keep scroll per tab
+              feed: feed,
+              searchText: _search,
+              offline: _offline,
             );
           }).toList(),
         ),
@@ -321,6 +293,113 @@ class _TabsHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   bool shouldRebuild(_TabsHeaderDelegate oldDelegate) => false;
+}
+
+/* ===================== Feed list (keep-alive) ===================== */
+
+class _FeedList extends StatefulWidget {
+  const _FeedList({
+    super.key,
+    required this.feed,
+    required this.searchText,
+    required this.offline,
+  });
+
+  final _PagedFeed feed;
+  final TextEditingController searchText;
+  final bool offline;
+
+  @override
+  State<_FeedList> createState() => _FeedListState();
+}
+
+class _FeedListState extends State<_FeedList>
+    with AutomaticKeepAliveClientMixin<_FeedList> {
+  @override
+  bool get wantKeepAlive => true; // ✅ preserve state across tab switches
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final feed = widget.feed;
+
+    return AnimatedBuilder(
+      animation: feed,
+      builder: (context, _) {
+        if (feed.isInitialLoading) {
+          return ListView.builder(
+            padding: const EdgeInsets.only(top: 8, bottom: 24),
+            physics: const AlwaysScrollableScrollPhysics(),
+            cacheExtent: 1200,
+            itemCount: 6,
+            itemBuilder: (_, __) => const SkeletonCard(),
+          );
+        }
+        if (feed.hasError && feed.items.isEmpty) {
+          return ErrorView(
+            message: feed.errorMessage ?? 'Something went wrong.',
+            onRetry: () => feed.load(reset: true),
+          );
+        }
+
+        // Local search filter
+        final q = widget.searchText.text.trim().toLowerCase();
+        final filtered = (q.isEmpty)
+            ? feed.items
+            : feed.items
+                .where((s) =>
+                    s.title.toLowerCase().contains(q) ||
+                    (s.summary ?? '').toLowerCase().contains(q))
+                .toList();
+
+        if (filtered.isEmpty) {
+          return ListView(
+            padding: const EdgeInsets.only(top: 32),
+            physics: const AlwaysScrollableScrollPhysics(), // ✅ still pull-to-refresh
+            children: [
+              Center(
+                child: Text(
+                  widget.offline
+                      ? 'You’re offline and no results match your search.'
+                      : 'No matching items.',
+                ),
+              ),
+            ],
+          );
+        }
+
+        // Paging toggle (kept false until API supports before/after)
+        const showLoadMore = false;
+
+        return ListView.builder(
+          padding: const EdgeInsets.only(top: 8, bottom: 24),
+          physics: const AlwaysScrollableScrollPhysics(),
+          cacheExtent: 1400, // ✅ smoother scrolling
+          itemCount: filtered.length + (showLoadMore ? 1 : 0),
+          itemBuilder: (_, i) {
+            if (showLoadMore && i == filtered.length) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Center(
+                  child: feed.isLoadingMore
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16),
+                          child: CircularProgressIndicator(),
+                        )
+                      : OutlinedButton.icon(
+                          onPressed: feed.loadMore,
+                          icon: const Icon(Icons.expand_more_rounded),
+                          label: const Text('Load more'),
+                        ),
+                ),
+              );
+            }
+            return StoryCard(story: filtered[i]);
+          },
+        );
+      },
+    );
+  }
 }
 
 /* ===================== Paging model ===================== */
