@@ -6,12 +6,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
 
-/// In-memory cache so other screens can render full cards quickly.
+/// ==============================
+/// In-memory cache (by Story.id)
+/// ==============================
 class FeedCache {
-  static final Map<String, Story> _byId = {};
+  static final Map<String, Story> _byId = <String, Story>{};
+
   static void put(Story s) => _byId[s.id] = s;
-  static Story? get(String id) => _byId[id];
-  static Iterable<Story> get values => _byId.values;
 
   /// Optional helper: bulk insert.
   static void putAll(Iterable<Story> items) {
@@ -20,31 +21,80 @@ class FeedCache {
     }
   }
 
+  static Story? get(String id) => _byId[id];
+
+  static bool contains(String id) => _byId.containsKey(id);
+
+  static Iterable<Story> get values =>
+      List<Story>.unmodifiable(_byId.values);
+
+  static int get size => _byId.length;
+
   /// Optional helper: clear (e.g., on logout).
   static void clear() => _byId.clear();
 }
 
-/// Lightweight disk cache for last feed per tab (offline-first start).
+/// ===========================================
+/// Lightweight disk cache (per-tab, offline)
+/// Shape (v2):
+/// { "v": 2, "ts": 1700000000000, "items": [Story...] }
+/// Back-compat: also reads legacy raw List<Story>
+/// ===========================================
 class FeedDiskCache {
-  static String _key(String tab) => 'feed_cache_$tab';
+  static const int _schemaVersion = 2;
 
-  static Future<void> save(String tab, List<Story> items, {int maxItems = 50}) async {
+  static String _key(String tab) => 'feed_cache_$tab';
+  static String _keyV(String tab) => 'feed_cache_${tab}_v$_schemaVersion';
+
+  /// Save up to [maxItems] (newest-first recommended by caller).
+  static Future<void> save(
+    String tab,
+    List<Story> items, {
+    int maxItems = 50,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    final payload = jsonEncode(items.take(maxItems).map((e) => e.toJson()).toList());
-    await prefs.setString(_key(tab), payload);
+    final payload = <String, dynamic>{
+      'v': _schemaVersion,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+      'items': items.take(maxItems).map((e) => e.toJson()).toList(),
+    };
+    final s = jsonEncode(payload);
+
+    // Write both the versioned key and (for back-compat) the old one once.
+    await prefs.setString(_keyV(tab), s);
+    await prefs.setString(_key(tab), s);
   }
 
   static Future<List<Story>> load(String tab) async {
     final prefs = await SharedPreferences.getInstance();
-    final s = prefs.getString(_key(tab));
-    if (s == null) return const [];
+
+    // Prefer versioned
+    String? s = prefs.getString(_keyV(tab)) ?? prefs.getString(_key(tab));
+    if (s == null) return const <Story>[];
+
     try {
-      final raw = jsonDecode(s) as List<dynamic>;
-      return raw
-          .map((e) => Story.fromJson((e as Map).cast<String, dynamic>()))
-          .toList(growable: false);
+      final dynamic parsed = jsonDecode(s);
+
+      // v2+ object payload
+      if (parsed is Map<String, dynamic>) {
+        final items = (parsed['items'] as List?) ?? const <dynamic>[];
+        return List<Story>.unmodifiable(items.map((e) {
+          return Story.fromJson((e as Map).cast<String, dynamic>());
+        }));
+      }
+
+      // Legacy: list of Story JSONs directly
+      if (parsed is List) {
+        return List<Story>.unmodifiable(parsed.map((e) {
+          return Story.fromJson((e as Map).cast<String, dynamic>());
+        }));
+      }
+
+      return const <Story>[];
     } catch (_) {
-      return const [];
+      // Corrupt cache: clear to avoid repeated failures.
+      await clear(tab);
+      return const <Story>[];
     }
   }
 
@@ -52,6 +102,16 @@ class FeedDiskCache {
   static Future<void> clear(String tab) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_key(tab));
+    await prefs.remove(_keyV(tab));
+  }
+
+  /// Optional: clear caches for a set of tabs.
+  static Future<void> clearAll(Iterable<String> tabs) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final tab in tabs) {
+      await prefs.remove(_key(tab));
+      await prefs.remove(_keyV(tab));
+    }
   }
 }
 
@@ -72,9 +132,10 @@ class SavedStore extends ChangeNotifier {
 
   bool _ready = false;
   bool get isReady => _ready;
-  Set<String> get ids => Set.unmodifiable(_ids);
+  Set<String> get ids => Set<String>.unmodifiable(_ids);
 
   Future<void> init() async {
+    if (_ready) return;
     _prefs = await SharedPreferences.getInstance();
     final list = _prefs!.getStringList(_prefsKey) ?? const <String>[];
     _ids
@@ -88,7 +149,7 @@ class SavedStore extends ChangeNotifier {
         );
       }
     } catch (_) {
-      _savedAt = {};
+      _savedAt = <String, int>{};
     }
     _ready = true;
     notifyListeners();
@@ -96,6 +157,7 @@ class SavedStore extends ChangeNotifier {
 
   bool isSaved(String id) => _ids.contains(id);
 
+  /// Toggle save/unsave; also records saved-at millis.
   void toggle(String id) {
     if (!_ids.remove(id)) {
       _ids.add(id);
@@ -104,6 +166,18 @@ class SavedStore extends ChangeNotifier {
     } else {
       _savedAt.remove(id);
       _haptic();
+    }
+    _persist();
+    notifyListeners();
+  }
+
+  /// Explicit setter (useful for bulk ops).
+  void setSaved(String id, bool saved) {
+    if (saved && !_ids.contains(id)) {
+      _ids.add(id);
+      _savedAt[id] = DateTime.now().millisecondsSinceEpoch;
+    } else if (!saved && _ids.remove(id)) {
+      _savedAt.remove(id);
     }
     _persist();
     notifyListeners();
@@ -133,6 +207,7 @@ class SavedStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Export a newline-separated list of links (when available) or titles.
   String exportLinks() {
     final lines = orderedIds(SavedSort.recent).map((id) {
       final s = FeedCache.get(id);
@@ -171,7 +246,7 @@ class RecentQueriesStore extends ChangeNotifier {
   static const int _maxItems = 12;
 
   SharedPreferences? _prefs;
-  List<String> _mru = const [];
+  List<String> _mru = const <String>[];
 
   Future<void> _ensureReady() async {
     _prefs ??= await SharedPreferences.getInstance();
@@ -184,7 +259,15 @@ class RecentQueriesStore extends ChangeNotifier {
   Future<List<String>> list() async {
     await _ensureReady();
     return List<String>.from(_mru);
-    }
+  }
+
+  /// Simple prefix suggestions (case-insensitive).
+  Future<List<String>> suggest(String prefix) async {
+    await _ensureReady();
+    final p = prefix.trim().toLowerCase();
+    if (p.isEmpty) return List<String>.from(_mru);
+    return _mru.where((e) => e.toLowerCase().startsWith(p)).toList();
+  }
 
   /// Adds a query to the front (most recent), deduping case-insensitively.
   Future<void> add(String query) async {
@@ -206,6 +289,22 @@ class RecentQueriesStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Moves an existing query to the front (if present).
+  Future<void> touch(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return;
+    await _ensureReady();
+
+    final lower = q.toLowerCase();
+    final exists = _mru.any((e) => e.toLowerCase() == lower);
+    if (!exists) return;
+
+    _mru = _mru.where((e) => e.toLowerCase() != lower).toList(growable: true);
+    _mru.insert(0, q);
+    await _prefs!.setStringList(_prefsKey, _mru);
+    notifyListeners();
+  }
+
   /// Removes a specific query (case-insensitive).
   Future<void> remove(String query) async {
     await _ensureReady();
@@ -218,7 +317,7 @@ class RecentQueriesStore extends ChangeNotifier {
   /// Clears all recent queries.
   Future<void> clear() async {
     await _ensureReady();
-    _mru = const [];
+    _mru = const <String>[];
     await _prefs!.remove(_prefsKey);
     notifyListeners();
   }
