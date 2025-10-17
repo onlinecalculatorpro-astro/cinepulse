@@ -1,0 +1,25 @@
+name: Ingest Feeds
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"  # every 15 minutes
+  workflow_dispatch:
+
+jobs:
+  enqueue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install worker deps
+        working-directory: apps/workers
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Enqueue pollers
+        env:
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+        working-directory: apps/workers
+        run: python enqueuer.py
