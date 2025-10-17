@@ -247,9 +247,8 @@ class _BrandInline extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Image.asset(
-          'assets/branding/cinepulse_mark_24.png',
-          width: 24,
-          height: 24,
+          'assets/Logo.png',
+          height: 24, // width will scale to keep aspect
           errorBuilder: (_, __, ___) =>
               Icon(Icons.movie_creation_outlined, color: onSurface),
         ),
