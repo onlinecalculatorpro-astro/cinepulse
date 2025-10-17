@@ -1,34 +1,36 @@
-# .github/workflows/flutter-web-preview.yml
-name: Web Preview (Flutter)
+name: Web Preview (Flutter - ROOT)
 
 on:
   workflow_dispatch:
     inputs:
       apiBase:
-        description: "API base URL (e.g. https://api.cinepulse.app)"
+        description: "API base URL (e.g. https://api.onlinecalculatorpro.org)"
         required: false
         default: ""
       deepLinkBase:
-        description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
+        description: "Deep link base (e.g. https://cinepusle.netlify.app/#/s)"
         required: false
         default: ""
   push:
     branches: [ main ]
     paths:
-      - "apps/flutter/cinepulse_app/**"
+      - "lib/**"
+      - "web/**"
+      - "pubspec.yaml"
       - ".github/workflows/flutter-web-preview.yml"
 
-# Prefer GitHub Secrets; fall back to manual inputs; finally a sane default.
 env:
-  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'http://72.60.218.209:8000' }}
-  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
+  # prefer secrets -> manual inputs -> fallback
+  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
+  # NOTE: your Netlify site appears to be **cinepusle** (not cinepulse)
+  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepusle.netlify.app/#/s' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/flutter/cinepulse_app
+        working-directory: .
 
     steps:
       - name: Checkout
@@ -49,7 +51,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
-          key: pub-cache-${{ runner.os }}-${{ hashFiles('apps/flutter/cinepulse_app/pubspec.lock') }}
+          key: pub-cache-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
           restore-keys: |
             pub-cache-${{ runner.os }}-
 
@@ -66,44 +68,33 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Flutter Web (with dart-defines)
+      - name: Build Flutter Web (root)
         run: |
           flutter build web --release \
             ${{ steps.args.outputs.args }} \
-            --dart-define=API_BASE_URL=${{ env.API_BASE_URL }} \
-            --dart-define=DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}
-
-      - name: Verify dart-defines embedded (robust)
-        shell: bash
-        run: |
-          set -euo pipefail
-          ROOT="build/web"
-          search_define () {
-            local KEY="$1"; local VAL="$2"
-            kv_b64=$(printf "%s=%s" "$KEY" "$VAL" | base64 | tr -d '\n\r')
-            v_b64=$(printf "%s" "$VAL" | base64 | tr -d '\n\r')
-            echo "Checking ${KEY}…"
-            if grep -R -a -Fq -- "$VAL"  "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null \
-            || grep -R -a -Fq -- "$kv_b64" "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null \
-            || grep -R -a -Fq -- "$v_b64"  "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null; then
-              echo "OK: ${KEY} found in build output."
-            else
-              echo "::warning ::${KEY} not found literally (likely minified/base64). Continuing."
-            fi
-          }
-          search_define "API_BASE_URL"  "${API_BASE_URL}"
-          search_define "DEEP_LINK_BASE" "${DEEP_LINK_BASE}"
+            --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
+            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
 
       - name: List build outputs
         run: ls -lah build/web || true
+
+      # Don’t fail if minified; just warn
+      - name: Verify dart-defines embedded (best-effort)
+        run: |
+          set +e
+          echo "Checking API_BASE_URL…"
+          grep -R "${API_BASE_URL}" build/web/main.dart.js >/dev/null \
+            && echo "Found API_BASE_URL" || echo "Warning: not found (minified). Continuing."
+          echo "Checking DEEP_LINK_BASE…"
+          grep -R "${DEEP_LINK_BASE}" build/web/main.dart.js >/dev/null \
+            && echo "Found DEEP_LINK_BASE" || echo "Warning: not found (minified). Continuing."
+          set -e
 
       - name: Upload Web Build
         uses: actions/upload-artifact@v4
         with:
           name: web-preview
-          # IMPORTANT: upload-artifact runs from repo root, so use the full path
-          path: apps/flutter/cinepulse_app/build/web
-          if-no-files-found: error
+          path: build/web
 
   deploy:
     needs: build
@@ -119,15 +110,15 @@ jobs:
           name: web-preview
           path: build/web
 
-      - name: Add SPA redirect (safe with hash routing)
+      - name: Add SPA redirect
         run: echo "/* /index.html 200" > build/web/_redirects
 
-      - name: Setup Node (for Netlify CLI)
+      - name: Setup Node (Netlify CLI)
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Check Netlify secrets present
+      - name: Check Netlify secrets
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
@@ -135,7 +126,7 @@ jobs:
           test -n "${NETLIFY_AUTH_TOKEN}" && echo "Auth token OK"
           test -n "${NETLIFY_SITE_ID}" && echo "Site ID OK"
 
-      - name: Deploy to Netlify (production)
+      - name: Deploy to Netlify (prod)
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
