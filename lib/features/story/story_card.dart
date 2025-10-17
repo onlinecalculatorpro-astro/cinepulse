@@ -15,6 +15,7 @@ import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
 import 'story_details.dart';
+import 'ott_badge.dart';
 
 class StoryCard extends StatelessWidget {
   const StoryCard({super.key, required this.story});
@@ -241,11 +242,19 @@ class _VerticalCard extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Text(
-          metaText,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+        // Badge + meta line
+        Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: [
+            OttBadge.fromStory(story, dense: true),
+            Text(
+              metaText,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
@@ -346,11 +355,19 @@ class _HorizontalCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 6),
-              Text(
-                metaText,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+              // Badge + meta line
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                children: [
+                  OttBadge.fromStory(story, dense: true),
+                  Text(
+                    metaText,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
               ),
               const SizedBox(height: 10),
               Align(
