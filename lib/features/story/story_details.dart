@@ -8,10 +8,11 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart';    // deepLinkForStoryId
+import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
+import 'ott_badge.dart';
 
 class StoryDetailsScreen extends StatelessWidget {
   const StoryDetailsScreen({super.key, required this.story});
@@ -33,13 +34,7 @@ class StoryDetailsScreen extends StatelessWidget {
 
   Future<void> _openExternal(BuildContext context) async {
     final url = _videoUrl;
-    if (url == null) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('No playable link available')));
-      }
-      return;
-    }
+    if (url == null) return; // Button disabled in UI when null
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context)
@@ -57,7 +52,9 @@ class StoryDetailsScreen extends StatelessWidget {
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
+          SnackBar(
+            content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+          ),
         );
       }
     } catch (_) {
@@ -116,6 +113,7 @@ class StoryDetailsScreen extends StatelessWidget {
     final s = Theme.of(context).colorScheme;
     final onSurface = s.onSurface;
     final isPhone = MediaQuery.of(context).size.width < 600;
+    final hasUrl = _videoUrl != null;
 
     return Scaffold(
       body: CustomScrollView(
@@ -153,7 +151,8 @@ class StoryDetailsScreen extends StatelessWidget {
             ],
             flexibleSpace: FlexibleSpaceBar(
               collapseMode: CollapseMode.parallax,
-              titlePadding: const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
+              titlePadding:
+                  const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
               stretchModes: const [StretchMode.zoomBackground, StretchMode.blurBackground],
               background: _HeaderHero(story: story),
             ),
@@ -181,12 +180,19 @@ class StoryDetailsScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
 
-                      // Meta line (platform • context • date • cert • runtime)
-                      Text(
-                        _metaLine(),
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: s.onSurfaceVariant,
-                            ),
+                      // OTT badge + Meta line (platform • context • date • cert • runtime)
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
+                        children: [
+                          OttBadge.fromStory(story, dense: true),
+                          Text(
+                            _metaLine(),
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  color: s.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
                       ),
 
                       const SizedBox(height: 16),
@@ -219,7 +225,7 @@ class StoryDetailsScreen extends StatelessWidget {
                       Row(
                         children: [
                           FilledButton.icon(
-                            onPressed: () => _openExternal(context),
+                            onPressed: hasUrl ? () => _openExternal(context) : null,
                             icon: Icon(_isWatchCta
                                 ? Icons.play_arrow_rounded
                                 : Icons.open_in_new_rounded),
