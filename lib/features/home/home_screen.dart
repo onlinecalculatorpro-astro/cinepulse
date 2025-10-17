@@ -3,7 +3,6 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/api.dart';
 import '../../core/cache.dart';
@@ -21,7 +20,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  // ✅ Tabs: All · Trailers · OTT · In Theatres · Coming Soon
+  // Tabs: All · Trailers · OTT · In Theatres · Coming Soon
   static const Map<String, String> _tabs = {
     'all': 'All',
     'trailers': 'Trailers',
@@ -49,7 +48,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void initState() {
     super.initState();
 
-    // Kick off initial loads (with disk cache for fast-first paint).
+    // Initial loads (with disk cache for fast-first paint).
     for (final f in _feeds.values) {
       f.load(reset: true);
     }
@@ -111,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return RefreshIndicator.adaptive(
       key: _refreshKey,
       onRefresh: _refresh,
-      // ✅ Allow pull-to-refresh from anywhere on the page (nice on mobile)
+      // Allow pull-to-refresh from anywhere on the page (nice on mobile)
       triggerMode: RefreshIndicatorTriggerMode.anywhere,
       child: NestedScrollView(
         headerSliverBuilder: (_, __) => [
@@ -133,7 +132,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               preferredSize: Size.fromHeight(isPhone ? 60 : 70),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                // ✅ Search + Refresh icon row
+                // Search + Refresh icon row
                 child: Row(
                   children: [
                     Expanded(child: SearchBarInput(controller: _search)),
@@ -145,7 +144,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           _refreshKey.currentState?.show(); // show spinner
                           _refresh();
                         },
-                        onLongPress: _refreshAll, // optional power-user shortcut
+                        onLongPress: _refreshAll, // power-user shortcut
                         icon: const Icon(Icons.refresh_rounded),
                       ),
                     ),
@@ -202,7 +201,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           children: _tabs.keys.map((key) {
             final feed = _feeds[key]!;
             return _FeedList(
-              key: PageStorageKey('feed-$key'), // ✅ keep scroll per tab
+              key: PageStorageKey('feed-$key'), // keep scroll per tab
               feed: feed,
               searchText: _search,
               offline: _offline,
@@ -242,27 +241,23 @@ class _BrandInline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final onSurface = Theme.of(context).colorScheme.onSurface;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Image.asset(
-          'assets/Logo.png',
-          height: 24, // width will scale to keep aspect
-          errorBuilder: (_, __, ___) =>
-              Icon(Icons.movie_creation_outlined, color: onSurface),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          'CinePulse',
-          style: GoogleFonts.inter(
-            fontWeight: FontWeight.w800,
-            fontSize: 18,
-            color: onSurface,
-            letterSpacing: 0.2,
-          ),
-        ),
-      ],
+    // Scale logo by screen width so it looks balanced
+    final w = MediaQuery.of(context).size.width;
+    final logoWidth = w < 480
+        ? 150.0 // small phones
+        : w < 800
+            ? 180.0 // phones / small tablets
+            : 220.0; // large tablets / desktop
+
+    // Force white so it pops on dark header, regardless of source color
+    return ColorFiltered(
+      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+      child: Image.asset(
+        'assets/logo.png', // <-- your high-contrast transparent PNG
+        width: logoWidth,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+      ),
     );
   }
 }
@@ -315,7 +310,7 @@ class _FeedList extends StatefulWidget {
 class _FeedListState extends State<_FeedList>
     with AutomaticKeepAliveClientMixin<_FeedList> {
   @override
-  bool get wantKeepAlive => true; // ✅ preserve state across tab switches
+  bool get wantKeepAlive => true; // preserve state across tab switches
 
   @override
   Widget build(BuildContext context) {
@@ -354,7 +349,7 @@ class _FeedListState extends State<_FeedList>
         if (filtered.isEmpty) {
           return ListView(
             padding: const EdgeInsets.only(top: 32),
-            physics: const AlwaysScrollableScrollPhysics(), // ✅ still pull-to-refresh
+            physics: const AlwaysScrollableScrollPhysics(), // still pull-to-refresh
             children: [
               Center(
                 child: Text(
@@ -373,7 +368,7 @@ class _FeedListState extends State<_FeedList>
         return ListView.builder(
           padding: const EdgeInsets.only(top: 8, bottom: 24),
           physics: const AlwaysScrollableScrollPhysics(),
-          cacheExtent: 1400, // ✅ smoother scrolling
+          cacheExtent: 1400, // smoother scrolling
           itemCount: filtered.length + (showLoadMore ? 1 : 0),
           itemBuilder: (_, i) {
             if (showLoadMore && i == filtered.length) {
@@ -459,7 +454,7 @@ class _PagedFeed extends ChangeNotifier {
         ..clear()
         ..addAll(byId.values);
 
-      // 🔽 Keep UI newest → oldest.
+      // Keep UI newest → oldest.
       _sortNewestFirst(_items);
 
       // Keep the oldest timestamp as cursor (for future paging support)
