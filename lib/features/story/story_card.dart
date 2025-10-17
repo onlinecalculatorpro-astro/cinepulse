@@ -32,12 +32,11 @@ class StoryCard extends StatelessWidget {
   // Open external playable URL.
   Future<void> _openLink(BuildContext context) async {
     final url = _url;
-    if (url == null) return;
+    if (url == null) return; // Button will be disabled when null.
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open link')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Could not open link')));
     }
   }
 
@@ -53,7 +52,8 @@ class StoryCard extends StatelessWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+          content:
+              Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
         ),
       );
     } catch (_) {
@@ -71,7 +71,7 @@ class StoryCard extends StatelessWidget {
   }
 
   String _metaLine() {
-    // Context tag
+    // Platform or source displayed via OttBadge; keep meta concise here.
     final ctx = story.isTheatrical
         ? (story.isUpcoming ? 'Coming soon' : 'In theatres')
         : (story.kind.isNotEmpty ? _titleCase(story.kind) : '');
@@ -120,7 +120,7 @@ class StoryCard extends StatelessWidget {
             ? _VerticalCard(
                 story: story,
                 metaText: metaText,
-                isWatchCta: _isWatchCta,
+                isWatchCta: _isWatchCta,   // <- pass as prop
                 hasUrl: hasUrl,
                 onPrimaryAction: () => _openLink(context),
                 onShare: () => _share(context),
@@ -128,7 +128,7 @@ class StoryCard extends StatelessWidget {
             : _HorizontalCard(
                 story: story,
                 metaText: metaText,
-                isWatchCta: _isWatchCta,
+                isWatchCta: _isWatchCta,   // <- pass as prop
                 hasUrl: hasUrl,
                 onPrimaryAction: () => _openLink(context),
                 onShare: () => _share(context),
@@ -165,7 +165,7 @@ class _VerticalCard extends StatelessWidget {
 
   final Story story;
   final String metaText;
-  final bool isWatchCta;
+  final bool isWatchCta;      // <- use this prop
   final bool hasUrl;
   final VoidCallback onPrimaryAction;
   final VoidCallback onShare;
@@ -195,10 +195,6 @@ class _VerticalCard extends StatelessWidget {
                           fadeInDuration: const Duration(milliseconds: 150),
                           placeholder: (c, _) =>
                               Container(color: scheme.surfaceVariant.withOpacity(0.2)),
-                          errorWidget: (_, __, ___) => Container(
-                            color: scheme.surfaceVariant.withOpacity(0.2),
-                            child: const Center(child: Icon(Icons.broken_image_outlined)),
-                          ),
                         ),
                 ),
               ),
@@ -257,16 +253,10 @@ class _VerticalCard extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        Semantics(
-          button: true,
-          label: _isWatchCta ? 'Watch' : 'Open',
-          enabled: hasUrl,
-          child: FilledButton.icon(
-            onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
-            icon:
-                Icon(_isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
-            label: Text(_isWatchCta ? 'Watch' : 'Open'),
-          ),
+        FilledButton.icon(
+          onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
+          icon: Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
+          label: Text(isWatchCta ? 'Watch' : 'Open'),
         ),
       ],
     );
@@ -287,7 +277,7 @@ class _HorizontalCard extends StatelessWidget {
 
   final Story story;
   final String metaText;
-  final bool isWatchCta;
+  final bool isWatchCta;      // <- use this prop
   final bool hasUrl;
   final VoidCallback onPrimaryAction;
   final VoidCallback onShare;
@@ -315,10 +305,6 @@ class _HorizontalCard extends StatelessWidget {
                       fadeInDuration: const Duration(milliseconds: 150),
                       placeholder: (c, _) =>
                           Container(color: scheme.surfaceVariant.withOpacity(0.2)),
-                      errorWidget: (_, __, ___) => Container(
-                        color: scheme.surfaceVariant.withOpacity(0.2),
-                        child: const Center(child: Icon(Icons.broken_image_outlined)),
-                      ),
                     ),
             ),
           ),
@@ -382,16 +368,12 @@ class _HorizontalCard extends StatelessWidget {
               const SizedBox(height: 10),
               Align(
                 alignment: Alignment.centerLeft,
-                child: Semantics(
-                  button: true,
-                  label: isWatchCta ? 'Watch' : 'Open',
-                  enabled: hasUrl,
-                  child: FilledButton.icon(
-                    onPressed: hasUrl ? onPrimaryAction : null,
-                    icon: Icon(
-                        isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
-                    label: Text(isWatchCta ? 'Watch' : 'Open'),
-                  ),
+                child: FilledButton.icon(
+                  onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
+                  icon: Icon(isWatchCta
+                      ? Icons.play_arrow_rounded
+                      : Icons.open_in_new_rounded),
+                  label: Text(isWatchCta ? 'Watch' : 'Open'),
                 ),
               ),
             ],
