@@ -1,9 +1,24 @@
+# .github/workflows/flutter-web-preview.yml
 name: Web Preview (Flutter)
 
 on:
   workflow_dispatch:
+    inputs:
+      apiBase:
+        description: "API base URL (e.g. https://api.onlinecalculatorpro.org)"
+        required: false
+        default: "https://api.onlinecalculatorpro.org"
+      deepLinkBase:
+        description: "Deep link base (e.g. https://app.example.com/#/s)"
+        required: false
+        default: "https://example.com/#/s"
   push:
     branches: [ main ]
+
+env:
+  # Defaults; can be overridden in workflow_dispatch inputs
+  API_BASE_URL: ${{ inputs.apiBase != '' && inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
+  DEEP_LINK_BASE: ${{ inputs.deepLinkBase != '' && inputs.deepLinkBase || 'https://example.com/#/s' }}
 
 jobs:
   build:
@@ -18,14 +33,36 @@ jobs:
           flutter-version: "3.x"
           channel: "stable"
 
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: ${{ runner.os }}-pub-
+
       - name: Install dependencies
         run: flutter pub get
 
       - name: Build web app
         run: |
           flutter build web \
-            --dart-define=API_BASE_URL=https://api.onlinecalculatorpro.org \
-            --release
+            --release \
+            --web-renderer canvaskit \
+            --dart-define=API_BASE_URL=${API_BASE_URL} \
+            --dart-define=DEEP_LINK_BASE=${DEEP_LINK_BASE}
+
+      - name: Verify dart-defines embedded
+        run: |
+          set -e
+          echo "Checking for API_BASE_URL in compiled JS..."
+          grep -R "${API_BASE_URL}" build/web/main.dart.js >/dev/null
+          echo "OK: API_BASE_URL found."
+          echo "Checking for DEEP_LINK_BASE in compiled JS..."
+          grep -R "${DEEP_LINK_BASE}" build/web/main.dart.js >/dev/null
+          echo "OK: DEEP_LINK_BASE found."
 
       - name: Upload Web Build
         uses: actions/upload-artifact@v4
