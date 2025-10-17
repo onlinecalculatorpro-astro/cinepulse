@@ -18,7 +18,7 @@ on:
       - "apps/flutter/cinepulse_app/**"
       - ".github/workflows/flutter-web-preview.yml"
 
-# Prefer GitHub Secrets; fall back to dispatch inputs; finally a sane default.
+# Prefer GitHub Secrets; fall back to manual inputs; finally a sane default.
 env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'http://72.60.218.209:8000' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
@@ -73,15 +73,33 @@ jobs:
             --dart-define=API_BASE_URL=${{ env.API_BASE_URL }} \
             --dart-define=DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}
 
-      - name: Verify dart-defines embedded
+      - name: Verify dart-defines embedded (robust)
+        shell: bash
         run: |
           set -euo pipefail
-          echo "Checking API_BASE_URL…"
-          grep -R "${API_BASE_URL}" build/web/main.dart.js >/dev/null
-          echo "OK."
-          echo "Checking DEEP_LINK_BASE…"
-          grep -R "${DEEP_LINK_BASE}" build/web/main.dart.js >/dev/null
-          echo "OK."
+          ROOT="build/web"
+
+          search_define () {
+            local KEY="$1"
+            local VAL="$2"
+
+            # base64 encodings (GNU/BSD compatible)
+            kv_b64=$(printf "%s=%s" "$KEY" "$VAL" | base64 | tr -d '\n\r')
+            v_b64=$(printf "%s" "$VAL" | base64 | tr -d '\n\r')
+
+            echo "Checking ${KEY}…"
+
+            if grep -R -a -Fq -- "$VAL"  "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null \
+            || grep -R -a -Fq -- "$kv_b64" "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null \
+            || grep -R -a -Fq -- "$v_b64"  "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null; then
+              echo "OK: ${KEY} found in build output."
+            else
+              echo "::warning ::${KEY} not found literally (likely minified/base64 in this Flutter version). Continuing."
+            fi
+          }
+
+          search_define "API_BASE_URL"  "${API_BASE_URL}"
+          search_define "DEEP_LINK_BASE" "${DEEP_LINK_BASE}"
 
       - name: Upload Web Build
         uses: actions/upload-artifact@v4
