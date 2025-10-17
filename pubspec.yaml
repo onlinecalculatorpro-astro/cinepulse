@@ -4,9 +4,9 @@ publish_to: "none"
 version: 0.1.0+1
 
 environment:
-  # google_fonts ^6.3.2 requires Dart >= 3.7
-  sdk: ">=3.7.0 <4.0.0"
-  flutter: ">=3.22.0"
+  # Project runs on Flutter 3.35.6 / Dart 3.9
+  sdk: ">=3.9.0 <4.0.0"
+  flutter: ">=3.27.0"
 
 dependencies:
   flutter:
@@ -34,11 +34,15 @@ flutter:
   assets:
     - assets/logo.png
 
-# Launcher icon config — run locally when you want to regenerate:
-# flutter pub run flutter_launcher_icons
+# Launcher icon config — run when you want to regenerate:
+# dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: assets/logo.png
-  adaptive_icon_background: "#2563EB"   # brand blue
+
+  # Adaptive icon (Android 8+)
+  adaptive_icon_background: "#2563EB"  # CinePulse brand blue
   adaptive_icon_foreground: assets/logo.png
+  # Optional for Android 13+ (settings/shelves)
+  # adaptive_icon_monochrome: assets/logo_monochrome.png
