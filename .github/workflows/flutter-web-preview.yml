@@ -9,16 +9,15 @@ on:
         required: false
         default: "https://api.onlinecalculatorpro.org"
       deepLinkBase:
-        description: "Deep link base (e.g. https://app.example.com/#/s)"
+        description: "Deep link base (e.g. https://cinepusle.netlify.app/#/s)"
         required: false
-        default: "https://example.com/#/s"
+        default: "https://cinepusle.netlify.app/#/s"
   push:
     branches: [ main ]
 
 env:
-  # Defaults; can be overridden in workflow_dispatch inputs
   API_BASE_URL: ${{ inputs.apiBase != '' && inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
-  DEEP_LINK_BASE: ${{ inputs.deepLinkBase != '' && inputs.deepLinkBase || 'https://example.com/#/s' }}
+  DEEP_LINK_BASE: ${{ inputs.deepLinkBase != '' && inputs.deepLinkBase || 'https://cinepusle.netlify.app/#/s' }}
 
 jobs:
   build:
@@ -30,7 +29,8 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.x"
+          # Pin a modern stable to avoid missing flags on some runners
+          flutter-version: "3.24.0"
           channel: "stable"
 
       - name: Flutter version
@@ -46,11 +46,23 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # Detect whether this Flutter supports --web-renderer; add it if yes.
+      - name: Compute build args
+        id: args
+        shell: bash
+        run: |
+          if flutter build web -h | grep -q -- '--web-renderer'; then
+            echo "args=--web-renderer canvaskit" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Using extra args: '${{ steps.args.outputs.args }}'"
+
       - name: Build web app
         run: |
           flutter build web \
             --release \
-            --web-renderer canvaskit \
+            ${{ steps.args.outputs.args }} \
             --dart-define=API_BASE_URL=${API_BASE_URL} \
             --dart-define=DEEP_LINK_BASE=${DEEP_LINK_BASE}
 
@@ -83,8 +95,7 @@ jobs:
           name: web-preview
           path: build/web
 
-      # Safe even with hash routing; future-proofs SPA fallback.
-      - name: Add SPA redirect
+      - name: Add SPA redirect (harmless with hash routing)
         run: echo "/* /index.html 200" > build/web/_redirects
 
       - name: Install Netlify CLI
