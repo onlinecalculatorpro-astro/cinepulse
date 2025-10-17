@@ -77,6 +77,11 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
+      # ⚠️ Fix "unsupported Gradle project" by refreshing platform files for this Flutter version.
+      # Safe to run in an existing project; it keeps your lib/ and pubspec.
+      - name: Refresh Android platform (fix Gradle/AGP mismatch)
+        run: flutter create --platforms=android .
+
       - name: Build debug APKs (split per ABI)
         run: |
           flutter build apk --debug --split-per-abi \
