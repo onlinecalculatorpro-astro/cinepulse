@@ -8,31 +8,21 @@ on:
         required: false
         default: ""
       deepLinkBase:
-        description: "Deep link base (e.g. https://cinepusle.netlify.app/#/s)"
+        description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
         required: false
         default: ""
-  push:
-    branches: [ main ]
-    paths:
-      - "lib/**"
-      - "android/**"
-      - "pubspec.yaml"
-      - ".github/workflows/flutter-android-debug.yml"
 
+# Prefer repo secrets; fall back to manual inputs; finally sane defaults.
 env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
-  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepusle.netlify.app/#/s' }}
+  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     concurrency:
-      group: android-debug-${{ github.ref_name }}
+      group: android-debug-root-${{ github.ref_name }}
       cancel-in-progress: false
-
-    defaults:
-      run:
-        working-directory: .
 
     steps:
       - name: Checkout
@@ -77,8 +67,8 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # Safe to run; refreshes Android files if needed
-      - name: Ensure Android platform exists
+      # Fix "unsupported Gradle project" if templates are out of sync.
+      - name: Ensure Android platform exists (refresh if needed)
         run: flutter create --platforms=android .
 
       - name: Build debug APKs (split per ABI)
