@@ -9,30 +9,29 @@ import 'no_glow_scroll.dart';
 class CinePulseApp extends StatelessWidget {
   const CinePulseApp({super.key});
 
-  static const _brandBlue = Color(0xFF2563EB); // primary brand
+  static const _brandBlue = Color(0xFF2563EB);
 
   @override
   Widget build(BuildContext context) {
-    final lightScheme = ColorScheme.fromSeed(
+    final light = ColorScheme.fromSeed(
       seedColor: _brandBlue,
       brightness: Brightness.light,
     );
-    final darkScheme = ColorScheme.fromSeed(
+    final dark = ColorScheme.fromSeed(
       seedColor: _brandBlue,
       brightness: Brightness.dark,
     );
 
-    ThemeData _buildTheme(ColorScheme scheme) {
+    ThemeData themed(ColorScheme scheme) {
       final isDark = scheme.brightness == Brightness.dark;
-      final baseText = isDark
-          ? ThemeData.dark().textTheme
-          : ThemeData.light().textTheme;
+      final baseText =
+          (isDark ? ThemeData.dark() : ThemeData.light()).textTheme;
 
       return ThemeData(
         useMaterial3: true,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
         colorScheme: scheme,
         textTheme: GoogleFonts.interTextTheme(baseText),
-        visualDensity: VisualDensity.adaptivePlatformDensity,
         scaffoldBackgroundColor: scheme.surface,
 
         appBarTheme: AppBarTheme(
@@ -42,7 +41,7 @@ class CinePulseApp extends StatelessWidget {
           centerTitle: false,
         ),
 
-        // ✅ CardTheme (not CardThemeData)
+        // CardTheme (works across Flutter 3.x lines)
         cardTheme: CardTheme(
           elevation: 0,
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -64,7 +63,6 @@ class CinePulseApp extends StatelessWidget {
           ),
         ),
 
-        // Keep ChipTheme simple to avoid API drift across Flutter versions
         chipTheme: ChipThemeData(
           side: BorderSide.none,
           backgroundColor: scheme.surfaceContainerHighest,
@@ -101,8 +99,8 @@ class CinePulseApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           scrollBehavior: const NoGlowScroll(),
           themeMode: AppSettings.instance.themeMode,
-          theme: _buildTheme(lightScheme),
-          darkTheme: _buildTheme(darkScheme),
+          theme: themed(light),
+          darkTheme: themed(dark),
           home: const RootShell(),
         );
       },
