@@ -4,7 +4,7 @@ publish_to: "none"
 version: 0.1.0+1
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"   # was >=3.5.0
+  sdk: ">=3.4.0 <4.0.0"
   flutter: ">=3.22.0"
 
 dependencies:
@@ -30,6 +30,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/branding/         # includes cinepulse_mark_24.png
+    # - assets/images/         # (optional) add if you put posters/illustrations here
 
 # Launcher icon config — add assets/icon.png before running:
 # flutter pub run flutter_launcher_icons
