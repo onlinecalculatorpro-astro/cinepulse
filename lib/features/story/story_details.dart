@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/api.dart';    // deepLinkForStoryId
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
@@ -17,6 +18,12 @@ class StoryDetailsScreen extends StatelessWidget {
   final Story story;
 
   Uri? get _videoUrl => storyVideoUrl(story);
+
+  // Prefer deep link (opens inside app). Fallback to video URL if available.
+  String _shareText() {
+    final deep = deepLinkForStoryId(story.id).toString();
+    return deep.isNotEmpty ? deep : (_videoUrl?.toString() ?? story.title);
+  }
 
   Future<void> _watch(BuildContext context) async {
     final url = _videoUrl;
@@ -35,7 +42,7 @@ class StoryDetailsScreen extends StatelessWidget {
   }
 
   Future<void> _share(BuildContext context) async {
-    final text = _videoUrl?.toString() ?? story.title;
+    final text = _shareText();
     try {
       if (!kIsWeb) {
         await Share.share(text);
@@ -43,26 +50,70 @@ class StoryDetailsScreen extends StatelessWidget {
         await Clipboard.setData(ClipboardData(text: text));
       }
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(kIsWeb ? 'Copied to clipboard' : 'Shared')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
+        );
       }
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: text));
       if (context.mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+            .showSnackBar(const SnackBar(content: Text('Link copied to clipboard')));
       }
     }
+  }
+
+  String _metaLine() {
+    final platform = (story.ottPlatform ?? story.source ?? '').trim();
+
+    final String ctx;
+    if (story.isTheatrical) {
+      ctx = story.isUpcoming ? 'Coming soon' : 'In theatres';
+    } else {
+      ctx = story.kind.toLowerCase() == 'ott' ? 'OTT' : story.kind;
+    }
+
+    final DateTime? d = story.releaseDate ?? story.publishedAt;
+    String dateText = '';
+    if (d != null) {
+      final now = DateTime.now().toUtc();
+      final diff = now.difference(d);
+      if (diff.inDays >= 0 && diff.inDays <= 10) {
+        if (diff.inDays == 0) {
+          dateText = 'Today';
+        } else if (diff.inDays == 1) {
+          dateText = 'Yesterday';
+        } else {
+          dateText = '${diff.inDays}d ago';
+        }
+      } else {
+        dateText = DateFormat('d MMM').format(d.toLocal());
+      }
+    }
+
+    final extras = <String>[];
+    if ((story.ratingCert ?? '').isNotEmpty) extras.add(story.ratingCert!);
+    if (story.runtimeMinutes != null && story.runtimeMinutes! > 0) {
+      extras.add('${story.runtimeMinutes}m');
+    }
+
+    final parts = <String>[];
+    if (platform.isNotEmpty) parts.add(_titleCase(platform));
+    if (ctx.isNotEmpty) parts.add(ctx);
+    if (dateText.isNotEmpty) parts.add(dateText);
+    if (extras.isNotEmpty) parts.add(extras.join(' • '));
+    return parts.join(' • ');
+  }
+
+  String _titleCase(String s) {
+    if (s.isEmpty) return s;
+    return s[0].toUpperCase() + s.substring(1);
   }
 
   @override
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
     final onSurface = s.onSurface;
-    final date = story.publishedAt == null
-        ? null
-        : DateFormat('EEE, d MMM • HH:mm').format(story.publishedAt!.toLocal());
-
     final isPhone = MediaQuery.of(context).size.width < 600;
 
     return Scaffold(
@@ -75,7 +126,7 @@ class StoryDetailsScreen extends StatelessWidget {
             ),
             pinned: true,
             centerTitle: false,
-            expandedHeight: isPhone ? 220 : 280,
+            expandedHeight: isPhone ? 240 : 320,
             title: Text(
               'CinePulse',
               style: GoogleFonts.inter(fontWeight: FontWeight.w800),
@@ -127,17 +178,14 @@ class StoryDetailsScreen extends StatelessWidget {
                           color: onSurface,
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
 
-                      // Meta chips
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          Chip(label: Text(story.kind.toUpperCase())),
-                          if ((story.source ?? '').isNotEmpty) Chip(label: Text(story.source!)),
-                          if (date != null) Chip(label: Text(date)),
-                        ],
+                      // Meta line (platform • context • date • cert • runtime)
+                      Text(
+                        _metaLine(),
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: s.onSurfaceVariant,
+                            ),
                       ),
 
                       const SizedBox(height: 16),
@@ -149,6 +197,21 @@ class StoryDetailsScreen extends StatelessWidget {
                           style: GoogleFonts.inter(fontSize: 16, height: 1.4, color: onSurface),
                         ),
 
+                      // Optional facets (languages/genres) if present
+                      if (story.languages.isNotEmpty || story.genres.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (story.languages.isNotEmpty)
+                              _Facet(label: 'Language', value: story.languages.join(', ')),
+                            if (story.genres.isNotEmpty)
+                              _Facet(label: 'Genre', value: story.genres.join(', ')),
+                          ],
+                        ),
+                      ],
+
                       const SizedBox(height: 20),
 
                       // Actions
@@ -157,7 +220,7 @@ class StoryDetailsScreen extends StatelessWidget {
                           FilledButton.icon(
                             onPressed: () => _watch(context),
                             icon: const Icon(Icons.play_arrow_rounded),
-                            label: const Text('Watch'),
+                            label: Text(story.kind.toLowerCase() == 'trailer' ? 'Watch' : 'Open'),
                           ),
                           const SizedBox(width: 12),
                           OutlinedButton.icon(
@@ -200,17 +263,23 @@ class _HeaderHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
+    final imageUrl = (story.posterUrl?.isNotEmpty == true)
+        ? story.posterUrl!
+        : (story.thumbUrl ?? '');
+
     return Hero(
       tag: 'thumb-${story.id}',
       child: Stack(
         fit: StackFit.expand,
         children: [
           // Image or fallback color
-          (story.thumbUrl == null || story.thumbUrl!.isEmpty)
+          imageUrl.isEmpty
               ? Container(color: s.surfaceContainerHighest)
               : CachedNetworkImage(
-                  imageUrl: story.thumbUrl!,
+                  imageUrl: imageUrl,
                   fit: BoxFit.cover,
+                  memCacheWidth: 1600,
+                  fadeInDuration: const Duration(milliseconds: 180),
                 ),
           // Gradient for legibility
           Positioned.fill(
@@ -220,7 +289,7 @@ class _HeaderHero extends StatelessWidget {
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
                   colors: [
-                    s.surface.withOpacity(0.65),
+                    s.surface.withOpacity(0.70),
                     s.surface.withOpacity(0.0),
                   ],
                   stops: const [0.0, 0.6],
@@ -228,6 +297,37 @@ class _HeaderHero extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/* --------------------------------- Facet --------------------------------- */
+
+class _Facet extends StatelessWidget {
+  const _Facet({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$label: ',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelMedium
+                  ?.copyWith(color: cs.onSurfaceVariant, fontWeight: FontWeight.w600)),
+          Text(value, style: Theme.of(context).textTheme.labelMedium),
         ],
       ),
     );
