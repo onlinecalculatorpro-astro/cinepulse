@@ -1,3 +1,4 @@
+// lib/app/app.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -8,15 +9,86 @@ import 'no_glow_scroll.dart';
 class CinePulseApp extends StatelessWidget {
   const CinePulseApp({super.key});
 
+  static const _brandBlue = Color(0xFF2563EB); // primary brand
+
   @override
   Widget build(BuildContext context) {
-    final light = ColorScheme.fromSeed(seedColor: const Color(0xFF6B4EFF));
-    final dark = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF6B4EFF),
+    final lightScheme = ColorScheme.fromSeed(
+      seedColor: _brandBlue,
+      brightness: Brightness.light,
+    );
+    final darkScheme = ColorScheme.fromSeed(
+      seedColor: _brandBlue,
       brightness: Brightness.dark,
     );
 
-    TextTheme font(TextTheme base) => GoogleFonts.interTextTheme(base);
+    ThemeData _buildTheme(ColorScheme scheme) {
+      final isDark = scheme.brightness == Brightness.dark;
+      final baseText = isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme;
+
+      return ThemeData(
+        useMaterial3: true,
+        colorScheme: scheme,
+        textTheme: GoogleFonts.interTextTheme(baseText),
+
+        // Surfaces
+        scaffoldBackgroundColor: scheme.surface,
+
+        // AppBar
+        appBarTheme: AppBarTheme(
+          elevation: 0,
+          backgroundColor: scheme.surface,
+          foregroundColor: scheme.onSurface,
+          centerTitle: false,
+        ),
+
+        // Cards
+        cardTheme: CardTheme(
+          elevation: 0,
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          color: scheme.surfaceContainerLowest,
+        ),
+
+        // Bottom Navigation
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: scheme.surface.withOpacity(0.96),
+          indicatorColor: scheme.primaryContainer,
+          iconTheme: WidgetStatePropertyAll(IconThemeData(color: scheme.primary)),
+          labelTextStyle: WidgetStatePropertyAll(
+            GoogleFonts.inter(fontWeight: FontWeight.w600),
+          ),
+        ),
+
+        // Chips
+        chipTheme: ChipThemeData(
+          side: BorderSide.none,
+          labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          color: WidgetStatePropertyAll(scheme.surfaceContainerHighest),
+        ),
+
+        // Inputs
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: scheme.surface.withOpacity(isDark ? 0.72 : 0.80),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide(color: scheme.outlineVariant),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide(color: scheme.outlineVariant),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: BorderSide(color: scheme.primary, width: 2),
+          ),
+        ),
+      );
+    }
 
     return AnimatedBuilder(
       animation: AppSettings.instance,
@@ -26,74 +98,8 @@ class CinePulseApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           scrollBehavior: const NoGlowScroll(),
           themeMode: AppSettings.instance.themeMode,
-          theme: ThemeData(
-            useMaterial3: true,
-            colorScheme: light,
-            textTheme: font(ThemeData.light().textTheme),
-            scaffoldBackgroundColor: light.surface,
-            cardTheme: CardThemeData(
-              elevation: 0,
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              clipBehavior: Clip.antiAlias,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-              color: light.surfaceContainerLowest,
-            ),
-            navigationBarTheme: NavigationBarThemeData(
-              indicatorColor: light.primaryContainer,
-              iconTheme: WidgetStatePropertyAll(
-                IconThemeData(color: light.primary),
-              ),
-              labelTextStyle: WidgetStatePropertyAll(
-                GoogleFonts.inter(fontWeight: FontWeight.w600),
-              ),
-              backgroundColor: light.surface.withOpacity(0.96),
-            ),
-            chipTheme: ChipThemeData(
-              side: BorderSide.none,
-              color: WidgetStatePropertyAll(light.surfaceContainerHighest),
-              labelStyle: TextStyle(color: light.onSurfaceVariant),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            ),
-            inputDecorationTheme: InputDecorationTheme(
-              filled: true,
-              fillColor: light.surface.withOpacity(0.8),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: light.outlineVariant),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: light.outlineVariant),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: light.primary, width: 2),
-              ),
-            ),
-          ),
-          darkTheme: ThemeData(
-            useMaterial3: true,
-            colorScheme: dark,
-            textTheme: font(ThemeData.dark().textTheme),
-            scaffoldBackgroundColor: dark.surface,
-            cardTheme: CardThemeData(
-              elevation: 0,
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              clipBehavior: Clip.antiAlias,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-              color: dark.surfaceContainerLowest,
-            ),
-            chipTheme: ChipThemeData(
-              side: BorderSide.none,
-              color: WidgetStatePropertyAll(dark.surfaceContainerHighest),
-              labelStyle: TextStyle(color: dark.onSurfaceVariant),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            ),
-          ),
+          theme: _buildTheme(lightScheme),
+          darkTheme: _buildTheme(darkScheme),
           home: const RootShell(),
         );
       },
