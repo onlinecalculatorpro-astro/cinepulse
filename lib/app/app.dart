@@ -24,17 +24,16 @@ class CinePulseApp extends StatelessWidget {
 
     ThemeData _buildTheme(ColorScheme scheme) {
       final isDark = scheme.brightness == Brightness.dark;
-      final baseText = isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme;
+      final baseText =
+          isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme;
 
       return ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
         textTheme: GoogleFonts.interTextTheme(baseText),
 
-        // Surfaces
         scaffoldBackgroundColor: scheme.surface,
 
-        // AppBar
         appBarTheme: AppBarTheme(
           elevation: 0,
           backgroundColor: scheme.surface,
@@ -42,26 +41,27 @@ class CinePulseApp extends StatelessWidget {
           centerTitle: false,
         ),
 
-        // Cards
-        cardTheme: CardTheme(
+        // 👇 CardThemeData instead of CardTheme
+        cardTheme: CardThemeData(
           elevation: 0,
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
           color: scheme.surfaceContainerLowest,
         ),
 
-        // Bottom Navigation
         navigationBarTheme: NavigationBarThemeData(
           backgroundColor: scheme.surface.withOpacity(0.96),
           indicatorColor: scheme.primaryContainer,
-          iconTheme: WidgetStatePropertyAll(IconThemeData(color: scheme.primary)),
+          iconTheme:
+              WidgetStatePropertyAll(IconThemeData(color: scheme.primary)),
           labelTextStyle: WidgetStatePropertyAll(
             GoogleFonts.inter(fontWeight: FontWeight.w600),
           ),
         ),
 
-        // Chips
         chipTheme: ChipThemeData(
           side: BorderSide.none,
           labelStyle: TextStyle(color: scheme.onSurfaceVariant),
@@ -69,11 +69,11 @@ class CinePulseApp extends StatelessWidget {
           color: WidgetStatePropertyAll(scheme.surfaceContainerHighest),
         ),
 
-        // Inputs
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: scheme.surface.withOpacity(isDark ? 0.72 : 0.80),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
             borderSide: BorderSide(color: scheme.outlineVariant),
