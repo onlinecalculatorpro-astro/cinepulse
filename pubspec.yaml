@@ -4,7 +4,8 @@ publish_to: "none"
 version: 0.1.0+1
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"
+  # google_fonts ^6.3.2 requires Dart >= 3.7
+  sdk: ">=3.7.0 <4.0.0"
   flutter: ">=3.22.0"
 
 dependencies:
@@ -30,16 +31,14 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  # NOTE: Uncomment after adding the folder/file to the repo to avoid CI errors.
-  # assets:
-  #   - assets/branding/         # includes cinepulse_mark_24.png
-  #   # - assets/images/         # (optional) posters/illustrations
+  assets:
+    - assets/logo.png
 
-# Launcher icon config — add assets/icon.png before running:
+# Launcher icon config — run locally when you want to regenerate:
 # flutter pub run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: assets/icon.png
-  adaptive_icon_background: "#121212"
-  adaptive_icon_foreground: assets/icon.png
+  image_path: assets/logo.png
+  adaptive_icon_background: "#2563EB"   # brand blue
+  adaptive_icon_foreground: assets/logo.png
