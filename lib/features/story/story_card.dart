@@ -98,8 +98,7 @@ class StoryCard extends StatelessWidget {
       }
     }
 
-    final parts = <String>[];
-    if (platform.isNotEmpty) parts.add(_titleCase(platform));
+    final parts = <String>[]; // Platform shown via OttBadge, so omit here
     if (ctx.isNotEmpty) parts.add(ctx);
     if (when.isNotEmpty) parts.add(when);
     return parts.join(' • ');
