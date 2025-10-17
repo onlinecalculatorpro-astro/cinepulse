@@ -29,12 +29,13 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          # Pin a modern stable to avoid missing flags on some runners
-          flutter-version: "3.35.6"   # ⬅️ includes Dart >= 3.7
+          flutter-version: "3.35.6"
           channel: "stable"
 
       - name: Flutter version
-        run: flutter --version
+        run: |
+          flutter --version
+          dart --version
 
       - name: Cache pub packages
         uses: actions/cache@v4
@@ -46,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      # Detect whether this Flutter supports --web-renderer; add it if yes.
+      # Detect support for --web-renderer and use it if available
       - name: Compute build args
         id: args
         shell: bash
@@ -83,34 +84,37 @@ jobs:
           path: build/web
 
   deploy:
-  needs: build
-  runs-on: ubuntu-latest
-  steps:
-    - name: Download web artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: web-preview
-        path: build/web
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: netlify-prod
+      cancel-in-progress: false
+    steps:
+      - name: Download web artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-preview
+          path: build/web
 
-    - name: Add SPA redirect (safe even with hash routing)
-      run: echo "/* /index.html 200" > build/web/_redirects
+      - name: Add SPA redirect (safe even with hash routing)
+        run: echo "/* /index.html 200" > build/web/_redirects
 
-    - name: Setup Node (for Netlify CLI)
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
+      - name: Setup Node (for Netlify CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-    - name: Check secrets present
-      run: |
-        test -n "${NETLIFY_AUTH_TOKEN}" && echo "Auth token OK"
-        test -n "${NETLIFY_SITE_ID}" && echo "Site ID OK"
-      env:
-        NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-        NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+      - name: Check secrets present
+        run: |
+          test -n "${NETLIFY_AUTH_TOKEN}" && echo "Auth token OK"
+          test -n "${NETLIFY_SITE_ID}" && echo "Site ID OK"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
-    # Use npx so we don't globally install; faster and less flaky
-    - name: Deploy to Netlify (production)
-      env:
-        NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-        NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-      run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy ${GITHUB_SHA}"
+      # Use npx so we don't globally install; faster and less flaky
+      - name: Deploy to Netlify (production)
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy ${GITHUB_SHA}"
