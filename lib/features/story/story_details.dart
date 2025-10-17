@@ -67,8 +67,6 @@ class StoryDetailsScreen extends StatelessWidget {
   }
 
   String _metaLine() {
-    final platform = (story.ottPlatform ?? story.source ?? '').trim();
-
     final String ctx;
     if (story.isTheatrical) {
       ctx = story.isUpcoming ? 'Coming soon' : 'In theatres';
@@ -179,7 +177,7 @@ class StoryDetailsScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
 
-                      // OTT badge + Meta line (platform • context • date • cert • runtime)
+                      // OTT badge + Meta line
                       Wrap(
                         crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 8,
@@ -223,12 +221,17 @@ class StoryDetailsScreen extends StatelessWidget {
                       // Actions
                       Row(
                         children: [
-                          FilledButton.icon(
-                            onPressed: hasUrl ? () => _openExternal(context) : null,
-                            icon: Icon(_isWatchCta
-                                ? Icons.play_arrow_rounded
-                                : Icons.open_in_new_rounded),
-                            label: Text(_isWatchCta ? 'Watch' : 'Open'),
+                          Semantics(
+                            button: true,
+                            label: _isWatchCta ? 'Watch' : 'Open',
+                            enabled: hasUrl,
+                            child: FilledButton.icon(
+                              onPressed: hasUrl ? () => _openExternal(context) : null,
+                              icon: Icon(_isWatchCta
+                                  ? Icons.play_arrow_rounded
+                                  : Icons.open_in_new_rounded),
+                              label: Text(_isWatchCta ? 'Watch' : 'Open'),
+                            ),
                           ),
                           const SizedBox(width: 12),
                           OutlinedButton.icon(
@@ -287,6 +290,10 @@ class _HeaderHero extends StatelessWidget {
                   fit: BoxFit.cover,
                   memCacheWidth: 1600,
                   fadeInDuration: const Duration(milliseconds: 180),
+                  errorWidget: (_, __, ___) => Container(
+                    color: s.surfaceVariant.withOpacity(0.2),
+                    child: const Center(child: Icon(Icons.broken_image_outlined)),
+                  ),
                 ),
           // Gradient for legibility
           Positioned.fill(
