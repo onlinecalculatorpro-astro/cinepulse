@@ -5,11 +5,15 @@ on:
   workflow_dispatch:
     inputs:
       apiBase:
-        description: "API base URL (e.g. https://api.cinepulse.app)"
+        description: "API base URL (e.g. https://api.onlinecalculatorpro.org)"
         required: false
         default: ""
       deepLinkBase:
         description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
+        required: false
+        default: ""
+      targetFile:
+        description: "Optional entry file (e.g. lib/main.dart)"
         required: false
         default: ""
   push:
@@ -20,7 +24,7 @@ on:
 
 # Dart-defines: prefer repo secrets; then manual inputs; else sane defaults.
 env:
-  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'http://72.60.218.209:8000' }}
+  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
 
 jobs:
@@ -38,11 +42,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java (Temurin 17)
+      - name: Setup Java (Temurin 17 + Gradle cache)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -64,27 +69,31 @@ jobs:
           restore-keys: |
             pub-cache-${{ runner.os }}-
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('apps/flutter/cinepulse_app/android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
       - name: flutter pub get
-        run: flutter pub get
+        run: flutter pub get --suppress-analytics
 
-      # ⚠️ Fix "unsupported Gradle project" by refreshing platform files for this Flutter version.
-      # Safe to run in an existing project; it keeps your lib/ and pubspec.
-      - name: Refresh Android platform (fix Gradle/AGP mismatch)
-        run: flutter create --platforms=android .
+      # Fix "unsupported Gradle project": refresh platform files for this Flutter version.
+      - name: Clean & refresh Android platform (fix Gradle/AGP mismatch)
+        run: |
+          flutter clean
+          flutter create --platforms=android .
+
+      # Re-resolve in case plugins/registrant changed after create
+      - name: flutter pub get (post-refresh)
+        run: flutter pub get --suppress-analytics
 
       - name: Build debug APKs (split per ABI)
+        env:
+          # Give Gradle a bit more heap to avoid OOM blips on CI
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -Dkotlin.daemon.jvm.options=-Xmx1g"
         run: |
+          TARGET_ARG=""
+          if [ -n "${{ inputs.targetFile }}" ]; then
+            TARGET_ARG="-t ${{ inputs.targetFile }}"
+          fi
+          set -x
           flutter build apk --debug --split-per-abi \
+            $TARGET_ARG \
             --dart-define=API_BASE_URL=${{ env.API_BASE_URL }} \
             --dart-define=DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}
 
@@ -95,5 +104,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-debug
+          # NOTE: upload-artifact runs from repo root, so use the full path
           path: apps/flutter/cinepulse_app/build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
