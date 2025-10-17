@@ -5,23 +5,31 @@ on:
   workflow_dispatch:
     inputs:
       apiBase:
-        description: "API base URL (e.g. https://api.onlinecalculatorpro.org)"
+        description: "API base URL (e.g. https://api.cinepulse.app)"
         required: false
-        default: "https://api.onlinecalculatorpro.org"
+        default: ""
       deepLinkBase:
-        description: "Deep link base (e.g. https://cinepusle.netlify.app/#/s)"
+        description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
         required: false
-        default: "https://cinepusle.netlify.app/#/s"
+        default: ""
   push:
     branches: [ main ]
+    paths:
+      - "apps/flutter/cinepulse_app/**"
+      - ".github/workflows/flutter-web-preview.yml"
 
+# Prefer GitHub Secrets; fall back to dispatch inputs; finally a sane default.
 env:
-  API_BASE_URL: ${{ inputs.apiBase != '' && inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
-  DEEP_LINK_BASE: ${{ inputs.deepLinkBase != '' && inputs.deepLinkBase || 'https://cinepusle.netlify.app/#/s' }}
+  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'http://72.60.218.209:8000' }}
+  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/flutter/cinepulse_app
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,10 +37,10 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          channel: stable
           flutter-version: "3.35.6"
-          channel: "stable"
 
-      - name: Flutter version
+      - name: Show tool versions
         run: |
           flutter --version
           dart --version
@@ -41,41 +49,39 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.lock') }}
-          restore-keys: ${{ runner.os }}-pub-
+          key: pub-cache-${{ runner.os }}-${{ hashFiles('apps/flutter/cinepulse_app/pubspec.lock') }}
+          restore-keys: |
+            pub-cache-${{ runner.os }}-
 
-      - name: Install dependencies
+      - name: flutter pub get
         run: flutter pub get
 
-      # Detect support for --web-renderer and use it if available
-      - name: Compute build args
+      - name: Compute extra build args
         id: args
         shell: bash
         run: |
           if flutter build web -h | grep -q -- '--web-renderer'; then
-            echo "args=--web-renderer canvaskit" >> "$GITHUB_OUTPUT"
+            echo "args=--web-renderer html" >> "$GITHUB_OUTPUT"
           else
             echo "args=" >> "$GITHUB_OUTPUT"
           fi
-          echo "Using extra args: '${{ steps.args.outputs.args }}'"
 
-      - name: Build web app
+      - name: Build Flutter Web (with dart-defines)
         run: |
-          flutter build web \
-            --release \
+          flutter build web --release \
             ${{ steps.args.outputs.args }} \
-            --dart-define=API_BASE_URL=${API_BASE_URL} \
-            --dart-define=DEEP_LINK_BASE=${DEEP_LINK_BASE}
+            --dart-define=API_BASE_URL=${{ env.API_BASE_URL }} \
+            --dart-define=DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}
 
       - name: Verify dart-defines embedded
         run: |
-          set -e
-          echo "Checking for API_BASE_URL in compiled JS..."
+          set -euo pipefail
+          echo "Checking API_BASE_URL…"
           grep -R "${API_BASE_URL}" build/web/main.dart.js >/dev/null
-          echo "OK: API_BASE_URL found."
-          echo "Checking for DEEP_LINK_BASE in compiled JS..."
+          echo "OK."
+          echo "Checking DEEP_LINK_BASE…"
           grep -R "${DEEP_LINK_BASE}" build/web/main.dart.js >/dev/null
-          echo "OK: DEEP_LINK_BASE found."
+          echo "OK."
 
       - name: Upload Web Build
         uses: actions/upload-artifact@v4
@@ -89,6 +95,7 @@ jobs:
     concurrency:
       group: netlify-prod
       cancel-in-progress: false
+
     steps:
       - name: Download web artifact
         uses: actions/download-artifact@v4
@@ -96,25 +103,24 @@ jobs:
           name: web-preview
           path: build/web
 
-      - name: Add SPA redirect (safe even with hash routing)
+      - name: Add SPA redirect (safe with hash routing)
         run: echo "/* /index.html 200" > build/web/_redirects
 
       - name: Setup Node (for Netlify CLI)
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
-      - name: Check secrets present
-        run: |
-          test -n "${NETLIFY_AUTH_TOKEN}" && echo "Auth token OK"
-          test -n "${NETLIFY_SITE_ID}" && echo "Site ID OK"
+      - name: Check Netlify secrets present
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          test -n "${NETLIFY_AUTH_TOKEN}" && echo "Auth token OK"
+          test -n "${NETLIFY_SITE_ID}" && echo "Site ID OK"
 
-      # Use npx so we don't globally install; faster and less flaky
       - name: Deploy to Netlify (production)
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy ${GITHUB_SHA}"
+        run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy $GITHUB_SHA"
