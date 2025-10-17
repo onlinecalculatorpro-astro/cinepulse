@@ -6,13 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'app/app_settings.dart';
+import 'core/api.dart';            // fetchStory() for deep-link fallback
 import 'core/cache.dart';
 import 'core/models.dart';
-import 'core/utils.dart'; // for fadeRoute()
+import 'core/utils.dart';         // fadeRoute()
 import 'features/home/home_screen.dart';
 import 'features/saved/saved_screen.dart';
 import 'features/story/story_details.dart';
-import 'features/alerts/alerts_screen.dart'; // NEW
+import 'features/alerts/alerts_screen.dart';
 
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
@@ -23,11 +24,12 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   int _index = 0;
 
-  final _pages = const [
+  // Keep pages alive; constructors should be const for perf.
+  static const List<Widget> _pages = [
     HomeScreen(),
     _DiscoverPlaceholder(),
     SavedScreen(),
-    AlertsScreen(), // NEW
+    AlertsScreen(),
   ];
 
   String? _pendingDeepLinkId;
@@ -37,17 +39,13 @@ class _RootShellState extends State<RootShell> {
   void initState() {
     super.initState();
     _captureInitialDeepLink();
-    // Try to resolve deep link shortly after first frame so feeds have a tick to start.
     WidgetsBinding.instance.addPostFrameCallback((_) => _tryOpenPendingDeepLink());
   }
 
-  /// Parses a link like `/#/s/<id>` (or `#/s/<id>`) from the current URL.
+  /// Parses links like `/#/s/<id>` or `/s/<id>` from the current URL.
   void _captureInitialDeepLink() {
-    // On web, Uri.base.fragment contains anything after '#' (e.g. "/s/abc123").
-    // On mobile deep link, some hosts may pass the whole path; handle both.
-    final frag = Uri.base.fragment; // "" on non-web or when not using hash URLs
+    final frag = Uri.base.fragment; // hash-part on web ("" on mobile)
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
-
     final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
     if (match != null) {
       _pendingDeepLinkId = match.group(2);
@@ -57,47 +55,50 @@ class _RootShellState extends State<RootShell> {
   Future<void> _tryOpenPendingDeepLink() async {
     if (_deepLinkHandled || _pendingDeepLinkId == null) return;
 
-    // Poll the in-memory feed cache briefly in case feeds are still loading.
-    // Stop as soon as we find a Story with this id.
     const maxWait = Duration(seconds: 4);
     const tick = Duration(milliseconds: 200);
     final started = DateTime.now();
 
+    // 1) Try to find it in in-memory cache quickly (ideal path).
     while (mounted && DateTime.now().difference(started) < maxWait) {
-      final Story? s = _getStoryFromCache(_pendingDeepLinkId!);
+      final Story? s = FeedCache.get(_pendingDeepLinkId!);
       if (s != null) {
-        _deepLinkHandled = true;
-        // Jump to Home tab (index 0) then open details.
-        if (_index != 0) setState(() => _index = 0);
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        if (!mounted) return;
-        Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: s)));
+        await _openDetails(s);
         return;
       }
       await Future<void>.delayed(tick);
     }
 
-    if (mounted && kIsWeb && _pendingDeepLinkId != null) {
-      // Give the user a hint if nothing turned up.
+    // 2) Fallback: fetch the story directly (cold start / first run).
+    try {
+      final s = await fetchStory(_pendingDeepLinkId!);
+      if (mounted) {
+        FeedCache.put(s);
+        await _openDetails(s);
+        return;
+      }
+    } catch (_) {
+      // Ignore; we’ll just show Home. Optional toast below for web.
+    }
+
+    if (mounted && kIsWeb) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Link opened, loading feed…')),
+        const SnackBar(content: Text('Opening… fetching story may take a moment')),
       );
     }
   }
 
-  // Lightweight helper to read from the app's in-memory cache without coupling
-  // RootShell to networking. Feed code already calls FeedCache.put(s).
-  Story? _getStoryFromCache(String id) {
-    try {
-      // Adjust to your cache API if different (e.g., FeedCache.lookup / byId).
-      return FeedCache.get(id);
-    } catch (_) {
-      return null;
-    }
+  Future<void> _openDetails(Story s) async {
+    _deepLinkHandled = true;
+    if (_index != 0) setState(() => _index = 0); // ensure Home is visible beneath
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: s)));
   }
 
   Future<void> _openThemePicker(BuildContext context) async {
     final current = AppSettings.instance.themeMode;
+    Navigator.pop(context); // close drawer before sheet
     final picked = await showModalBottomSheet<ThemeMode>(
       context: context,
       showDragHandle: true,
@@ -110,68 +111,73 @@ class _RootShellState extends State<RootShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      drawer: Drawer(
-        child: SafeArea(
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              const _BrandDrawerHeader(),
-              ListTile(
-                leading: const Icon(Icons.palette_outlined),
-                title: const Text('Theme'),
-                subtitle: const Text('System / Light / Dark'),
-                onTap: () => _openThemePicker(context),
-              ),
-              ListTile(
-                leading: const Icon(Icons.settings_outlined),
-                title: const Text('Settings'),
-                onTap: () {},
-              ),
-              ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('About'),
-                onTap: () {},
-              ),
-            ],
+    return WillPopScope(
+      // Back button pops detail routes if any; otherwise allow system back.
+      onWillPop: () async {
+        final canPop = Navigator.of(context).canPop();
+        if (canPop) Navigator.of(context).maybePop();
+        return !canPop;
+      },
+      child: Scaffold(
+        drawer: Drawer(
+          child: SafeArea(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                const _BrandDrawerHeader(),
+                ListTile(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text('Theme'),
+                  subtitle: const Text('System / Light / Dark'),
+                  onTap: () => _openThemePicker(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.settings_outlined),
+                  title: const Text('Settings'),
+                  onTap: () => Navigator.pop(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('About'),
+                  onTap: () => Navigator.pop(context),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
 
-      // Center pages on wide screens; animate transitions slightly.
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 200),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        child: _ResponsiveWidth(child: _pages[_index], key: ValueKey(_index)),
-      ),
+        // Keep tab states with an IndexedStack. Center on wide screens.
+        body: _ResponsiveWidth(
+          child: IndexedStack(index: _index, children: _pages),
+        ),
 
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.explore_outlined),
-            selectedIcon: Icon(Icons.explore),
-            label: 'Discover',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.bookmark_outline),
-            selectedIcon: Icon(Icons.bookmark),
-            label: 'Saved',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.notifications_outlined),
-            selectedIcon: Icon(Icons.notifications),
-            label: 'Alerts', // NEW
-          ),
-        ],
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _index,
+          labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
+          onDestinationSelected: (i) => setState(() => _index = i),
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: 'Home',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.explore_outlined),
+              selectedIcon: Icon(Icons.explore),
+              label: 'Discover',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.bookmark_outline),
+              selectedIcon: Icon(Icons.bookmark),
+              label: 'Saved',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.notifications_outlined),
+              selectedIcon: Icon(Icons.notifications),
+              label: 'Alerts',
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -251,7 +257,6 @@ class _LogoMark extends StatelessWidget {
         boxShadow: [
           BoxShadow(
             blurRadius: 10,
-            spreadRadius: 0,
             offset: const Offset(0, 3),
             color: scheme.primary.withOpacity(0.25),
           ),
@@ -279,6 +284,12 @@ class _ThemePicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final options = <ThemeMode, (String, IconData)>{
+      ThemeMode.system: ('System', Icons.auto_awesome),
+      ThemeMode.light: ('Light', Icons.light_mode_outlined),
+      ThemeMode.dark: ('Dark', Icons.dark_mode_outlined),
+    };
+
     return SafeArea(
       top: false,
       child: Padding(
@@ -288,14 +299,9 @@ class _ThemePicker extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Theme',
-                style: GoogleFonts.inter(
-                    fontSize: 18, fontWeight: FontWeight.w700)),
+                style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
-            for (final entry in {
-              ThemeMode.system: ('System', Icons.auto_awesome),
-              ThemeMode.light: ('Light', Icons.light_mode_outlined),
-              ThemeMode.dark: ('Dark', Icons.dark_mode_outlined),
-            }.entries)
+            for (final entry in options.entries)
               RadioListTile<ThemeMode>(
                 value: entry.key,
                 groupValue: current,
