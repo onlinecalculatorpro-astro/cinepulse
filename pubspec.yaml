@@ -30,9 +30,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/branding/         # includes cinepulse_mark_24.png
-    # - assets/images/         # (optional) add if you put posters/illustrations here
+  # NOTE: Uncomment after adding the folder/file to the repo to avoid CI errors.
+  # assets:
+  #   - assets/branding/         # includes cinepulse_mark_24.png
+  #   # - assets/images/         # (optional) posters/illustrations
 
 # Launcher icon config — add assets/icon.png before running:
 # flutter pub run flutter_launcher_icons
