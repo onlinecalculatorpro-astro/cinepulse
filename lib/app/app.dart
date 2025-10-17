@@ -24,14 +24,15 @@ class CinePulseApp extends StatelessWidget {
 
     ThemeData _buildTheme(ColorScheme scheme) {
       final isDark = scheme.brightness == Brightness.dark;
-      final baseText =
-          isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme;
+      final baseText = isDark
+          ? ThemeData.dark().textTheme
+          : ThemeData.light().textTheme;
 
       return ThemeData(
         useMaterial3: true,
         colorScheme: scheme,
         textTheme: GoogleFonts.interTextTheme(baseText),
-
+        visualDensity: VisualDensity.adaptivePlatformDensity,
         scaffoldBackgroundColor: scheme.surface,
 
         appBarTheme: AppBarTheme(
@@ -41,8 +42,8 @@ class CinePulseApp extends StatelessWidget {
           centerTitle: false,
         ),
 
-        // 👇 CardThemeData instead of CardTheme
-        cardTheme: CardThemeData(
+        // ✅ CardTheme (not CardThemeData)
+        cardTheme: CardTheme(
           elevation: 0,
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           clipBehavior: Clip.antiAlias,
@@ -55,18 +56,20 @@ class CinePulseApp extends StatelessWidget {
         navigationBarTheme: NavigationBarThemeData(
           backgroundColor: scheme.surface.withOpacity(0.96),
           indicatorColor: scheme.primaryContainer,
-          iconTheme:
-              WidgetStatePropertyAll(IconThemeData(color: scheme.primary)),
-          labelTextStyle: WidgetStatePropertyAll(
+          iconTheme: MaterialStatePropertyAll(
+            IconThemeData(color: scheme.primary),
+          ),
+          labelTextStyle: MaterialStatePropertyAll(
             GoogleFonts.inter(fontWeight: FontWeight.w600),
           ),
         ),
 
+        // Keep ChipTheme simple to avoid API drift across Flutter versions
         chipTheme: ChipThemeData(
           side: BorderSide.none,
+          backgroundColor: scheme.surfaceContainerHighest,
           labelStyle: TextStyle(color: scheme.onSurfaceVariant),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          color: WidgetStatePropertyAll(scheme.surfaceContainerHighest),
         ),
 
         inputDecorationTheme: InputDecorationTheme(
