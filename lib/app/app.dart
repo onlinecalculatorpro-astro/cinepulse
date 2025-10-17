@@ -41,8 +41,8 @@ class CinePulseApp extends StatelessWidget {
           centerTitle: false,
         ),
 
-        // CardTheme (works across Flutter 3.x lines)
-        cardTheme: CardTheme(
+        // Use CardThemeData to match your toolchain
+        cardTheme: CardThemeData(
           elevation: 0,
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           clipBehavior: Clip.antiAlias,
