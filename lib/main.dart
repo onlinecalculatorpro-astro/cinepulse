@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import 'app/app.dart';
 import 'app/app_settings.dart';
+import 'core/api.dart';   // for kApiBaseUrl, kDeepLinkBase
 import 'core/cache.dart';
 
 Future<void> main() async {
@@ -20,6 +21,11 @@ Future<void> main() async {
   // App-wide settings & persistent stores.
   await AppSettings.instance.init();
   await SavedStore.instance.init();
+
+  // Log compiled-in config once (helps verify --dart-define on CI).
+  // Remove or lower to verbose logging if you prefer.
+  debugPrint('[CinePulse] API_BASE_URL = $kApiBaseUrl');
+  debugPrint('[CinePulse] DEEP_LINK_BASE = $kDeepLinkBase');
 
   // ---------- Global error handling ----------
   // Framework errors
@@ -39,9 +45,7 @@ Future<void> main() async {
 
   // Friendlier fallback widget when a build throws.
   ErrorWidget.builder = (FlutterErrorDetails details) {
-    final message = kReleaseMode
-        ? 'Something went wrong.'
-        : details.exceptionAsString();
+    final message = kReleaseMode ? 'Something went wrong.' : details.exceptionAsString();
     return Material(
       color: Colors.transparent,
       child: Center(
