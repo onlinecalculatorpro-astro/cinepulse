@@ -26,16 +26,12 @@ class StoryCard extends StatelessWidget {
     return kind == 'trailer' || source == 'youtube';
   }
 
-  // Open external playable URL (YouTube for now).
-  Future<void> _watchOrOpen(BuildContext context) async {
-    final url = storyVideoUrl(story);
-    if (url == null) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('No playable link available')));
-      }
-      return;
-    }
+  Uri? get _url => storyVideoUrl(story);
+
+  // Open external playable URL.
+  Future<void> _openLink(BuildContext context) async {
+    final url = _url;
+    if (url == null) return; // Button will be disabled when null.
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context)
@@ -43,7 +39,7 @@ class StoryCard extends StatelessWidget {
     }
   }
 
-  // Share a deep link that opens inside the app.
+  // Share a deep link that opens inside the app; clipboard on web.
   Future<void> _share(BuildContext context) async {
     final deep = deepLinkForStoryId(story.id).toString();
     try {
@@ -52,16 +48,19 @@ class StoryCard extends StatelessWidget {
       } else {
         await Clipboard.setData(ClipboardData(text: deep));
       }
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
-        );
-      }
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content:
+              Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+        ),
+      );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Link copied to clipboard')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Link copied to clipboard')),
+        );
       }
     }
   }
@@ -71,37 +70,37 @@ class StoryCard extends StatelessWidget {
   }
 
   String _metaLine() {
-    // Platform/source (e.g., Netflix/YouTube)
+    // Platform or source
     final platform = (story.ottPlatform ?? story.source ?? '').trim();
 
-    // Context (in theatres / coming soon / kind)
+    // Context tag
     final ctx = story.isTheatrical
         ? (story.isUpcoming ? 'Coming soon' : 'In theatres')
         : (story.kind.isNotEmpty ? _titleCase(story.kind) : '');
 
-    // Date (prefer release date)
-    final date = story.releaseDate ?? story.publishedAt;
-    String dateText = '';
-    if (date != null) {
+    // Prefer release date; fallback to publish time
+    final d = story.releaseDate ?? story.publishedAt;
+    String when = '';
+    if (d != null) {
       final now = DateTime.now().toUtc();
-      final diff = now.difference(date);
+      final diff = now.difference(d);
       if (diff.inDays >= 0 && diff.inDays <= 10) {
         if (diff.inDays == 0) {
-          dateText = 'Today';
+          when = 'Today';
         } else if (diff.inDays == 1) {
-          dateText = 'Yesterday';
+          when = 'Yesterday';
         } else {
-          dateText = '${diff.inDays}d ago';
+          when = '${diff.inDays}d ago';
         }
       } else {
-        dateText = DateFormat('d MMM').format(date.toLocal());
+        when = DateFormat('d MMM').format(d.toLocal());
       }
     }
 
     final parts = <String>[];
     if (platform.isNotEmpty) parts.add(_titleCase(platform));
     if (ctx.isNotEmpty) parts.add(ctx);
-    if (dateText.isNotEmpty) parts.add(dateText);
+    if (when.isNotEmpty) parts.add(when);
     return parts.join(' • ');
   }
 
@@ -111,10 +110,11 @@ class StoryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
-    final isMobileColumn = width < 520; // responsive cutoff
+    final isMobileColumn = width < 520;
     final metaText = _metaLine();
+    final hasUrl = _url != null;
 
-    final cardChild = InkWell(
+    final child = InkWell(
       borderRadius: BorderRadius.circular(24),
       onTap: () => _openDetails(context),
       child: Padding(
@@ -124,14 +124,16 @@ class StoryCard extends StatelessWidget {
                 story: story,
                 metaText: metaText,
                 isWatchCta: _isWatchCta,
-                onPrimaryAction: () => _watchOrOpen(context),
+                hasUrl: hasUrl,
+                onPrimaryAction: () => _openLink(context),
                 onShare: () => _share(context),
               )
             : _HorizontalCard(
                 story: story,
                 metaText: metaText,
                 isWatchCta: _isWatchCta,
-                onPrimaryAction: () => _watchOrOpen(context),
+                hasUrl: hasUrl,
+                onPrimaryAction: () => _openLink(context),
                 onShare: () => _share(context),
               ),
       ),
@@ -142,10 +144,10 @@ class StoryCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(24),
         child: kIsWeb
-            ? cardChild // skip blur on web for perf
+            ? child // Skip blur on web for perf
             : BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-                child: cardChild,
+                child: child,
               ),
       ),
     );
@@ -159,6 +161,7 @@ class _VerticalCard extends StatelessWidget {
     required this.story,
     required this.metaText,
     required this.isWatchCta,
+    required this.hasUrl,
     required this.onPrimaryAction,
     required this.onShare,
   });
@@ -166,6 +169,7 @@ class _VerticalCard extends StatelessWidget {
   final Story story;
   final String metaText;
   final bool isWatchCta;
+  final bool hasUrl;
   final VoidCallback onPrimaryAction;
   final VoidCallback onShare;
 
@@ -192,9 +196,8 @@ class _VerticalCard extends StatelessWidget {
                           fit: BoxFit.cover,
                           memCacheWidth: 800, // perf hint
                           fadeInDuration: const Duration(milliseconds: 150),
-                          placeholder: (c, _) => Container(
-                            color: scheme.surfaceVariant.withOpacity(0.2),
-                          ),
+                          placeholder: (c, _) =>
+                              Container(color: scheme.surfaceVariant.withOpacity(0.2)),
                         ),
                 ),
               ),
@@ -246,7 +249,7 @@ class _VerticalCard extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: onPrimaryAction,
+          onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
           icon: Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
           label: Text(isWatchCta ? 'Watch' : 'Open'),
         ),
@@ -262,6 +265,7 @@ class _HorizontalCard extends StatelessWidget {
     required this.story,
     required this.metaText,
     required this.isWatchCta,
+    required this.hasUrl,
     required this.onPrimaryAction,
     required this.onShare,
   });
@@ -269,6 +273,7 @@ class _HorizontalCard extends StatelessWidget {
   final Story story;
   final String metaText;
   final bool isWatchCta;
+  final bool hasUrl;
   final VoidCallback onPrimaryAction;
   final VoidCallback onShare;
 
@@ -351,8 +356,9 @@ class _HorizontalCard extends StatelessWidget {
               Align(
                 alignment: Alignment.centerLeft,
                 child: FilledButton.icon(
-                  onPressed: onPrimaryAction,
-                  icon: Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
+                  onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
+                  icon:
+                      Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
                   label: Text(isWatchCta ? 'Watch' : 'Open'),
                 ),
               ),
