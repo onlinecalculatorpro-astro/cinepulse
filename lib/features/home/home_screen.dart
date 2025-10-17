@@ -21,10 +21,13 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+  // ✅ Updated tab set: All · Trailers · OTT · In Theatres · Coming Soon
   static const Map<String, String> _tabs = {
     'all': 'All',
     'trailers': 'Trailers',
     'ott': 'OTT',
+    'intheatres': 'In Theatres',
+    'comingsoon': 'Coming Soon',
   };
 
   late final TabController _tab =
