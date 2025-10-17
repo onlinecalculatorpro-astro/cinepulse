@@ -243,11 +243,11 @@ class _BrandInline extends StatelessWidget {
   Widget build(BuildContext context) {
     // Scale logo by screen width so it looks balanced
     final w = MediaQuery.of(context).size.width;
-    final logoWidth = w < 480
+    final logoWidth = w < 320
         ? 150.0 // small phones
         : w < 800
-            ? 180.0 // phones / small tablets
-            : 220.0; // large tablets / desktop
+            ? 120.0 // phones / small tablets
+            : 180.0; // large tablets / desktop
 
     // Force white so it pops on dark header, regardless of source color
     return ColorFiltered(
