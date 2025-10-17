@@ -98,8 +98,7 @@ class StoryDetailsScreen extends StatelessWidget {
     if ((story.ratingCert ?? '').isNotEmpty) extras.add(story.ratingCert!);
     if ((story.runtimeMinutes ?? 0) > 0) extras.add('${story.runtimeMinutes}m');
 
-    final parts = <String>[];
-    if (platform.isNotEmpty) parts.add(_titleCase(platform));
+    final parts = <String>[]; // Platform is shown via OttBadge
     if (ctx.isNotEmpty) parts.add(ctx);
     if (dateText.isNotEmpty) parts.add(dateText);
     if (extras.isNotEmpty) parts.add(extras.join(' • '));
