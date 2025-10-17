@@ -1,4 +1,4 @@
-// lib/app/features/story/story_details.dart
+// lib/features/story/story_details.dart
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +17,12 @@ class StoryDetailsScreen extends StatelessWidget {
   const StoryDetailsScreen({super.key, required this.story});
   final Story story;
 
+  bool get _isWatchCta {
+    final kind = story.kind.toLowerCase();
+    final source = (story.source ?? '').toLowerCase();
+    return kind == 'trailer' || source == 'youtube';
+  }
+
   Uri? get _videoUrl => storyVideoUrl(story);
 
   // Prefer deep link (opens inside app). Fallback to video URL if available.
@@ -25,7 +31,7 @@ class StoryDetailsScreen extends StatelessWidget {
     return deep.isNotEmpty ? deep : (_videoUrl?.toString() ?? story.title);
   }
 
-  Future<void> _watch(BuildContext context) async {
+  Future<void> _openExternal(BuildContext context) async {
     final url = _videoUrl;
     if (url == null) {
       if (context.mounted) {
@@ -93,9 +99,7 @@ class StoryDetailsScreen extends StatelessWidget {
 
     final extras = <String>[];
     if ((story.ratingCert ?? '').isNotEmpty) extras.add(story.ratingCert!);
-    if (story.runtimeMinutes != null && story.runtimeMinutes! > 0) {
-      extras.add('${story.runtimeMinutes}m');
-    }
+    if ((story.runtimeMinutes ?? 0) > 0) extras.add('${story.runtimeMinutes}m');
 
     final parts = <String>[];
     if (platform.isNotEmpty) parts.add(_titleCase(platform));
@@ -105,10 +109,7 @@ class StoryDetailsScreen extends StatelessWidget {
     return parts.join(' • ');
   }
 
-  String _titleCase(String s) {
-    if (s.isEmpty) return s;
-    return s[0].toUpperCase() + s.substring(1);
-  }
+  String _titleCase(String s) => s.isEmpty ? s : (s[0].toUpperCase() + s.substring(1));
 
   @override
   Widget build(BuildContext context) {
@@ -218,9 +219,11 @@ class StoryDetailsScreen extends StatelessWidget {
                       Row(
                         children: [
                           FilledButton.icon(
-                            onPressed: () => _watch(context),
-                            icon: const Icon(Icons.play_arrow_rounded),
-                            label: Text(story.kind.toLowerCase() == 'trailer' ? 'Watch' : 'Open'),
+                            onPressed: () => _openExternal(context),
+                            icon: Icon(_isWatchCta
+                                ? Icons.play_arrow_rounded
+                                : Icons.open_in_new_rounded),
+                            label: Text(_isWatchCta ? 'Watch' : 'Open'),
                           ),
                           const SizedBox(width: 12),
                           OutlinedButton.icon(
@@ -263,9 +266,8 @@ class _HeaderHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
-    final imageUrl = (story.posterUrl?.isNotEmpty == true)
-        ? story.posterUrl!
-        : (story.thumbUrl ?? '');
+    final imageUrl =
+        (story.posterUrl?.isNotEmpty == true) ? story.posterUrl! : (story.thumbUrl ?? '');
 
     return Hero(
       tag: 'thumb-${story.id}',
@@ -322,11 +324,13 @@ class _Facet extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('$label: ',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelMedium
-                  ?.copyWith(color: cs.onSurfaceVariant, fontWeight: FontWeight.w600)),
+          Text(
+            '$label: ',
+            style: Theme.of(context)
+                .textTheme
+                .labelMedium
+                ?.copyWith(color: cs.onSurfaceVariant, fontWeight: FontWeight.w600),
+          ),
           Text(value, style: Theme.of(context).textTheme.labelMedium),
         ],
       ),
