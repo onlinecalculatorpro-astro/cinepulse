@@ -32,11 +32,12 @@ class StoryCard extends StatelessWidget {
   // Open external playable URL.
   Future<void> _openLink(BuildContext context) async {
     final url = _url;
-    if (url == null) return; // Button will be disabled when null.
+    if (url == null) return;
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Could not open link')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open link')),
+      );
     }
   }
 
@@ -52,8 +53,7 @@ class StoryCard extends StatelessWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content:
-              Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
         ),
       );
     } catch (_) {
@@ -71,9 +71,6 @@ class StoryCard extends StatelessWidget {
   }
 
   String _metaLine() {
-    // Platform or source
-    final platform = (story.ottPlatform ?? story.source ?? '').trim();
-
     // Context tag
     final ctx = story.isTheatrical
         ? (story.isUpcoming ? 'Coming soon' : 'In theatres')
@@ -98,7 +95,7 @@ class StoryCard extends StatelessWidget {
       }
     }
 
-    final parts = <String>[]; // Platform shown via OttBadge, so omit here
+    final parts = <String>[];
     if (ctx.isNotEmpty) parts.add(ctx);
     if (when.isNotEmpty) parts.add(when);
     return parts.join(' • ');
@@ -198,6 +195,10 @@ class _VerticalCard extends StatelessWidget {
                           fadeInDuration: const Duration(milliseconds: 150),
                           placeholder: (c, _) =>
                               Container(color: scheme.surfaceVariant.withOpacity(0.2)),
+                          errorWidget: (_, __, ___) => Container(
+                            color: scheme.surfaceVariant.withOpacity(0.2),
+                            child: const Center(child: Icon(Icons.broken_image_outlined)),
+                          ),
                         ),
                 ),
               ),
@@ -256,10 +257,16 @@ class _VerticalCard extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        FilledButton.icon(
-          onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
-          icon: Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
-          label: Text(isWatchCta ? 'Watch' : 'Open'),
+        Semantics(
+          button: true,
+          label: _isWatchCta ? 'Watch' : 'Open',
+          enabled: hasUrl,
+          child: FilledButton.icon(
+            onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
+            icon:
+                Icon(_isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
+            label: Text(_isWatchCta ? 'Watch' : 'Open'),
+          ),
         ),
       ],
     );
@@ -308,6 +315,10 @@ class _HorizontalCard extends StatelessWidget {
                       fadeInDuration: const Duration(milliseconds: 150),
                       placeholder: (c, _) =>
                           Container(color: scheme.surfaceVariant.withOpacity(0.2)),
+                      errorWidget: (_, __, ___) => Container(
+                        color: scheme.surfaceVariant.withOpacity(0.2),
+                        child: const Center(child: Icon(Icons.broken_image_outlined)),
+                      ),
                     ),
             ),
           ),
@@ -371,11 +382,16 @@ class _HorizontalCard extends StatelessWidget {
               const SizedBox(height: 10),
               Align(
                 alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
-                  icon:
-                      Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
-                  label: Text(isWatchCta ? 'Watch' : 'Open'),
+                child: Semantics(
+                  button: true,
+                  label: isWatchCta ? 'Watch' : 'Open',
+                  enabled: hasUrl,
+                  child: FilledButton.icon(
+                    onPressed: hasUrl ? onPrimaryAction : null,
+                    icon: Icon(
+                        isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
+                    label: Text(isWatchCta ? 'Watch' : 'Open'),
+                  ),
                 ),
               ),
             ],
