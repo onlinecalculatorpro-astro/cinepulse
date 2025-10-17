@@ -52,7 +52,6 @@ final String kApiBaseUrl = _autoApiBase();
 final String kDeepLinkBase = _autoDeepBase();
 
 /// Build a CinePulse deep link to open a story inside the app.
-/// This is what you should share from the UI.
 Uri deepLinkForStoryId(String storyId) {
   final encoded = Uri.encodeComponent(storyId);
   return Uri.parse('$kDeepLinkBase/$encoded');
@@ -77,6 +76,32 @@ List<Story> _decodeFeed(String body) {
       .toList(growable: false);
 }
 
+Map<String, String> _headers() => {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'X-CinePulse-Client': 'app/1.0',
+    };
+
+/// Normalize Flutter tab keys to server-understood categories (if needed).
+/// We still pass the same keys by default, but this offers a single place
+/// to remap without touching callers if the backend expects other strings.
+String _normalizeTab(String tab) {
+  switch (tab) {
+    case 'all':
+    case 'trailers':
+    case 'ott':
+      return tab;
+    case 'intheatres':
+      // alias: theatres/in_theatres/in-theatres etc.
+      return 'intheatres';
+    case 'comingsoon':
+      // alias: upcoming/coming_soon etc.
+      return 'comingsoon';
+    default:
+      return 'all';
+  }
+}
+
 /// ------------------------------------
 /// Endpoints
 /// ------------------------------------
@@ -87,19 +112,22 @@ Future<List<Story>> fetchFeed({
   DateTime? since,
   int limit = 20,
 }) async {
+  final norm = _normalizeTab(tab);
   final uri = Uri.parse('$kApiBaseUrl/v1/feed').replace(queryParameters: {
-    'tab': tab,
+    'tab': norm,
     'limit': '$limit',
     if (since != null) 'since': since.toUtc().toIso8601String(),
   });
 
   try {
-    final r = await http.get(uri).timeout(_timeout);
+    final r = await http.get(uri, headers: _headers()).timeout(_timeout);
     if (r.statusCode != 200) _fail(r);
-    // Keep decoding on the UI isolate—fast enough for our small payloads.
+    // Keep decoding on the UI isolate—payloads are small.
     return _decodeFeed(r.body);
   } on TimeoutException {
     throw Exception('Network timeout. Please try again.');
+  } on FormatException {
+    throw Exception('Malformed response from server.');
   }
 }
 
@@ -108,7 +136,7 @@ Future<List<Story>> searchStories(String query, {int limit = 10}) async {
   final uri = Uri.parse('$kApiBaseUrl/v1/search')
       .replace(queryParameters: {'q': query, 'limit': '$limit'});
   try {
-    final r = await http.get(uri).timeout(_timeout);
+    final r = await http.get(uri, headers: _headers()).timeout(_timeout);
     if (r.statusCode != 200) _fail(r);
     final map = json.decode(r.body) as Map<String, dynamic>;
     final raw = (map['items'] as List).cast<dynamic>();
@@ -117,6 +145,8 @@ Future<List<Story>> searchStories(String query, {int limit = 10}) async {
         .toList(growable: false);
   } on TimeoutException {
     throw Exception('Search timed out. Please try again.');
+  } on FormatException {
+    throw Exception('Malformed response from server.');
   }
 }
 
@@ -124,12 +154,14 @@ Future<List<Story>> searchStories(String query, {int limit = 10}) async {
 Future<Story> fetchStory(String storyId) async {
   final uri = Uri.parse('$kApiBaseUrl/v1/story/$storyId');
   try {
-    final r = await http.get(uri).timeout(_timeout);
+    final r = await http.get(uri, headers: _headers()).timeout(_timeout);
     if (r.statusCode != 200) _fail(r);
     final map = json.decode(r.body) as Map<String, dynamic>;
     return Story.fromJson(map);
   } on TimeoutException {
     throw Exception('Network timeout. Please try again.');
+  } on FormatException {
+    throw Exception('Malformed response from server.');
   }
 }
 
@@ -137,11 +169,13 @@ Future<Story> fetchStory(String storyId) async {
 Future<int> fetchApproxFeedLength() async {
   final uri = Uri.parse('$kApiBaseUrl/health');
   try {
-    final r = await http.get(uri).timeout(_timeout);
+    final r = await http.get(uri, headers: _headers()).timeout(_timeout);
     if (r.statusCode != 200) _fail(r);
     final map = json.decode(r.body) as Map<String, dynamic>;
     return (map['feed_len'] as num?)?.toInt() ?? 0;
   } on TimeoutException {
     throw Exception('Network timeout. Please try again.');
+  } on FormatException {
+    throw Exception('Malformed response from server.');
   }
 }
