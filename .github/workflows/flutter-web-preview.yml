@@ -30,7 +30,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           # Pin a modern stable to avoid missing flags on some runners
-          flutter-version: "3.24.0"
+          flutter-version: "3.35.6"   # ⬅️ includes Dart >= 3.7
           channel: "stable"
 
       - name: Flutter version
