@@ -1,3 +1,4 @@
+// lib/features/story/story_card.dart
 import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -9,6 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/api.dart'; // for deepLinkForStoryId
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
@@ -18,6 +20,7 @@ class StoryCard extends StatelessWidget {
   const StoryCard({super.key, required this.story});
   final Story story;
 
+  // Open external playable URL (YouTube for now).
   Future<void> _watch(BuildContext context) async {
     final url = storyVideoUrl(story);
     if (url == null) {
@@ -36,33 +39,24 @@ class StoryCard extends StatelessWidget {
     }
   }
 
-  /// Share a **deep link** that opens inside the app.
-  /// We use a hash fragment so it works on static hosts (#/s/<id>).
+  // Share a deep link that opens inside the app.
   Future<void> _share(BuildContext context) async {
-    final base = Uri.base;
-    final deepLink = Uri(
-      scheme: base.scheme.isEmpty ? 'https' : base.scheme,
-      host: base.host,
-      port: base.hasPort ? base.port : null,
-      fragment: '/s/${story.id}',
-    ).toString();
-
+    final deep = deepLinkForStoryId(story.id).toString();
     try {
       if (!kIsWeb) {
-        await Share.share(deepLink);
+        await Share.share(deep);
       } else {
-        await Clipboard.setData(ClipboardData(text: deepLink));
+        await Clipboard.setData(ClipboardData(text: deep));
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-                Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+            content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
           ),
         );
       }
     } catch (_) {
-      await Clipboard.setData(ClipboardData(text: deepLink));
+      await Clipboard.setData(ClipboardData(text: deep));
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Link copied to clipboard')),
@@ -75,14 +69,50 @@ class StoryCard extends StatelessWidget {
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: story)));
   }
 
+  String _metaLine(BuildContext context) {
+    // Platform or source
+    final platform = (story.ottPlatform ?? story.source ?? '').trim();
+    // Context tag
+    final ctx = story.isTheatrical
+        ? (story.isUpcoming ? 'Coming soon' : 'In theatres')
+        : (story.kind.toLowerCase() == 'ott' ? 'OTT' : story.kind);
+    // Date label prefers release date
+    final date = story.releaseDate ?? story.publishedAt;
+    String dateText = '';
+    if (date != null) {
+      final now = DateTime.now().toUtc();
+      // If within ~10 days in past, show relative; else show calendar date.
+      final diff = now.difference(date);
+      if (diff.inDays >= 0 && diff.inDays <= 10) {
+        if (diff.inDays == 0) {
+          dateText = 'Today';
+        } else if (diff.inDays == 1) {
+          dateText = 'Yesterday';
+        } else {
+          dateText = '${diff.inDays}d ago';
+        }
+      } else {
+        dateText = DateFormat('d MMM').format(date.toLocal());
+      }
+    }
+
+    final parts = <String>[];
+    if (platform.isNotEmpty) parts.add(_titleCase(platform));
+    if (ctx.isNotEmpty) parts.add(ctx);
+    if (dateText.isNotEmpty) parts.add(dateText);
+    return parts.join(' • ');
+  }
+
+  String _titleCase(String s) {
+    if (s.isEmpty) return s;
+    return s[0].toUpperCase() + s.substring(1);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
     final isMobileColumn = width < 520; // responsive cutoff
-    final date = story.publishedAt == null
-        ? null
-        : DateFormat('EEE, d MMM • HH:mm').format(story.publishedAt!.toLocal());
 
     return Card(
       color: scheme.surface.withOpacity(0.6),
@@ -98,13 +128,13 @@ class StoryCard extends StatelessWidget {
               child: isMobileColumn
                   ? _VerticalCard(
                       story: story,
-                      dateText: date,
+                      metaText: _metaLine(context),
                       onWatch: () => _watch(context),
                       onShare: () => _share(context),
                     )
                   : _HorizontalCard(
                       story: story,
-                      dateText: date,
+                      metaText: _metaLine(context),
                       onWatch: () => _watch(context),
                       onShare: () => _share(context),
                     ),
@@ -121,13 +151,13 @@ class StoryCard extends StatelessWidget {
 class _VerticalCard extends StatelessWidget {
   const _VerticalCard({
     required this.story,
-    required this.dateText,
+    required this.metaText,
     required this.onWatch,
     required this.onShare,
   });
 
   final Story story;
-  final String? dateText;
+  final String metaText;
   final VoidCallback onWatch;
   final VoidCallback onShare;
 
@@ -138,7 +168,7 @@ class _VerticalCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Image header with actions overlay (matches details styling)
+        // Poster/thumbnail with actions overlay
         Stack(
           children: [
             Hero(
@@ -152,6 +182,11 @@ class _VerticalCard extends StatelessWidget {
                       : CachedNetworkImage(
                           imageUrl: story.thumbUrl!,
                           fit: BoxFit.cover,
+                          memCacheWidth: 800, // perf hint
+                          fadeInDuration: const Duration(milliseconds: 150),
+                          placeholder: (c, _) => Container(
+                            color: scheme.surfaceVariant.withOpacity(0.2),
+                          ),
                         ),
                 ),
               ),
@@ -167,8 +202,7 @@ class _VerticalCard extends StatelessWidget {
                       final saved = SavedStore.instance.isSaved(story.id);
                       return _CircleIconButton(
                         tooltip: saved ? 'Remove from Saved' : 'Save',
-                        icon:
-                            saved ? Icons.bookmark : Icons.bookmark_add_outlined,
+                        icon: saved ? Icons.bookmark : Icons.bookmark_add_outlined,
                         onPressed: () => SavedStore.instance.toggle(story.id),
                       );
                     },
@@ -195,22 +229,19 @@ class _VerticalCard extends StatelessWidget {
             color: scheme.onSurface,
           ),
         ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            Chip(label: Text(story.kind.toUpperCase())),
-            if ((story.source ?? '').isNotEmpty)
-              Chip(label: Text(story.source!)),
-            if (dateText != null) Chip(label: Text(dateText!)),
-          ],
+        const SizedBox(height: 6),
+        // 🧠 Cleaner meta line (fewer chips, more signal)
+        Text(
+          metaText,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: onWatch,
           icon: const Icon(Icons.play_arrow_rounded),
-          label: const Text('Watch'),
+          label: Text(story.kind.toLowerCase() == 'trailer' ? 'Watch' : 'Open'),
         ),
       ],
     );
@@ -222,13 +253,13 @@ class _VerticalCard extends StatelessWidget {
 class _HorizontalCard extends StatelessWidget {
   const _HorizontalCard({
     required this.story,
-    required this.dateText,
+    required this.metaText,
     required this.onWatch,
     required this.onShare,
   });
 
   final Story story;
-  final String? dateText;
+  final String metaText;
   final VoidCallback onWatch;
   final VoidCallback onShare;
 
@@ -244,13 +275,17 @@ class _HorizontalCard extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(18),
             child: SizedBox(
-              width: 120,
-              height: 72,
+              width: 224,
+              height: 126, // 16:9
               child: (story.thumbUrl == null || story.thumbUrl!.isEmpty)
                   ? Container(color: scheme.surfaceTint.withOpacity(0.1))
                   : CachedNetworkImage(
                       imageUrl: story.thumbUrl!,
                       fit: BoxFit.cover,
+                      memCacheWidth: 900,
+                      fadeInDuration: const Duration(milliseconds: 150),
+                      placeholder: (c, _) =>
+                          Container(color: scheme.surfaceVariant.withOpacity(0.2)),
                     ),
             ),
           ),
@@ -284,11 +319,7 @@ class _HorizontalCard extends StatelessWidget {
                         tooltip: saved ? 'Remove from Saved' : 'Save',
                         visualDensity: VisualDensity.compact,
                         onPressed: () => SavedStore.instance.toggle(story.id),
-                        icon: Icon(
-                          saved
-                              ? Icons.bookmark
-                              : Icons.bookmark_add_outlined,
-                        ),
+                        icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
                       );
                     },
                   ),
@@ -301,15 +332,11 @@ class _HorizontalCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Chip(label: Text(story.kind.toUpperCase())),
-                  if ((story.source ?? '').isNotEmpty)
-                    Chip(label: Text(story.source!)),
-                  if (dateText != null) Chip(label: Text(dateText!)),
-                ],
+              Text(
+                metaText,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
               ),
               const SizedBox(height: 10),
               Align(
@@ -317,7 +344,7 @@ class _HorizontalCard extends StatelessWidget {
                 child: FilledButton.icon(
                   onPressed: onWatch,
                   icon: const Icon(Icons.play_arrow_rounded),
-                  label: const Text('Watch'),
+                  label: Text(story.kind.toLowerCase() == 'trailer' ? 'Watch' : 'Open'),
                 ),
               ),
             ],
@@ -354,7 +381,7 @@ class _CircleIconButton extends StatelessWidget {
           onTap: onPressed,
           child: const Padding(
             padding: EdgeInsets.all(8),
-            child: Icon(Icons.circle, size: 0), // size holder replaced below
+            child: Icon(Icons.circle, size: 0), // placeholder replaced by IconTheme below
           ),
         ),
       ),
