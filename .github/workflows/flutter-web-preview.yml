@@ -69,3 +69,37 @@ jobs:
         with:
           name: web-preview
           path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: netlify-prod
+      cancel-in-progress: false
+    steps:
+      - name: Download web artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-preview
+          path: build/web
+
+      # Safe even with hash routing; future-proofs SPA fallback.
+      - name: Add SPA redirect
+        run: echo "/* /index.html 200" > build/web/_redirects
+
+      - name: Install Netlify CLI
+        run: npm i -g netlify-cli
+
+      - name: Check secrets present
+        run: |
+          test -n "${NETLIFY_AUTH_TOKEN}" && echo "Auth token OK"
+          test -n "${NETLIFY_SITE_ID}" && echo "Site ID OK"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+      - name: Deploy to Netlify (production)
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: netlify deploy --dir=build/web --prod --message "CI deploy ${GITHUB_SHA}"
