@@ -1,7 +1,9 @@
+<!-- android/app/src/main/AndroidManifest.xml -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Networking for API calls -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Optional but recommended for connectivity checks -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
@@ -12,7 +14,7 @@
         android:fullBackupContent="false"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false">
-        <!-- ↑ Keep cleartext OFF in release. See debug manifest below to allow HTTP in dev. -->
+        <!-- Keep cleartext OFF in release. Allow HTTP only in debug via a debug manifest. -->
 
         <activity
             android:name=".MainActivity"
@@ -35,19 +37,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Optional: App Links (only works for REAL paths, not hash fragments) -->
-            <!-- If you serve links like https://cinepusle.netlify.app/s/<id> you can
-                 enable verified app links below. Adjust host to your actual domain. -->
+            <!-- App Links (path-based; fragments like #/s/<id> are not delivered to Android) -->
+            <!-- If you own/serve https://cinepusle.netlify.app/s/<id>, enable this: -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <!-- Pick the correct host. Remove the one you don't use. -->
-                <data android:scheme="https" android:host="cinepusle.netlify.app" android:pathPrefix="/s" />
-                <data android:scheme="https" android:host="cinepulse.netlify.app" android:pathPrefix="/s" />
+                <data
+                    android:scheme="https"
+                    android:host="cinepusle.netlify.app"
+                    android:pathPrefix="/s" />
             </intent-filter>
-            <!-- NOTE: Android will NOT receive URL fragments like #/s/<id>.
-                 If your web app uses hash routing, switch to real paths for app links. -->
         </activity>
 
         <!-- Used by Flutter tooling -->
