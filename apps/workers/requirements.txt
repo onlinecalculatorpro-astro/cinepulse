@@ -1,5 +1,14 @@
-rq
-redis
-pydantic
-requests
-feedparser
+# Core
+rq==1.15.1
+redis==5.0.8
+
+# Feed fetching & parsing
+feedparser==6.0.11
+requests==2.32.3
+
+# Config (sources.yaml) and dates
+PyYAML==6.0.2
+python-dateutil==2.9.0.post0
+
+# Optional (used elsewhere in repo / handy for models)
+pydantic==2.8.2
