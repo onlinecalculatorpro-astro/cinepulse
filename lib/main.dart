@@ -11,30 +11,29 @@ import 'app/app_settings.dart';
 import 'core/cache.dart';
 
 Future<void> main() async {
-  // Ensure bindings for async init (prefs, licenses, etc.)
+  // Ensure bindings for async init (prefs, caches, etc.)
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Locale defaults (override per user/device later if needed)
+  // Default locale (can be overridden by device/user settings later).
   Intl.defaultLocale = 'en_US';
 
-  // Initialize app-level settings and saved/bookmarks store
+  // App-wide settings & persistent stores.
   await AppSettings.instance.init();
   await SavedStore.instance.init();
 
-  // Global error handling
+  // ---------- Global error handling ----------
+  // Framework errors
   FlutterError.onError = (FlutterErrorDetails details) {
-    // Show default red error in debug; still forward to zone.
+    // Keep Flutter's default red-screen in debug.
     FlutterError.presentError(details);
-    if (details.stack != null) {
-      Zone.current.handleUncaughtError(details.exception, details.stack!);
-    } else {
-      Zone.current.handleUncaughtError(details.exception, StackTrace.current);
-    }
+    final stack = details.stack ?? StackTrace.current;
+    Zone.current.handleUncaughtError(details.exception, stack);
   };
 
+  // Platform / engine errors (e.g., from plugins)
   ui.PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
     debugPrint('Unhandled platform error: $error\n$stack');
-    // Return true to signal we've handled it (prevents duplicate crash).
+    // Return true to indicate we've handled it.
     return true;
   };
 
@@ -58,11 +57,9 @@ Future<void> main() async {
     );
   };
 
-  // Run the app inside a zone to catch uncaught async errors.
+  // Run inside a guarded zone to catch uncaught async errors.
   runZonedGuarded(
     () => runApp(const CinePulseApp()),
-    (error, stack) {
-      debugPrint('Uncaught zone error: $error\n$stack');
-    },
+    (error, stack) => debugPrint('Uncaught zone error: $error\n$stack'),
   );
 }
