@@ -3,22 +3,20 @@ import 'package:flutter/foundation.dart';
 
 /// Domain model representing a single feed item/story.
 ///
-/// The backend may return snake_case keys (e.g. `published_at`, `thumb_url`)
-/// or camelCase. This model accepts both to stay resilient.
-///
-/// New fields for theatre/OTT workflows:
-/// - releaseDate, ratingCert, runtimeMinutes
-/// - ottPlatform (e.g., "netflix", "prime", "hotstar")
-/// - languages, genres
-/// - isTheatrical / isUpcoming (explicit or derived)
+/// Accepts both snake_case and camelCase from server payloads.
+/// Extra resilience:
+/// - Tolerant date/int parsing
+/// - Immutable list fields
+/// - Fallback ID generation if server omits id
+/// - Derived helpers for UI (meta, flags, images, comparators)
 @immutable
 class Story {
-  final String id;              // e.g. "youtube:GgMWu_oqJ6c"
-  final String kind;            // "trailer" | "ott" | "release" | ...
+  final String id;              // e.g. "youtube:GgMWu_oqJ6c" (never empty)
+  final String kind;            // "trailer" | "ott" | "release" | "news" | ...
   final String title;
   final String? summary;
 
-  final DateTime? publishedAt;  // RFC3339 string → DateTime UTC
+  final DateTime? publishedAt;  // RFC3339 → DateTime UTC
   final DateTime? releaseDate;  // theatrical/OTT release date, if known
 
   final String? source;         // e.g. "youtube"
@@ -26,13 +24,13 @@ class Story {
   final String? ratingCert;     // e.g. "U", "U/A", "A" (India)
 
   final int? runtimeMinutes;    // duration if known
-  final List<String> languages; // ISO-ish names (e.g., ["hi","en"])
-  final List<String> genres;    // e.g., ["Action","Drama"]
+  final List<String> languages; // ISO-ish names (e.g., ["hi","en"]) (immutable)
+  final List<String> genres;    // e.g., ["Action","Drama"] (immutable)
 
   final String? thumbUrl;       // small image (card/list)
   final String? posterUrl;      // larger poster (detail)
 
-  // Flags may come from server; we also derive sensible defaults in getters.
+  // Flags as sent by server; we also provide derived getters.
   final bool? isTheatricalFlag;
   final bool? isUpcomingFlag;
 
@@ -47,21 +45,23 @@ class Story {
     this.ottPlatform,
     this.ratingCert,
     this.runtimeMinutes,
-    this.languages = const [],
-    this.genres = const [],
+    List<String> languages = const [],
+    List<String> genres = const [],
     this.thumbUrl,
     this.posterUrl,
     this.isTheatricalFlag,
     this.isUpcomingFlag,
-  });
+  })  : languages = _immutable(languages),
+        genres = _immutable(genres);
 
-  /// Robust DateTime parse that tolerates a few formats.
+  // ---------- Parsing helpers ----------
+
   static DateTime? _parseDate(dynamic v) {
     if (v == null) return null;
     if (v is DateTime) return v.toUtc();
     if (v is int) {
-      // Epoch seconds/millis—best effort
-      final isMillis = v > 2000000000; // ~2033 in seconds; larger implies millis
+      // Epoch seconds/millis heuristic
+      final isMillis = v > 2000000000; // ~2033 in seconds; larger ⇒ millis
       final ms = isMillis ? v : v * 1000;
       return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
     }
@@ -82,8 +82,7 @@ class Story {
     if (v is String) {
       final t = v.trim();
       if (t.isEmpty) return null;
-      final n = int.tryParse(t);
-      return n;
+      return int.tryParse(t);
     }
     return null;
   }
@@ -91,22 +90,37 @@ class Story {
   static List<String> _parseStringList(dynamic v) {
     if (v == null) return const <String>[];
     if (v is List) {
-      return v
-          .where((e) => e != null)
-          .map((e) => e.toString().trim())
-          .where((e) => e.isNotEmpty)
-          .toList(growable: false);
+      return List<String>.unmodifiable(
+        v.where((e) => e != null)
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty),
+      );
     }
-    // Allow comma/pipe-separated strings
     if (v is String && v.trim().isNotEmpty) {
       final sep = v.contains('|') ? '|' : ',';
-      return v
-          .split(sep)
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList(growable: false);
+      return List<String>.unmodifiable(
+        v.split(sep).map((e) => e.trim()).where((e) => e.isNotEmpty),
+      );
     }
     return const <String>[];
+  }
+
+  static List<String> _immutable(List<String> v) =>
+      v is UnmodifiableListView<String> ? v : List<String>.unmodifiable(v);
+
+  static String _fallbackId(Map<String, dynamic> j, DateTime? publishedAt) {
+    // Attempt common alternates first
+    final youtubeId = (j['youtube_id'] ?? j['video_id'])?.toString();
+    if ((j['source']?.toString().toLowerCase() ?? '') == 'youtube' &&
+        youtubeId != null &&
+        youtubeId.isNotEmpty) {
+      return 'youtube:$youtubeId';
+    }
+
+    final title = (j['title'] ?? '').toString();
+    final ts = (publishedAt ?? DateTime.now().toUtc()).millisecondsSinceEpoch;
+    // Deterministic-ish fallback (not globally unique but stable enough for UI)
+    return 'gen:${title.hashCode}@$ts';
   }
 
   /// Accepts both snake_case and camelCase keys.
@@ -124,21 +138,25 @@ class Story {
     final published = _read('published_at', 'publishedAt');
     final released  = _read('release_date', 'releaseDate');
 
-    final thumb     = _read('thumb_url', 'thumbUrl');
-    final poster    = _read('poster_url', 'posterUrl');
-
     final langs     = _read('languages', 'language') ?? _read('langs');
     final gens      = _read('genres', 'genre');
 
     final theatrical = _read('is_theatrical', 'isTheatrical');
     final upcoming   = _read('is_upcoming', 'isUpcoming');
 
+    final parsedPublished = _parseDate(published);
+    final idRaw = _readS('id');
+    final idEffective = idRaw.isNotEmpty ? idRaw : _fallbackId(j, parsedPublished);
+
+    final kindRaw = _readS('kind');
+    final kindEffective = kindRaw.isNotEmpty ? kindRaw : 'news';
+
     return Story(
-      id: _readS('id'),
-      kind: _readS('kind'),
+      id: idEffective,
+      kind: kindEffective,
       title: _readS('title'),
       summary: _readSOpt('summary'),
-      publishedAt: _parseDate(published),
+      publishedAt: parsedPublished,
       releaseDate: _parseDate(released),
 
       source: _readSOpt('source'),
@@ -179,9 +197,11 @@ class Story {
         if (isUpcomingFlag != null) 'is_upcoming': isUpcomingFlag,
       };
 
-  /// Convenience: YouTube video id if this is a YouTube story.
+  // ---------- Derived helpers ----------
+
+  /// YouTube video id if this is a YouTube story ("youtube:<videoId>").
   String? get youtubeVideoId {
-    if (source == 'youtube') {
+    if ((source ?? '').toLowerCase() == 'youtube') {
       final p = id.split(':');
       if (p.length >= 2 && p.first == 'youtube' && p.last.isNotEmpty) {
         return p.last;
@@ -205,29 +225,137 @@ class Story {
     return rd.isAfter(now);
   }
 
-  /// Compact “meta line” helpers the UI can use (optional).
+  /// Whether this is an OTT item (kind or presence of an OTT platform).
+  bool get isOtt =>
+      kind.toLowerCase() == 'ott' ||
+      ((ottPlatform ?? '').trim().isNotEmpty);
+
+  /// Preferred card image (thumb → poster).
+  String? get imageUrl => thumbUrl ?? posterUrl;
+
+  /// Release date if present, else publishedAt.
+  DateTime? get releasedOrPublished => releaseDate ?? publishedAt;
+
+  /// Comparator: newest first (releaseDate preferred, then publishedAt).
+  static int compareByRecency(Story a, Story b) {
+    final da = a.releasedOrPublished;
+    final db = b.releasedOrPublished;
+    if (da == null && db == null) return 0;
+    if (da == null) return 1; // nulls last
+    if (db == null) return -1;
+    return db.compareTo(da); // newest first
+  }
+
+  /// Compact “meta line” helpers the UI can use.
   String get primaryMeta {
-    // Prefer OTT platform for OTT items, else rating+runtime, else source.
-    if ((ottPlatform ?? '').isNotEmpty) return (ottPlatform!);
+    // Prefer OTT platform (title-cased) else rating+runtime, else source or kind.
+    if ((ottPlatform ?? '').isNotEmpty) return _titleCase(ottPlatform!);
     if (ratingCert != null && runtimeMinutes != null) {
       return '$ratingCert • ${runtimeMinutes}m';
     }
-    return (source ?? '').isNotEmpty ? source! : kind;
+    final s = source ?? '';
+    return s.isNotEmpty ? _titleCase(s) : _titleCase(kind);
   }
 
   String dateLabel({bool preferRelease = true}) {
     final d = preferRelease ? (releaseDate ?? publishedAt) : (publishedAt ?? releaseDate);
     if (d == null) return '';
-    // Simple ISO-like short label; format human-friendly on the UI if needed.
     final y = d.year.toString().padLeft(4, '0');
     final m = d.month.toString().padLeft(2, '0');
     final da = d.day.toString().padLeft(2, '0');
     return '$y-$m-$da';
   }
+
+  // ---------- Lightweight enum view (keeps JSON kind as String) ----------
+
+  StoryKind get kindEnum => StoryKindX.parse(kind);
+
+  // ---------- Mutability helpers ----------
+
+  Story copyWith({
+    String? id,
+    String? kind,
+    String? title,
+    String? summary,
+    DateTime? publishedAt,
+    DateTime? releaseDate,
+    String? source,
+    String? ottPlatform,
+    String? ratingCert,
+    int? runtimeMinutes,
+    List<String>? languages,
+    List<String>? genres,
+    String? thumbUrl,
+    String? posterUrl,
+    bool? isTheatricalFlag,
+    bool? isUpcomingFlag,
+  }) {
+    return Story(
+      id: id ?? this.id,
+      kind: kind ?? this.kind,
+      title: title ?? this.title,
+      summary: summary ?? this.summary,
+      publishedAt: publishedAt ?? this.publishedAt,
+      releaseDate: releaseDate ?? this.releaseDate,
+      source: source ?? this.source,
+      ottPlatform: ottPlatform ?? this.ottPlatform,
+      ratingCert: ratingCert ?? this.ratingCert,
+      runtimeMinutes: runtimeMinutes ?? this.runtimeMinutes,
+      languages: languages ?? this.languages,
+      genres: genres ?? this.genres,
+      thumbUrl: thumbUrl ?? this.thumbUrl,
+      posterUrl: posterUrl ?? this.posterUrl,
+      isTheatricalFlag: isTheatricalFlag ?? this.isTheatricalFlag,
+      isUpcomingFlag: isUpcomingFlag ?? this.isUpcomingFlag,
+    );
+  }
+
+  // Equality: treat same id as same story (common for feeds)
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Story && runtimeType == other.runtimeType && other.id == id;
+
+  @override
+  int get hashCode => id.hashCode;
+
+  // ---------- Private helpers ----------
+
+  static String _titleCase(String s) {
+    if (s.isEmpty) return s;
+    final parts = s.split(RegExp(r'[\s_\-]+'));
+    return parts
+        .map((p) => p.isEmpty
+            ? p
+            : '${p[0].toUpperCase()}${p.substring(1).toLowerCase()}')
+        .join(' ');
+  }
+}
+
+/// Enum-style view for `Story.kind` without changing wire format.
+enum StoryKind { trailer, ott, release, news, unknown }
+
+extension StoryKindX on StoryKind {
+  static StoryKind parse(String? s) {
+    switch ((s ?? '').toLowerCase()) {
+      case 'trailer':
+        return StoryKind.trailer;
+      case 'ott':
+        return StoryKind.ott;
+      case 'release':
+        return StoryKind.release;
+      case 'news':
+        return StoryKind.news;
+      default:
+        return StoryKind.unknown;
+    }
+  }
+
+  String get wire =>
+      switch (this) { StoryKind.trailer => 'trailer', StoryKind.ott => 'ott', StoryKind.release => 'release', StoryKind.news => 'news', StoryKind.unknown => 'unknown' };
 }
 
 /// Builds a playable URL when we know how to from the story metadata.
-///
 /// Currently supports YouTube items (source == "youtube") where the `id` is
 /// "youtube:<videoId>".
 Uri? storyVideoUrl(Story s) {
