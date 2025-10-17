@@ -10,7 +10,7 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // for deepLinkForStoryId
+import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
@@ -20,22 +20,26 @@ class StoryCard extends StatelessWidget {
   const StoryCard({super.key, required this.story});
   final Story story;
 
+  bool get _isWatchCta {
+    final kind = story.kind.toLowerCase();
+    final source = (story.source ?? '').toLowerCase();
+    return kind == 'trailer' || source == 'youtube';
+  }
+
   // Open external playable URL (YouTube for now).
-  Future<void> _watch(BuildContext context) async {
+  Future<void> _watchOrOpen(BuildContext context) async {
     final url = storyVideoUrl(story);
     if (url == null) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No playable link available')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('No playable link available')));
       }
       return;
     }
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open link')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Could not open link')));
     }
   }
 
@@ -50,17 +54,14 @@ class StoryCard extends StatelessWidget {
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
-          ),
+          SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
         );
       }
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Link copied to clipboard')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Link copied to clipboard')));
       }
     }
   }
@@ -69,19 +70,20 @@ class StoryCard extends StatelessWidget {
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: story)));
   }
 
-  String _metaLine(BuildContext context) {
-    // Platform or source
+  String _metaLine() {
+    // Platform/source (e.g., Netflix/YouTube)
     final platform = (story.ottPlatform ?? story.source ?? '').trim();
-    // Context tag
+
+    // Context (in theatres / coming soon / kind)
     final ctx = story.isTheatrical
         ? (story.isUpcoming ? 'Coming soon' : 'In theatres')
-        : (story.kind.toLowerCase() == 'ott' ? 'OTT' : story.kind);
-    // Date label prefers release date
+        : (story.kind.isNotEmpty ? _titleCase(story.kind) : '');
+
+    // Date (prefer release date)
     final date = story.releaseDate ?? story.publishedAt;
     String dateText = '';
     if (date != null) {
       final now = DateTime.now().toUtc();
-      // If within ~10 days in past, show relative; else show calendar date.
       final diff = now.difference(date);
       if (diff.inDays >= 0 && diff.inDays <= 10) {
         if (diff.inDays == 0) {
@@ -103,44 +105,48 @@ class StoryCard extends StatelessWidget {
     return parts.join(' • ');
   }
 
-  String _titleCase(String s) {
-    if (s.isEmpty) return s;
-    return s[0].toUpperCase() + s.substring(1);
-  }
+  String _titleCase(String s) => s.isEmpty ? s : (s[0].toUpperCase() + s.substring(1));
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
     final isMobileColumn = width < 520; // responsive cutoff
+    final metaText = _metaLine();
+
+    final cardChild = InkWell(
+      borderRadius: BorderRadius.circular(24),
+      onTap: () => _openDetails(context),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: isMobileColumn
+            ? _VerticalCard(
+                story: story,
+                metaText: metaText,
+                isWatchCta: _isWatchCta,
+                onPrimaryAction: () => _watchOrOpen(context),
+                onShare: () => _share(context),
+              )
+            : _HorizontalCard(
+                story: story,
+                metaText: metaText,
+                isWatchCta: _isWatchCta,
+                onPrimaryAction: () => _watchOrOpen(context),
+                onShare: () => _share(context),
+              ),
+      ),
+    );
 
     return Card(
       color: scheme.surface.withOpacity(0.6),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(24),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(24),
-            onTap: () => _openDetails(context),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: isMobileColumn
-                  ? _VerticalCard(
-                      story: story,
-                      metaText: _metaLine(context),
-                      onWatch: () => _watch(context),
-                      onShare: () => _share(context),
-                    )
-                  : _HorizontalCard(
-                      story: story,
-                      metaText: _metaLine(context),
-                      onWatch: () => _watch(context),
-                      onShare: () => _share(context),
-                    ),
-            ),
-          ),
-        ),
+        child: kIsWeb
+            ? cardChild // skip blur on web for perf
+            : BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+                child: cardChild,
+              ),
       ),
     );
   }
@@ -152,13 +158,15 @@ class _VerticalCard extends StatelessWidget {
   const _VerticalCard({
     required this.story,
     required this.metaText,
-    required this.onWatch,
+    required this.isWatchCta,
+    required this.onPrimaryAction,
     required this.onShare,
   });
 
   final Story story;
   final String metaText;
-  final VoidCallback onWatch;
+  final bool isWatchCta;
+  final VoidCallback onPrimaryAction;
   final VoidCallback onShare;
 
   @override
@@ -230,7 +238,6 @@ class _VerticalCard extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 6),
-        // 🧠 Cleaner meta line (fewer chips, more signal)
         Text(
           metaText,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -239,9 +246,9 @@ class _VerticalCard extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: onWatch,
-          icon: const Icon(Icons.play_arrow_rounded),
-          label: Text(story.kind.toLowerCase() == 'trailer' ? 'Watch' : 'Open'),
+          onPressed: onPrimaryAction,
+          icon: Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
+          label: Text(isWatchCta ? 'Watch' : 'Open'),
         ),
       ],
     );
@@ -254,13 +261,15 @@ class _HorizontalCard extends StatelessWidget {
   const _HorizontalCard({
     required this.story,
     required this.metaText,
-    required this.onWatch,
+    required this.isWatchCta,
+    required this.onPrimaryAction,
     required this.onShare,
   });
 
   final Story story;
   final String metaText;
-  final VoidCallback onWatch;
+  final bool isWatchCta;
+  final VoidCallback onPrimaryAction;
   final VoidCallback onShare;
 
   @override
@@ -342,9 +351,9 @@ class _HorizontalCard extends StatelessWidget {
               Align(
                 alignment: Alignment.centerLeft,
                 child: FilledButton.icon(
-                  onPressed: onWatch,
-                  icon: const Icon(Icons.play_arrow_rounded),
-                  label: Text(story.kind.toLowerCase() == 'trailer' ? 'Watch' : 'Open'),
+                  onPressed: onPrimaryAction,
+                  icon: Icon(isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded),
+                  label: Text(isWatchCta ? 'Watch' : 'Open'),
                 ),
               ),
             ],
@@ -379,9 +388,9 @@ class _CircleIconButton extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onPressed,
-          child: const Padding(
-            padding: EdgeInsets.all(8),
-            child: Icon(Icons.circle, size: 0), // placeholder replaced by IconTheme below
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(icon, size: 20, color: scheme.onSurface),
           ),
         ),
       ),
