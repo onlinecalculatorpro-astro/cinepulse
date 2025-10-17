@@ -41,7 +41,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   };
 
   bool _offline = false;
-  StreamSubscription<List<ConnectivityResult>>? _connSub;
+  StreamSubscription? _connSub; // generic to work across plugin versions
   Timer? _debounce;
 
   @override
@@ -50,18 +50,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     // Initial loads (with disk cache for fast-first paint).
     for (final f in _feeds.values) {
-      f.load(reset: true);
+      unawaited(f.load(reset: true));
     }
 
-    // Online/offline banner wiring.
-    _connSub = Connectivity().onConnectivityChanged.listen((results) {
-      final hasNetwork = results.any((r) => r != ConnectivityResult.none);
-      if (mounted) setState(() => _offline = !hasNetwork);
+    // Online/offline banner wiring (supports both single & list events).
+    _connSub = Connectivity().onConnectivityChanged.listen((event) {
+      final hasNetwork = _hasNetworkFrom(event);
+      if (!mounted) return;
+      setState(() => _offline = !hasNetwork);
     });
     () async {
-      final results = await Connectivity().checkConnectivity();
-      final hasNetwork = results.any((r) => r != ConnectivityResult.none);
-      if (mounted) setState(() => _offline = !hasNetwork);
+      final initial = await Connectivity().checkConnectivity();
+      final hasNetwork = _hasNetworkFrom(initial);
+      if (!mounted) return;
+      setState(() => _offline = !hasNetwork);
     }();
 
     _search.addListener(_onSearchChanged);
@@ -71,12 +73,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void dispose() {
     _debounce?.cancel();
     _connSub?.cancel();
+    _search.removeListener(_onSearchChanged);
     _search.dispose();
     for (final f in _feeds.values) {
       f.dispose();
     }
     _tab.dispose();
     super.dispose();
+  }
+
+  bool _hasNetworkFrom(dynamic event) {
+    if (event is ConnectivityResult) return event != ConnectivityResult.none;
+    if (event is List<ConnectivityResult>) {
+      return event.any((r) => r != ConnectivityResult.none);
+    }
+    // Fallback: assume online if unknown shape.
+    return true;
   }
 
   void _onSearchChanged() {
@@ -124,6 +136,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               builder: (ctx) => IconButton(
                 icon: const Icon(Icons.menu),
                 onPressed: () => Scaffold.of(ctx).openDrawer(),
+                tooltip: 'Menu',
               ),
             ),
             title: const _BrandInline(),
@@ -142,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       child: IconButton.filledTonal(
                         onPressed: () {
                           _refreshKey.currentState?.show(); // show spinner
-                          _refresh();
+                          unawaited(_refresh());
                         },
                         onLongPress: _refreshAll, // power-user shortcut
                         icon: const Icon(Icons.refresh_rounded),
