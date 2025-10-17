@@ -1,3 +1,4 @@
+# .github/workflows/flutter-web-preview.yml
 name: Web Preview (Flutter - ROOT)
 
 on:
@@ -8,30 +9,18 @@ on:
         required: false
         default: ""
       deepLinkBase:
-        description: "Deep link base (e.g. https://cinepusle.netlify.app/#/s)"
+        description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
         required: false
         default: ""
-  push:
-    branches: [ main ]
-    paths:
-      - "lib/**"
-      - "web/**"
-      - "pubspec.yaml"
-      - ".github/workflows/flutter-web-preview.yml"
 
 env:
   # prefer secrets -> manual inputs -> fallback
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
-  # NOTE: your Netlify site appears to be **cinepusle** (not cinepulse)
-  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepusle.netlify.app/#/s' }}
+  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,7 +67,7 @@ jobs:
       - name: List build outputs
         run: ls -lah build/web || true
 
-      # Don’t fail if minified; just warn
+      # Best-effort check (minified builds may not contain plain strings)
       - name: Verify dart-defines embedded (best-effort)
         run: |
           set +e
@@ -102,7 +91,6 @@ jobs:
     concurrency:
       group: netlify-prod
       cancel-in-progress: false
-
     steps:
       - name: Download web artifact
         uses: actions/download-artifact@v4
