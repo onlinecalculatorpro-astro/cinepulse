@@ -78,34 +78,32 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="build/web"
-
           search_define () {
-            local KEY="$1"
-            local VAL="$2"
-
-            # base64 encodings (GNU/BSD compatible)
+            local KEY="$1"; local VAL="$2"
             kv_b64=$(printf "%s=%s" "$KEY" "$VAL" | base64 | tr -d '\n\r')
             v_b64=$(printf "%s" "$VAL" | base64 | tr -d '\n\r')
-
             echo "Checking ${KEY}…"
-
             if grep -R -a -Fq -- "$VAL"  "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null \
             || grep -R -a -Fq -- "$kv_b64" "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null \
             || grep -R -a -Fq -- "$v_b64"  "$ROOT"/*.js "$ROOT"/*/*.js 2>/dev/null; then
               echo "OK: ${KEY} found in build output."
             else
-              echo "::warning ::${KEY} not found literally (likely minified/base64 in this Flutter version). Continuing."
+              echo "::warning ::${KEY} not found literally (likely minified/base64). Continuing."
             fi
           }
-
           search_define "API_BASE_URL"  "${API_BASE_URL}"
           search_define "DEEP_LINK_BASE" "${DEEP_LINK_BASE}"
+
+      - name: List build outputs
+        run: ls -lah build/web || true
 
       - name: Upload Web Build
         uses: actions/upload-artifact@v4
         with:
           name: web-preview
-          path: build/web
+          # IMPORTANT: upload-artifact runs from repo root, so use the full path
+          path: apps/flutter/cinepulse_app/build/web
+          if-no-files-found: error
 
   deploy:
     needs: build
