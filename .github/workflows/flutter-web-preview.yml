@@ -9,7 +9,6 @@ jobs:
     name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
-      # Read from repo secrets (you said these are set)
       API_BASE_URL: ${{ secrets.API_BASE_URL }}
       DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}
 
@@ -73,8 +72,6 @@ jobs:
     env:
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
       NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-    # Use env.* in the condition (secrets context is not recognized here)
-    if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' }}
 
     steps:
       - name: Download web artifact
@@ -86,10 +83,23 @@ jobs:
       - name: Add SPA redirect
         run: echo "/* /index.html 200" > build/web/_redirects
 
+      - name: Decide whether to deploy
+        id: decide
+        shell: bash
+        run: |
+          if [ -z "${NETLIFY_AUTH_TOKEN}" ] || [ -z "${NETLIFY_SITE_ID}" ]; then
+            echo "Netlify secrets missing; skipping deploy."
+            echo "SKIP_DEPLOY=1" >> "$GITHUB_ENV"
+          else
+            echo "SKIP_DEPLOY=0" >> "$GITHUB_ENV"
+          fi
+
       - name: Setup Node (Netlify CLI)
+        if: env.SKIP_DEPLOY == '0'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Deploy to Netlify (prod)
+        if: env.SKIP_DEPLOY == '0'
         run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy $GITHUB_SHA"
