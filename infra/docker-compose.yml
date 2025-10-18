@@ -1,20 +1,30 @@
 version: "3.9"
 name: cinepulse
 
-# Reusable env config shared by multiple services
+# ──────────────────────────────────────────────────────────────────────────────
+# Shared bits (env + mounts)
+# ──────────────────────────────────────────────────────────────────────────────
 x-common-env: &common-env
   env_file:
     - ../.env
   environment:
-    # fallbacks if not present in .env
+    TZ: ${TZ:-UTC}
     ENV: ${ENV:-dev}
+    # If your API uses Postgres; safe default points at the local DB service
     DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
+    # 👇 CRITICAL: always point to the docker service name "redis"
     REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    # optional: TMDB key if your backend uses it
+    # Optional integrations
     TMDB_API_KEY: ${TMDB_API_KEY:-}
-    # path to your sources file (mounted below)
+    # The sources file is mounted below into /app/config/source.yml
     SOURCES_FILE: /app/config/source.yml
 
+x-sources-mount: &sources-mount
+  - ./source.yml:/app/config/source.yml:ro
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Services
+# ──────────────────────────────────────────────────────────────────────────────
 services:
   db:
     image: postgres:16
@@ -34,7 +44,10 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
     ports:
       - "6379:6379"
     healthcheck:
@@ -44,7 +57,7 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # FastAPI (or similar) backend: /health, /v1/feed, /v1/story/<id>, /v1/search
+  # FastAPI backend: /health, /v1/feed, /v1/story/<id>, /v1/search
   api:
     <<: *common-env
     build:
@@ -56,21 +69,23 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
-    volumes:
-      # mount the sources file read-only inside the container
-      - ./source.yml:/app/config/source.yml:ro
+    volumes: *sources-mount
+    environment:
+      # Ensure it binds externally if your Dockerfile relies on these
+      UVICORN_HOST: 0.0.0.0
+      UVICORN_PORT: 8000
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)\"",
+          "python - <<'PY'\nimport urllib.request,sys\ntry:\n  r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)\n  sys.exit(0 if r.status==200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
         ]
       interval: 15s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  # Background workers (queues: ingest YouTube RSS, fetch RSS news, TMDb trending, etc.)
+  # Background worker (RQ) that consumes jobs from Redis
   worker:
     <<: *common-env
     build:
@@ -78,44 +93,46 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    volumes:
-      - ./source.yml:/app/config/source.yml:ro
+    volumes: *sources-mount
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import os,sys; from redis import from_url; from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping(); sys.exit(0)\"",
+          "python - <<'PY'\nimport os,sys\nfrom redis import from_url\nfrom_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()\nsys.exit(0)\nPY"
         ]
       interval: 20s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  # Lightweight scheduler that enqueues periodic jobs to Redis for the worker
+  # Lightweight scheduler that enqueues periodic jobs for the worker
   scheduler:
     <<: *common-env
     build:
       context: ../apps/scheduler
     environment:
-      # These override the defaults inside the scheduler (it can also read SOURCES_FILE)
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
+      # YT_CHANNELS can come from ../.env; leave unset here if you prefer
+      # YT_CHANNELS: ${YT_CHANNELS:-UCWOA1ZGywLbqmigxE4Qlvuw}
     depends_on:
       redis:
         condition: service_healthy
-    volumes:
-      - ./source.yml:/app/config/source.yml:ro
+    volumes: *sources-mount
     restart: unless-stopped
 
-  # Optional: server-side renderer / image proxy / thumbnails (enable if you use it)
+  # Optional: server-side renderer / image proxy
   renderer:
     build:
       context: ../apps/renderer
     ports:
       - "8100:8000"
     restart: unless-stopped
-    # profiles:
-    #   - extras
+    # profiles: ["extras"]
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Volumes
+# ──────────────────────────────────────────────────────────────────────────────
 volumes:
   dbdata: {}
+  redisdata: {}
