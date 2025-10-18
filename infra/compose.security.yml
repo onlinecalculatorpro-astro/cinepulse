@@ -1,0 +1,9 @@
+services:
+  api:
+    # Nginx on the same box will still reach it via 127.0.0.1:18000
+    ports:
+      - "127.0.0.1:18000:8000"
+
+  db:
+    # remove ANY host port exposure for Postgres
+    ports: []
