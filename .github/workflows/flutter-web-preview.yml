@@ -1,5 +1,5 @@
 # .github/workflows/flutter-web-preview.yml
-name: Web Preview (Flutter - ROOT)
+name: Web Preview (Flutter - ROOT, manual)
 
 on:
   workflow_dispatch:
@@ -14,13 +14,15 @@ on:
         default: ""
 
 env:
-  # prefer secrets -> manual inputs -> fallback
+  # Prefer repo secrets → manual inputs → fallback
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
 
 jobs:
   build:
+    name: Build Flutter Web
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,13 +86,18 @@ jobs:
         with:
           name: web-preview
           path: build/web
+          retention-days: 7
 
   deploy:
+    name: Deploy to Netlify
     needs: build
     runs-on: ubuntu-latest
+    # Only attempt deploy if secrets are present
+    if: ${{ secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '' }}
     concurrency:
       group: netlify-prod
       cancel-in-progress: false
+
     steps:
       - name: Download web artifact
         uses: actions/download-artifact@v4
@@ -105,14 +112,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      - name: Check Netlify secrets
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
-        run: |
-          test -n "${NETLIFY_AUTH_TOKEN}" && echo "Auth token OK"
-          test -n "${NETLIFY_SITE_ID}" && echo "Site ID OK"
 
       - name: Deploy to Netlify (prod)
         env:
