@@ -10,7 +10,7 @@ x-common-env: &common-env
     DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
     REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     TMDB_API_KEY: ${TMDB_API_KEY:-}
-    # Path inside container (we mount the file below)
+    # path inside the containers (we mount the file below)
     SOURCES_FILE: /app/config/source.yml
 
 x-sources-mount: &sources-mount
@@ -40,7 +40,7 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
-    # No host port to avoid conflicts on 6379
+    # no host port to avoid conflicts
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -53,14 +53,16 @@ services:
     <<: *common-env
     build:
       context: ..
-      dockerfile: infra/Dockerfile   # single file
-      target: api                    # api stage in that Dockerfile
+      dockerfile: infra/Dockerfile
+      target: api
     depends_on:
       db:    { condition: service_healthy }
       redis: { condition: service_healthy }
+    # publish API to host
     ports:
-      - "18000:8000"                 # host:container
+      - "18000:8000"
     volumes: *sources-mount
+    # health endpoint inside the container
     healthcheck:
       test:
         [
@@ -80,10 +82,11 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-      target: worker                 # worker stage
+      target: worker
     depends_on:
       redis: { condition: service_healthy }
     volumes: *sources-mount
+    # override if your worker entrypoint differs
     command: >
       rq worker -u ${REDIS_URL} default
     healthcheck:
@@ -104,10 +107,10 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-      target: scheduler              # scheduler stage
-    volumes: *sources-mount
+      target: scheduler
     depends_on:
       redis: { condition: service_healthy }
+    volumes: *sources-mount
     environment:
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
@@ -126,11 +129,11 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-      target: renderer               # renderer stage
+      target: renderer
     ports:
       - "8100:8000"
     restart: unless-stopped
-    # profiles: ["extras"]  # uncomment if you want to start it only with --profile extras
+    # profiles: ["extras"]
 
 # ----------------------------- volumes -----------------------------
 volumes:
