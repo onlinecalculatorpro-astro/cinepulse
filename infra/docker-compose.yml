@@ -1,5 +1,5 @@
-version: "3.9"
 name: cinepulse
+# Compose v2: omit `version:` to avoid the deprecation warning.
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared bits (env + mounts)
@@ -48,8 +48,9 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redisdata:/data
-    ports:
-      - "6379:6379"
+    # Do NOT publish 6379 to host to avoid port conflicts
+    # ports:
+    #   - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -61,7 +62,8 @@ services:
   api:
     <<: *common-env
     build:
-      context: ../apps/api
+      context: ..
+      dockerfile: apps/api/Dockerfile
     depends_on:
       db:
         condition: service_healthy
@@ -71,7 +73,6 @@ services:
       - "8000:8000"
     volumes: *sources-mount
     environment:
-      # Ensure it binds externally if your Dockerfile relies on these
       UVICORN_HOST: 0.0.0.0
       UVICORN_PORT: 8000
     healthcheck:
@@ -89,7 +90,8 @@ services:
   worker:
     <<: *common-env
     build:
-      context: ../apps/workers
+      context: ..
+      dockerfile: apps/workers/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -109,7 +111,8 @@ services:
   scheduler:
     <<: *common-env
     build:
-      context: ../apps/scheduler
+      context: ..
+      dockerfile: apps/scheduler/Dockerfile
     environment:
       # Frequency / window
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
@@ -132,7 +135,8 @@ services:
   # Optional: server-side renderer / image proxy
   renderer:
     build:
-      context: ../apps/renderer
+      context: ..
+      dockerfile: apps/renderer/Dockerfile
     ports:
       - "8100:8000"
     restart: unless-stopped
