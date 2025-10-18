@@ -32,3 +32,4 @@ web/.dart_tool/
 # IDE
 .vscode/
 .idea/
+*.pem
