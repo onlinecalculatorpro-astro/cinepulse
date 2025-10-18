@@ -2,18 +2,13 @@ version: "3.9"
 
 name: cinepulse
 
-# ---------- shared bits ----------
-x-common-env: &common-env
-  env_file:
-    - ../.env
-  environment:
-    TZ: ${TZ:-UTC}
-    ENV: ${ENV:-dev}
-    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
-    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    TMDB_API_KEY: ${TMDB_API_KEY:-}
-    # inside the container
-    SOURCES_FILE: /app/config/source.yml
+networks:
+  cinepulse_network:
+    driver: bridge
+
+volumes:
+  dbdata:
+  redisdata:
 
 x-sources-mount: &sources-mount
   - ./source.yml:/app/config/source.yml:ro
@@ -43,46 +38,62 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - dbdata:/var/lib/postgresql/data
-    networks: [cinepulse_network]
-    # keep DB private (NO host port). If you must access from host, use:
-    # ports: ["127.0.0.1:5432:5432"]
+    networks:
+      - cinepulse_network
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d cinepulse
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
-
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
     volumes:
       - redisdata:/data
-    networks: [cinepulse_network]
+    networks:
+      - cinepulse_network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD
+        - redis-cli
+        - ping
       interval: 10s
       timeout: 3s
       retries: 5
-      start_period: 5s
-
 
   api:
-    <<:
-      - *common-env
-      - *logging
     build:
       context: ..
       dockerfile: infra/Dockerfile
       target: api
     restart: unless-stopped
     depends_on:
-      db: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    volumes: *sources-mount
-    networks: [cinepulse_network]
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-UTC}
+      ENV: ${ENV:-dev}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      SOURCES_FILE: /app/config/source.yml
+    env_file:
+      - ../.env
+    volumes:
+      - ./source.yml:/app/config/source.yml:ro
+    networks:
+      - cinepulse_network
     ports:
       - "127.0.0.1:18000:8000"
     healthcheck:
@@ -101,22 +112,30 @@ services:
       timeout: 5s
       retries: 5
 
-
   worker:
-    <<:
-      - *common-env
-      - *logging
     build:
       context: ..
       dockerfile: infra/Dockerfile
       target: worker
     restart: unless-stopped
     depends_on:
-      redis: { condition: service_healthy }
-    volumes: *sources-mount
-    networks: [cinepulse_network]
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-UTC}
+      ENV: ${ENV:-dev}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      SOURCES_FILE: /app/config/source.yml
+    env_file:
+      - ../.env
+    volumes:
+      - ./source.yml:/app/config/source.yml:ro
+    networks:
+      - cinepulse_network
     command: >
-      sh -lc 'rq worker -u "$$REDIS_URL" default'
+      rq worker -u ${REDIS_URL} default
     healthcheck:
       test:
         - CMD-SHELL
@@ -130,21 +149,23 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
-      start_period: 10s
-
 
   scheduler:
-    <<: *common-env
     build:
       context: ..
       dockerfile: infra/Dockerfile
       target: scheduler
     restart: unless-stopped
     depends_on:
-      redis: { condition: service_healthy }
-    volumes: *sources-mount
-    networks: [cinepulse_network]
+      redis:
+        condition: service_healthy
     environment:
+      TZ: ${TZ:-UTC}
+      ENV: ${ENV:-dev}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      SOURCES_FILE: /app/config/source.yml
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
       POLL_SPREAD_SEC: ${POLL_SPREAD_SEC:-2.0}
@@ -154,9 +175,14 @@ services:
       RSS_FEEDS: ${RSS_FEEDS:-}
       YT_MAX_ITEMS: ${YT_MAX_ITEMS:-}
       RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-}
-    command: >-
+    env_file:
+      - ../.env
+    volumes:
+      - ./source.yml:/app/config/source.yml:ro
+    networks:
+      - cinepulse_network
+    command: >
       python -m apps.scheduler.main
-
 
   renderer:
     build:
@@ -164,10 +190,8 @@ services:
       dockerfile: infra/Dockerfile
       target: renderer
     restart: unless-stopped
-    networks: [cinepulse_network]
-    # keep local-only unless you truly want it public
+    networks:
+      - cinepulse_network
     ports:
-      - "127.0.0.1:8100:8000"
-    profiles: ["extras"]
-
-
+      - "8100:8000"
+    # profiles: ["extras"]

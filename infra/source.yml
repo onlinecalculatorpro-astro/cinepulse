@@ -1,114 +1,348 @@
-# =========================
-# CinePulse content sources
-# =========================
+# =============================================================================
+# CinePulse Sources Catalog
+# One place for YouTube, News (RSS), Awards, Box Office, and TMDb knobs.
+# Nothing secret belongs here—use .env for tokens.
+# =============================================================================
 
 meta:
   regions: ["US", "IN"]
-  # deep-link base for sharing inside app (web hash route handled by RootShell)
-  share_base_url: "https://your-domain.example/#/s/"
+  # Deep-link base your app shares (hash route handled by RootShell)
+  share_base_url: "https://cinepusle.netlify.app/#/s"
 
-# ---- YouTube Channels (official trailers, teasers, announcements) ----
-# Use the official channel_id. Leave TODOs to fill missing ones.
-youtube_channels:
-  # Hollywood
-  - name: "Netflix"
-    channel_id: "UCWOA1ZGywLbqmigxE4Qlvuw"
-    industry: "hollywood"
-  - name: "Marvel Entertainment"
-    channel_id: "UCvC4D8onUfXzvjTOM-dBfEA"
-    industry: "hollywood"
-  - name: "Sony Pictures Entertainment"
-    channel_id: "UCz97F7dMxBNOfGYu3rx8aCw"
-    industry: "hollywood"
-  - name: "Warner Bros. Pictures"
-    channel_id: "UCjmJDM5pRKbUlVIzDYYWb6g"
-    industry: "hollywood"
-  - name: "Paramount Pictures"
-    channel_id: "UCF9imwPMSGz4Vq1NiTWCC7g"
-    industry: "hollywood"
-  - name: "Universal Pictures"
-    channel_id: "UCq0OueAsdxH6b8NY18-uhug"
-    industry: "hollywood"
+# -----------------------------------------------------------------------------
+# Global throttling / courtesy (helps avoid hammering sources)
+# -----------------------------------------------------------------------------
+throttle:
+  # Minimum seconds between polls per host/domain (best-effort)
+  per_domain_min_seconds:
+    default: 300
+    youtube.com: 300
+    googlevideo.com: 300
+    variety.com: 600
+    deadline.com: 600
+    hollywoodreporter.com: 600
+    indiewire.com: 600
+    koimoi.com: 600
+    pinkvilla.com: 600
+    123telugu.com: 600
+    telugu360.com: 600
+    greatandhra.com: 600
 
-  # Bollywood
-  - name: "T-Series"
-    channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
-    industry: "bollywood"
-  - name: "YRF"
-    channel_id: "UCI5q9xeOp2-1bV7xEtkKgzA"
-    industry: "bollywood"
-  - name: "Zee Studios"
-    channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"   # TODO: verify
-    industry: "bollywood"
-  - name: "Dharma Productions"
-    channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"   # TODO: verify
-    industry: "bollywood"
+# -----------------------------------------------------------------------------
+# YOUTUBE (official trailers, teasers, OTT promos)
+# -----------------------------------------------------------------------------
+youtube:
+  defaults:
+    enabled: true
+    kind_hint: trailer              # channel can override to "ott"
+    max_items_per_poll: 20
+    published_after_hours: 72
+    language: "en"
+    region: "global"
 
-  # Tollywood
-  - name: "Mythri Movie Makers"
-    channel_id: "UCwSRZ9YQ9V0-3cN0iK8gVtQ"   # TODO: verify
-    industry: "tollywood"
-  - name: "UV Creations"
-    channel_id: "UCpO4t7d4AFFqU8xM3A4J3og"   # TODO: verify
-    industry: "tollywood"
-  - name: "Geetha Arts"
-    channel_id: "UCYx3Feo0iF4cGzJpmKfOaYg"   # TODO: verify
-    industry: "tollywood"
+  channels:
+    # --- Hollywood ------------------------------------------------------------
+    - name: "Netflix"
+      enabled: true
+      channel_id: "UCWOA1ZGywLbqmigxE4Qlvuw"
+      industry: "hollywood"
+      kind_hint: "ott"
+      tags: ["ott","hollywood"]
 
-# ---- Entertainment News via RSS (free) ----
-news_feeds:
-  # Hollywood trades
-  - name: "Variety"
-    url: "https://variety.com/feed/"
-    industry: "hollywood"
-  - name: "Deadline"
-    url: "https://deadline.com/feed/"
-    industry: "hollywood"
-  - name: "The Hollywood Reporter"
-    url: "https://www.hollywoodreporter.com/feed/"
-    industry: "hollywood"
-  - name: "IndieWire"
-    url: "https://www.indiewire.com/feed/"
-    industry: "hollywood"
+    - name: "Marvel Entertainment"
+      enabled: true
+      channel_id: "UCvC4D8onUfXzvjTOM-dBfEA"
+      industry: "hollywood"
+      kind_hint: "trailer"
+      tags: ["studio","hollywood"]
 
-  # Bollywood
-  - name: "Bollywood Hungama"
-    url: "https://www.bollywoodhungama.com/rss/news.xml"
-    industry: "bollywood"
-  - name: "Film Companion"
-    url: "https://www.filmcompanion.in/feed"
-    industry: "bollywood"
-  - name: "Pinkvilla (Movies)"
-    url: "https://www.pinkvilla.com/entertainment/feed"
-    industry: "bollywood"
+    - name: "Sony Pictures Entertainment"
+      enabled: true
+      channel_id: "UCz97F7dMxBNOfGYu3rx8aCw"
+      industry: "hollywood"
+      kind_hint: "trailer"
 
-  # Tollywood
-  - name: "123Telugu"
-    url: "https://www.123telugu.com/feed"
-    industry: "tollywood"
-  - name: "Telugu360"
-    url: "https://www.telugu360.com/feed/"
-    industry: "tollywood"
-  - name: "GreatAndhra"
-    url: "https://www.greatandhra.com/rss/english/movies.xml"
-    industry: "tollywood"
+    - name: "Warner Bros. Pictures"
+      enabled: true
+      channel_id: "UCjmJDM5pRKbUlVIzDYYWb6g"
+      industry: "hollywood"
+      kind_hint: "trailer"
 
-# ---- TMDb (free, attribution required) ----
+    - name: "Paramount Pictures"
+      enabled: true
+      channel_id: "UCF9imwPMSGz4Vq1NiTWCC7g"
+      industry: "hollywood"
+      kind_hint: "trailer"
+
+    - name: "Universal Pictures"
+      enabled: true
+      channel_id: "UCq0OueAsdxH6b8NY18-uhug"
+      industry: "hollywood"
+      kind_hint: "trailer"
+
+    # Optional studios/labels to add later (IDs to verify):
+    - name: "20th Century Studios"   # TODO: verify channel_id
+      enabled: false
+      channel_id: "UCi8e0iOVk1fEOogdfu4YgfA"
+      industry: "hollywood"
+      kind_hint: "trailer"
+
+    # --- Bollywood ------------------------------------------------------------
+    - name: "T-Series"
+      enabled: true
+      channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "YRF"
+      enabled: true
+      channel_id: "UCI5q9xeOp2-1bV7xEtkKgzA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "Zee Studios"            # TODO: verify channel_id
+      enabled: true
+      channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "Dharma Productions"     # TODO: verify channel_id
+      enabled: true
+      channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    # --- Tollywood ------------------------------------------------------------
+    - name: "Mythri Movie Makers"     # TODO: verify channel_id
+      enabled: true
+      channel_id: "UCwSRZ9YQ9V0-3cN0iK8gVtQ"
+      industry: "tollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "UV Creations"            # TODO: verify channel_id
+      enabled: true
+      channel_id: "UCpO4t7d4AFFqU8xM3A4J3og"
+      industry: "tollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "Geetha Arts"             # TODO: verify channel_id
+      enabled: true
+      channel_id: "UCYx3Feo0iF4cGzJpmKfOaYg"
+      industry: "tollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+# -----------------------------------------------------------------------------
+# NEWS (RSS)
+# Buckets let you tune weights or tabs later (news/reviews/industry).
+# -----------------------------------------------------------------------------
+rss:
+  defaults:
+    enabled: true
+    kind_hint: news
+    max_items_per_poll: 20
+    include_keywords: []            # if non-empty, title must contain one
+    ignore_keywords:
+      - "behind the scenes"
+      - "interview"
+      - "live stream"
+
+  buckets:
+
+    news_hollywood:
+      enabled: true
+      feeds:
+        - name: "Variety"
+          enabled: true
+          url: "https://variety.com/feed/"
+          industry: "hollywood"
+        - name: "Deadline"
+          enabled: true
+          url: "https://deadline.com/feed/"
+          industry: "hollywood"
+        - name: "The Hollywood Reporter"
+          enabled: true
+          url: "https://www.hollywoodreporter.com/feed/"
+          industry: "hollywood"
+        - name: "IndieWire"
+          enabled: true
+          url: "https://www.indiewire.com/feed/"
+          industry: "hollywood"
+        - name: "Slashfilm"
+          enabled: true
+          url: "https://www.slashfilm.com/rss.xml"
+          industry: "hollywood"
+          max_items_per_poll: 10
+        - name: "Collider (All)"     # broad; can be noisy
+          enabled: false
+          url: "https://collider.com/rss/all/"
+          industry: "hollywood"
+        - name: "The Playlist"
+          enabled: false
+          url: "https://theplaylist.net/feed/"
+          industry: "hollywood"
+
+    news_india:
+      enabled: true
+      feeds:
+        - name: "Bollywood Hungama"
+          enabled: true
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+        - name: "Film Companion"
+          enabled: true
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+        - name: "Pinkvilla (Entertainment)"
+          enabled: true
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+        - name: "Koimoi"
+          enabled: true
+          url: "https://www.koimoi.com/feed/"
+          industry: "bollywood"
+        - name: "123Telugu"
+          enabled: true
+          url: "https://www.123telugu.com/feed"
+          industry: "tollywood"
+        - name: "Telugu360"
+          enabled: true
+          url: "https://www.telugu360.com/feed/"
+          industry: "tollywood"
+        - name: "GreatAndhra"
+          enabled: true
+          url: "https://www.greatandhra.com/rss/english/movies.xml"
+          industry: "tollywood"
+        - name: "Bollywood Life"     # noisy; keep optional
+          enabled: false
+          url: "https://www.bollywoodlife.com/feed/"
+          industry: "bollywood"
+
+    reviews_editorial:
+      enabled: false                 # turn on if you add a “Reviews” tab
+      feeds:
+        - name: "Empire (All)"       # TODO: verify if still active
+          enabled: false
+          url: "https://www.empireonline.com/feeds/all/"
+          industry: "hollywood"
+        - name: "ScreenRant"         # mixed editorial/news
+          enabled: false
+          url: "https://screenrant.com/feed/"
+          industry: "hollywood"
+
+# -----------------------------------------------------------------------------
+# AWARDS
+# Many award bodies don’t offer RSS. 'mode: scrape' placeholders for later.
+# -----------------------------------------------------------------------------
+awards:
+  defaults:
+    enabled: false
+    kind_hint: award
+  sources:
+    # US / Global
+    - name: "Academy Awards (Oscars) — Newsroom"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.oscars.org/news"
+      regions: ["US"]
+    - name: "Golden Globes — News"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.goldenglobes.com/news"
+      regions: ["US"]
+    - name: "BAFTA — Media Centre"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.bafta.org/media-centre"
+      regions: ["UK"]
+
+    # India
+    - name: "Filmfare — Awards"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.filmfare.com/awards"
+      regions: ["IN"]
+    - name: "IIFA — Media"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.iifa.com/media"
+      regions: ["IN"]
+    - name: "SIIMA — News"
+      enabled: false
+      mode: "scrape"
+      url: "https://siima.in/news"
+      regions: ["IN"]
+
+  calendar:
+    - name: "Oscars"
+      region: "US"
+      tz: "America/Los_Angeles"
+      date_utc: ""    # e.g. "2026-03-08T01:00:00Z"
+    - name: "Filmfare"
+      region: "IN"
+      tz: "Asia/Kolkata"
+      date_utc: ""
+
+# -----------------------------------------------------------------------------
+# BOX OFFICE (scrape later; disabled for now)
+# -----------------------------------------------------------------------------
+box_office:
+  defaults:
+    enabled: false
+    kind_hint: bo
+  sources:
+    - name: "Box Office Mojo — Weekend"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.boxofficemojo.com/weekend/"
+      regions: ["US"]
+    - name: "The Numbers — Weekend"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.the-numbers.com/box-office-chart/weekend"
+      regions: ["US"]
+    - name: "Bollywood Hungama — Box Office"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.bollywoodhungama.com/box-office/"
+      regions: ["IN"]
+    - name: "Sacnilk — Box Office"
+      enabled: false
+      mode: "scrape"
+      url: "https://www.sacnilk.com/boxoffice/"
+      regions: ["IN"]
+
+# -----------------------------------------------------------------------------
+# TMDb (free; attribution required)
+# -----------------------------------------------------------------------------
 tmdb:
-  # Prefer reading TMDB_API_KEY from env; fall back to value here if provided.
-  api_key_env: "TMDB_API_KEY"
-  # fallback_api_key: ""   # optional: hard-code only for local dev
+  api_key_env: "TMDB_API_KEY"     # read from environment
   regions: ["US", "IN"]
   enable_trending: true
   enable_upcoming: true
-  # Optional: map provider names to "OTT" tag in your Story
   ott_providers:
     - "Netflix"
     - "Amazon Prime Video"
     - "Disney Plus Hotstar"
     - "JioCinema"
 
-# ---- Classification rules (lightweight) ----
+# -----------------------------------------------------------------------------
+# (Optional) IMDb — disabled (no free official API; scraping breaks ToS)
+# -----------------------------------------------------------------------------
+imdb:
+  enabled: false
+  mode: "scrape"                  # placeholder only; do not enable unless compliant
+  notes: "IMDb ratings not ingested due to lack of free official API."
+
+# -----------------------------------------------------------------------------
+# Classification & Ranking
+# -----------------------------------------------------------------------------
 rules:
   trailer_keywords:
     - "trailer"
@@ -116,25 +350,46 @@ rules:
     - "first look"
     - "announcement"
     - "promo"
+  release_keywords:
+    - "release"
+    - "in theatres"
+    - "coming soon"
+    - "on netflix"
+    - "on prime"
+  award_keywords:
+    - "awards"
+    - "nominations"
+    - "winners"
   ignore_keywords:
     - "behind the scenes"
     - "interview"
     - "live stream"
 
-# ---- Ranking weights (used by worker when scoring stories) ----
 ranking_weights:
   recency_half_life_minutes: 360
   source_weight:
     youtube: 2.0
     tmdb: 1.2
     rss: 1.0
+    awards: 1.4
+    bo: 1.1
   has_video_bonus: 1.5
   has_poster_bonus: 0.6
   trend_bonus: 1.2
 
-# ---- Scheduler defaults (can be overridden by env) ----
+# -----------------------------------------------------------------------------
+# Scheduler defaults (env can override; docker-compose wires these)
+# -----------------------------------------------------------------------------
 scheduler:
-  # How often to enqueue polling jobs
   poll_interval_min: 15
-  # Only consider items published within this window
   published_after_hours: 72
+  # If true, scheduler will read this file to enqueue both YouTube & RSS polls.
+  use_sources_file: true
+  # Optional: choose which buckets to schedule from rss.buckets
+  rss_buckets_enabled:
+    - news_hollywood
+    - news_india
+  # Cap per-run to avoid floods when first enabling many feeds
+  per_run_limits:
+    youtube_channels: 20
+    rss_feeds: 30

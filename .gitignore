@@ -1,35 +1,83 @@
-# General
+# =========================
+# OS / General
+# =========================
 .DS_Store
+Thumbs.db
+*.log
+*.pid
+*.db
+*.sqlite3
+*.orig
+*.swp
+*.swo
+
+# Env & local config (keep .env.example)
 .env
 .env.*
-*.log
-*.sqlite3
+!.env.example
+
+# Build artifacts
 dist/
 build/
 
+# Coverage / reports
+coverage/
+htmlcov/
+.coverage*
+.nyc_output/
+
+# =========================
 # Python
+# =========================
 __pycache__/
 *.py[cod]
+*.so
 *.egg-info/
 .mypy_cache/
 .pytest_cache/
+.ruff_cache/
+.pytype/
 .venv/
 venv/
+env/
 
-# Node/JS
+# =========================
+# Node / JS
+# =========================
 node_modules/
+.pnpm-store/
+yarn-error.log
 
-# Flutter/Dart
+# =========================
+# Flutter / Dart
+# =========================
 .dart_tool/
 .packages
-.pub-cache/
-build/
-ios/Pods/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+
+# Android
 android/.gradle/
 android/local.properties
-web/.dart_tool/
+android/key.properties
+**/*.keystore
+**/*.jks
 
-# IDE
+# CocoaPods (iOS)
+ios/Pods/
+
+# =========================
+# IDE / Editor
+# =========================
 .vscode/
 .idea/
-*.pem
+*.iml
+
+# =========================
+# Docker / Deploy
+# =========================
+# Docker build cache & local scratch
+**/.docker-build/
+infra/*.local.*
+.netlify/
