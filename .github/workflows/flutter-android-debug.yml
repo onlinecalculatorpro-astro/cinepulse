@@ -1,4 +1,5 @@
-name: Android Debug (APK - ROOT)
+# .github/workflows/flutter-android-debug.yml
+name: Android Debug (APK - ROOT, manual)
 
 on:
   workflow_dispatch:
@@ -12,13 +13,14 @@ on:
         required: false
         default: ""
 
-# Prefer repo secrets; fall back to manual inputs; finally sane defaults.
+# Prefer repo secrets → manual inputs → sensible defaults.
 env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
 
 jobs:
   build:
+    name: Build debug APKs
     runs-on: ubuntu-latest
     concurrency:
       group: android-debug-root-${{ github.ref_name }}
@@ -67,7 +69,7 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # Fix "unsupported Gradle project" if templates are out of sync.
+      # Refresh Android scaffolding if templates drifted, fixes "unsupported Gradle project".
       - name: Ensure Android platform exists (refresh if needed)
         run: flutter create --platforms=android .
 
@@ -86,3 +88,4 @@ jobs:
           name: android-apk-debug
           path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
+          retention-days: 7
