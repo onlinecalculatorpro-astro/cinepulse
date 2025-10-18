@@ -1,17 +1,11 @@
 name: cinepulse
-# Compose v2: omit `version:` to avoid the deprecation warning.
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Shared bits (env + mounts)
-# ──────────────────────────────────────────────────────────────────────────────
 x-common-env: &common-env
-  env_file:
-    - ../.env
+  env_file: [ ../.env ]
   environment:
     TZ: ${TZ:-UTC}
     ENV: ${ENV:-dev}
     DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
-    # Always use the service name for Redis
     REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     TMDB_API_KEY: ${TMDB_API_KEY:-}
     SOURCES_FILE: /app/config/source.yml
@@ -19,9 +13,6 @@ x-common-env: &common-env
 x-sources-mount: &sources-mount
   - ./source.yml:/app/config/source.yml:ro
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Services
-# ──────────────────────────────────────────────────────────────────────────────
 services:
   db:
     image: postgres:16
@@ -31,8 +22,7 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - dbdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    ports: ["5432:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
       interval: 10s
@@ -43,9 +33,8 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redisdata:/data
-    # Do NOT publish 6379 on host to avoid conflicts
+    volumes: [redisdata:/data]
+    # no host port to avoid conflicts
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -53,61 +42,65 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # FastAPI backend: /health, /v1/feed, /v1/story/<id>, /v1/search
+  # ---------- All Python services share one image ----------
   api:
     <<: *common-env
     build:
-      context: ../apps/api
+      context: ..                 # uses root Dockerfile + root requirements.txt
       dockerfile: Dockerfile
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "18000:8000"
+      db:     { condition: service_healthy }
+      redis:  { condition: service_healthy }
+    ports: ["18000:8000"]         # host:container
     volumes: *sources-mount
-    environment:
-      UVICORN_HOST: 0.0.0.0
-      UVICORN_PORT: 8000
+    command: >
+      uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "python - <<'PY'\nimport urllib.request,sys\ntry:\n  r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)\n  sys.exit(0 if r.status==200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
+          "python - <<'PY'\nimport urllib.request,sys\n"
+          "try:\n r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)\n"
+          " sys.exit(0 if r.status==200 else 1)\n"
+          "except Exception:\n sys.exit(1)\nPY"
         ]
       interval: 15s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  # Background worker (RQ) that consumes jobs from Redis
   worker:
     <<: *common-env
     build:
-      context: ../apps/workers
+      context: ..
       dockerfile: Dockerfile
     depends_on:
-      redis:
-        condition: service_healthy
+      redis: { condition: service_healthy }
     volumes: *sources-mount
+    # If your worker module has a different entry, swap the command below.
+    # Using RQ "default" queue is a good generic default:
+    command: >
+      rq worker -u ${REDIS_URL} default
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "python - <<'PY'\nimport os,sys\nfrom redis import from_url\nfrom_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()\nsys.exit(0)\nPY"
+          "python - <<'PY'\nimport os,sys\nfrom redis import from_url\n"
+          "from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()\n"
+          "sys.exit(0)\nPY"
         ]
       interval: 20s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  # Lightweight scheduler that enqueues periodic jobs for the worker
   scheduler:
     <<: *common-env
     build:
-      context: ../apps/scheduler
-      dockerfile: Dockerfile
+      context: ..
+    volumes: *sources-mount
+    depends_on:
+      redis: { condition: service_healthy }
     environment:
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
@@ -118,24 +111,20 @@ services:
       RSS_FEEDS: ${RSS_FEEDS:-}
       YT_MAX_ITEMS: ${YT_MAX_ITEMS:-}
       RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-}
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes: *sources-mount
+    # Your scheduler entry point:
+    command: >
+      python -m apps.scheduler.main
     restart: unless-stopped
 
-  # Optional: server-side renderer / image proxy
   renderer:
     build:
-      context: ../apps/renderer
-      dockerfile: Dockerfile
-    ports:
-      - "8100:8000"
+      context: ..
+    # Change if your renderer has a different entry point:
+    command: >
+      python -m apps.renderer.main
+    ports: ["8100:8000"]
     restart: unless-stopped
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Volumes
-# ──────────────────────────────────────────────────────────────────────────────
 volumes:
   dbdata: {}
   redisdata: {}
