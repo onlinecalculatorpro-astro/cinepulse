@@ -1,18 +1,22 @@
 name: cinepulse
 
+# ----------------------- shared env + mounts -----------------------
 x-common-env: &common-env
-  env_file: [ ../.env ]
+  env_file:
+    - ../.env
   environment:
     TZ: ${TZ:-UTC}
     ENV: ${ENV:-dev}
     DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
     REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     TMDB_API_KEY: ${TMDB_API_KEY:-}
+    # Path inside container (we mount the file below)
     SOURCES_FILE: /app/config/source.yml
 
 x-sources-mount: &sources-mount
   - ./source.yml:/app/config/source.yml:ro
 
+# ----------------------------- services ----------------------------
 services:
   db:
     image: postgres:16
@@ -22,7 +26,8 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - dbdata:/var/lib/postgresql/data
-    ports: ["5432:5432"]
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
       interval: 10s
@@ -33,8 +38,9 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    volumes: [redisdata:/data]
-    # no host port to avoid conflicts
+    volumes:
+      - redisdata:/data
+    # No host port to avoid conflicts on 6379
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -42,19 +48,19 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ---------- All Python services share one image ----------
+  # ---------- Python services (built from ONE Dockerfile) ----------
   api:
     <<: *common-env
     build:
-      context: ..                 # uses root Dockerfile + root requirements.txt
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: infra/Dockerfile   # single file
+      target: api                    # api stage in that Dockerfile
     depends_on:
-      db:     { condition: service_healthy }
-      redis:  { condition: service_healthy }
-    ports: ["18000:8000"]         # host:container
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports:
+      - "18000:8000"                 # host:container
     volumes: *sources-mount
-    command: >
-      uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test:
         [
@@ -73,12 +79,11 @@ services:
     <<: *common-env
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: infra/Dockerfile
+      target: worker                 # worker stage
     depends_on:
       redis: { condition: service_healthy }
     volumes: *sources-mount
-    # If your worker module has a different entry, swap the command below.
-    # Using RQ "default" queue is a good generic default:
     command: >
       rq worker -u ${REDIS_URL} default
     healthcheck:
@@ -98,6 +103,8 @@ services:
     <<: *common-env
     build:
       context: ..
+      dockerfile: infra/Dockerfile
+      target: scheduler              # scheduler stage
     volumes: *sources-mount
     depends_on:
       redis: { condition: service_healthy }
@@ -111,7 +118,6 @@ services:
       RSS_FEEDS: ${RSS_FEEDS:-}
       YT_MAX_ITEMS: ${YT_MAX_ITEMS:-}
       RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-}
-    # Your scheduler entry point:
     command: >
       python -m apps.scheduler.main
     restart: unless-stopped
@@ -119,12 +125,14 @@ services:
   renderer:
     build:
       context: ..
-    # Change if your renderer has a different entry point:
-    command: >
-      python -m apps.renderer.main
-    ports: ["8100:8000"]
+      dockerfile: infra/Dockerfile
+      target: renderer               # renderer stage
+    ports:
+      - "8100:8000"
     restart: unless-stopped
+    # profiles: ["extras"]  # uncomment if you want to start it only with --profile extras
 
+# ----------------------------- volumes -----------------------------
 volumes:
   dbdata: {}
   redisdata: {}
