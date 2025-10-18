@@ -1,121 +1,173 @@
 version: "3.9"
+
 name: cinepulse
 
-# Reusable env config shared by multiple services
+# ---------- shared bits ----------
 x-common-env: &common-env
   env_file:
     - ../.env
   environment:
-    # fallbacks if not present in .env
+    TZ: ${TZ:-UTC}
     ENV: ${ENV:-dev}
     DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
     REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    # optional: TMDB key if your backend uses it
     TMDB_API_KEY: ${TMDB_API_KEY:-}
-    # path to your sources file (mounted below)
+    # inside the container
     SOURCES_FILE: /app/config/source.yml
+
+x-sources-mount: &sources-mount
+  - ./source.yml:/app/config/source.yml:ro
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+networks:
+  cinepulse_network:
+    driver: bridge
+
+volumes:
+  dbdata: {}
+  redisdata: {}
 
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: cinepulse
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
       - dbdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    networks: [cinepulse_network]
+    # keep DB private (NO host port). If you must access from host, use:
+    # ports: ["127.0.0.1:5432:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+      start_period: 10s
+
 
   redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    networks: [cinepulse_network]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
-    restart: unless-stopped
+      start_period: 5s
 
-  # FastAPI (or similar) backend: /health, /v1/feed, /v1/story/<id>, /v1/search
+
   api:
-    <<: *common-env
+    <<:
+      - *common-env
+      - *logging
     build:
-      context: ../apps/api
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: api
+    restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes: *sources-mount
+    networks: [cinepulse_network]
     ports:
-      - "8000:8000"
-    volumes:
-      # mount the sources file read-only inside the container
-      - ./source.yml:/app/config/source.yml:ro
+      - "127.0.0.1:18000:8000"
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)\"",
-        ]
+        - CMD-SHELL
+        - |
+          python - <<'PY'
+          import urllib.request,sys
+          try:
+              r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)
+              sys.exit(0 if r.status==200 else 1)
+          except Exception:
+              sys.exit(1)
+          PY
       interval: 15s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
-  # Background workers (queues: ingest YouTube RSS, fetch RSS news, TMDb trending, etc.)
+
   worker:
-    <<: *common-env
+    <<:
+      - *common-env
+      - *logging
     build:
-      context: ../apps/workers
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: worker
+    restart: unless-stopped
     depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./source.yml:/app/config/source.yml:ro
+      redis: { condition: service_healthy }
+    volumes: *sources-mount
+    networks: [cinepulse_network]
+    command: >
+      sh -lc 'rq worker -u "$$REDIS_URL" default'
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "python -c \"import os,sys; from redis import from_url; from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping(); sys.exit(0)\"",
-        ]
+        - CMD-SHELL
+        - |
+          python - <<'PY'
+          import os,sys
+          from redis import from_url
+          from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()
+          sys.exit(0)
+          PY
       interval: 20s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+      start_period: 10s
 
-  # Lightweight scheduler that enqueues periodic jobs to Redis for the worker
+
   scheduler:
     <<: *common-env
     build:
-      context: ../apps/scheduler
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: scheduler
+    restart: unless-stopped
+    depends_on:
+      redis: { condition: service_healthy }
+    volumes: *sources-mount
+    networks: [cinepulse_network]
     environment:
-      # These override the defaults inside the scheduler (it can also read SOURCES_FILE)
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./source.yml:/app/config/source.yml:ro
-    restart: unless-stopped
+      POLL_SPREAD_SEC: ${POLL_SPREAD_SEC:-2.0}
+      POLL_JITTER_SEC: ${POLL_JITTER_SEC:-10}
+      ONE_SHOT: ${ONE_SHOT:-}
+      YT_CHANNELS: ${YT_CHANNELS:-}
+      RSS_FEEDS: ${RSS_FEEDS:-}
+      YT_MAX_ITEMS: ${YT_MAX_ITEMS:-}
+      RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-}
+    command: >-
+      python -m apps.scheduler.main
 
-  # Optional: server-side renderer / image proxy / thumbnails (enable if you use it)
+
   renderer:
     build:
-      context: ../apps/renderer
-    ports:
-      - "8100:8000"
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: renderer
     restart: unless-stopped
-    # profiles:
-    #   - extras
+    networks: [cinepulse_network]
+    # keep local-only unless you truly want it public
+    ports:
+      - "127.0.0.1:8100:8000"
+    profiles: ["extras"]
 
-volumes:
-  dbdata: {}
+
