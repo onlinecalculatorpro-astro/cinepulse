@@ -14,7 +14,7 @@ x-common-env: &common-env
     DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
     # 👇 CRITICAL: always point to the docker service name "redis"
     REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    # Optional integrations
+    # Optional integrations (kept empty by default)
     TMDB_API_KEY: ${TMDB_API_KEY:-}
     # The sources file is mounted below into /app/config/source.yml
     SOURCES_FILE: /app/config/source.yml
@@ -111,10 +111,18 @@ services:
     build:
       context: ../apps/scheduler
     environment:
+      # Frequency / window
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
-      # YT_CHANNELS can come from ../.env; leave unset here if you prefer
-      # YT_CHANNELS: ${YT_CHANNELS:-UCWOA1ZGywLbqmigxE4Qlvuw}
+      POLL_SPREAD_SEC: ${POLL_SPREAD_SEC:-2.0}
+      POLL_JITTER_SEC: ${POLL_JITTER_SEC:-10}
+      ONE_SHOT: ${ONE_SHOT:-}
+      # Sources (read from .env — keep empty here if you manage in secrets)
+      YT_CHANNELS: ${YT_CHANNELS:-}
+      RSS_FEEDS: ${RSS_FEEDS:-}
+      # Per-poll caps (optional)
+      YT_MAX_ITEMS: ${YT_MAX_ITEMS:-}
+      RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-}
     depends_on:
       redis:
         condition: service_healthy
