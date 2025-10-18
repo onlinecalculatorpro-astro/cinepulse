@@ -1,4 +1,3 @@
-# .github/workflows/flutter-web-preview.yml
 name: Web Preview (Flutter - ROOT, manual)
 
 on:
@@ -13,6 +12,11 @@ on:
         required: false
         default: ""
 
+env:
+  # Prefer repo secrets → manual inputs → fallback
+  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
+  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
+
 jobs:
   build:
     name: Build Flutter Web
@@ -21,31 +25,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # Resolve API_BASE_URL / DEEP_LINK_BASE from inputs → secrets → fallback
-      - name: Resolve config
-        id: resolve
-        shell: bash
-        run: |
-          API="${{ github.event.inputs.apiBase }}"
-          DEEP="${{ github.event.inputs.deepLinkBase }}"
-          # fall back to secrets if inputs empty
-          if [ -z "$API" ] && [ -n "${{ secrets.API_BASE_URL }}" ]; then
-            API="${{ secrets.API_BASE_URL }}"
-          fi
-          if [ -z "$DEEP" ] && [ -n "${{ secrets.DEEP_LINK_BASE }}" ]; then
-            DEEP="${{ secrets.DEEP_LINK_BASE }}"
-          fi
-          # final hard-coded fallbacks
-          if [ -z "$API" ]; then API="https://api.onlinecalculatorpro.org"; fi
-          if [ -z "$DEEP" ]; then DEEP="https://cinepulse.netlify.app/#/s"; fi
-
-          echo "API_BASE_URL=$API"   >> "$GITHUB_ENV"
-          echo "DEEP_LINK_BASE=$DEEP" >> "$GITHUB_ENV"
-
-          echo "Using:"
-          echo "  API_BASE_URL=$API"
-          echo "  DEEP_LINK_BASE=$DEEP"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -79,26 +58,28 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build (release)
+      - name: Build Flutter Web (root)
         run: |
           flutter build web --release \
             ${{ steps.args.outputs.args }} \
-            --dart-define=API_BASE_URL="${API_BASE_URL}" \
-            --dart-define=DEEP_LINK_BASE="${DEEP_LINK_BASE}"
+            --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
+            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
 
       - name: List build outputs
         run: ls -lah build/web || true
 
-      - name: Verify dart-defines (best-effort)
+      - name: Verify dart-defines embedded (best-effort)
         run: |
           set +e
+          echo "Checking API_BASE_URL…"
           grep -R "${API_BASE_URL}" build/web/main.dart.js >/dev/null \
-            && echo "Found API_BASE_URL" || echo "Warning: API_BASE_URL not found (minified)"
+            && echo "Found API_BASE_URL" || echo "Warning: not found (minified). Continuing."
+          echo "Checking DEEP_LINK_BASE…"
           grep -R "${DEEP_LINK_BASE}" build/web/main.dart.js >/dev/null \
-            && echo "Found DEEP_LINK_BASE" || echo "Warning: DEEP_LINK_BASE not found (minified)"
+            && echo "Found DEEP_LINK_BASE" || echo "Warning: not found (minified). Continuing."
           set -e
 
-      - name: Upload artifact
+      - name: Upload Web Build
         uses: actions/upload-artifact@v4
         with:
           name: web-preview
@@ -109,9 +90,9 @@ jobs:
     name: Deploy to Netlify
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '' }}
+
     steps:
-      - name: Download artifact
+      - name: Download web artifact
         uses: actions/download-artifact@v4
         with:
           name: web-preview
@@ -125,8 +106,15 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Deploy (prod)
+      # Only deploy if both secrets are present (allowed at step-level)
+      - name: Deploy to Netlify (prod)
+        if: ${{ secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '' }}
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy $GITHUB_SHA"
+
+      - name: Skip notice (Netlify secrets missing)
+        if: ${{ !(secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '') }}
+        run: |
+          echo "Skipping Netlify deploy: NETLIFY_AUTH_TOKEN or NETLIFY_SITE_ID not set."
