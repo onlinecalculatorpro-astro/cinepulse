@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import os
 import json
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, Optional, Iterable
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# ---- Redis client ------------------------------------------------------------
+# ------------------------------ Redis ----------------------------------------
+
 try:
     import redis  # type: ignore
 except Exception as e:  # pragma: no cover
@@ -18,20 +20,24 @@ except Exception as e:  # pragma: no cover
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 r = redis.from_url(REDIS_URL, decode_responses=True)
 
-FEED_KEY = "feed:items"          # list of JSON stories, newest at index 0
-MAX_SCAN = 400                   # how deep we scan for search/detail
+FEED_KEY = os.getenv("FEED_KEY", "feed:items")  # LIST, index 0 = newest
+MAX_SCAN = int(os.getenv("MAX_SCAN", "400"))    # how deep search/detail can look
 
+# ------------------------------ Models ---------------------------------------
 
-# ---- Models ------------------------------------------------------------------
 class Story(BaseModel):
     id: str
-    # trailer | release | ott | bo | award (we use trailer/ott for now)
     kind: str
     title: str
     summary: Optional[str] = None
-    published_at: Optional[str] = None   # RFC3339 string
+    published_at: Optional[str] = None  # RFC3339 (UTC)
     source: Optional[str] = None
     thumb_url: Optional[str] = None
+    # optional extras if present in feed items; keep loose
+    poster_url: Optional[str] = None
+    release_date: Optional[str] = None
+    is_theatrical: Optional[bool] = None
+    is_upcoming: Optional[bool] = None
 
 
 class FeedResponse(BaseModel):
@@ -39,12 +45,12 @@ class FeedResponse(BaseModel):
     since: Optional[str] = None
     items: List[Story]
 
+# ------------------------------ App / CORS -----------------------------------
 
-# ---- App & CORS --------------------------------------------------------------
 app = FastAPI(title="CinePulse API", version="0.1.0")
 
-_cors = os.getenv("CORS_ORIGINS", "*")
-if _cors.strip() == "*":
+_cors = os.getenv("CORS_ORIGINS", "*").strip()
+if _cors == "*":
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -60,21 +66,38 @@ else:
         allow_headers=["*"],
     )
 
+# ------------------------------ Helpers --------------------------------------
 
-# ---- Helpers -----------------------------------------------------------------
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    """Parse RFC3339/ISO8601 into UTC-aware datetime."""
+    if not s:
+        return None
+    try:
+        # allow trailing 'Z'
+        if s.endswith("Z"):
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
 def _load_feed_slice(n: int) -> list[dict]:
-    """Return up to n newest stories as dicts."""
+    """Return up to n newest stories as dicts; skip bad JSON."""
     raw = r.lrange(FEED_KEY, 0, max(0, n - 1))
     out: list[dict] = []
     for s in raw:
         try:
             out.append(json.loads(s))
         except Exception:
+            # ignore corrupt entries
             continue
     return out
 
 
-def _iter_feed(max_items: int = MAX_SCAN):
+def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
     raw = r.lrange(FEED_KEY, 0, max(0, max_items - 1))
     for s in raw:
         try:
@@ -84,49 +107,78 @@ def _iter_feed(max_items: int = MAX_SCAN):
 
 
 def _matches_tab(item: dict, tab: str) -> bool:
-    k = (item.get("kind") or "").lower()
-    t = tab.lower()
-    if t in ("all", "", None):
+    """Tab filter: all | trailers | ott | intheatres | comingsoon"""
+    t = (tab or "all").lower()
+    if t in ("all", ""):
         return True
+
+    kind = (item.get("kind") or "").lower()
     if t in ("trailers", "trailer"):
-        return k == "trailer"
-    if t in ("ott", "release", "releases"):
-        return k in ("ott", "release")
+        return kind == "trailer"
+    if t == "ott":
+        return kind == "ott"
+
+    # Best-effort theatrical classification
+    if t == "intheatres":
+        return kind == "release" or item.get("is_theatrical") is True
+
+    if t == "comingsoon":
+        rd = _parse_iso(item.get("release_date"))
+        return bool(rd and rd > datetime.now(timezone.utc))
+
     return True
 
 
-# ---- Endpoints ----------------------------------------------------------------
+def _is_since(item: dict, since_iso: Optional[str]) -> bool:
+    if not since_iso:
+        return True
+    since_dt = _parse_iso(since_iso)
+    if not since_dt:
+        return True
+
+    # Prefer release_date, else published_at, else normalized_at
+    s = item.get("release_date") or item.get("published_at") or item.get("normalized_at")
+    dt = _parse_iso(s)
+    return bool(dt and dt >= since_dt)
+
+# ------------------------------ Endpoints ------------------------------------
+
 @app.get("/health")
 def health():
     return {
         "status": "ok",
         "redis": REDIS_URL,
-        "feed_len": r.llen(FEED_KEY),
+        "feed_len": r.llen(FEED_KEY),  # list length
     }
 
 
 @app.get("/v1/feed", response_model=FeedResponse)
 def feed(
-    tab: str = Query("all", description="all | trailers | ott"),
-    since: Optional[str] = Query(
-        None, description="RFC3339 string; return newer than this"),
+    tab: str = Query("all", description="all | trailers | ott | intheatres | comingsoon"),
+    since: Optional[str] = Query(None, description="RFC3339; only items >= this time"),
     limit: int = Query(20, ge=1, le=100),
 ):
-    # Load a little extra so filtering by tab doesn't starve results
+    # Load extra so tab/since filters don't starve results
     pool = _load_feed_slice(limit * 4)
+
     if since:
-        pool = [it for it in pool if (it.get("published_at") or "") > since]
+        pool = [it for it in pool if _is_since(it, since)]
+
     pool = [it for it in pool if _matches_tab(it, tab)]
+
     items = [Story(**it) for it in pool[:limit]]
     return FeedResponse(tab=tab, since=since, items=items)
 
 
 @app.get("/v1/search")
-def search(q: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=50)):
+def search(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+):
     ql = q.lower()
     res: list[dict] = []
     for it in _iter_feed():
-        hay = f"{it.get('title','')} {it.get('summary','') or ''}".lower()
+        hay = f"{it.get('title','')} {(it.get('summary') or '')}".lower()
         if ql in hay:
             res.append(it)
             if len(res) >= limit:
@@ -140,3 +192,8 @@ def story_detail(story_id: str):
         if it.get("id") == story_id:
             return Story(**it)
     raise HTTPException(status_code=404, detail="Story not found")
+
+
+@app.get("/")
+def root():
+    return {"ok": True, "service": "cinepulse-api"}

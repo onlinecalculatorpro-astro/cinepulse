@@ -2,7 +2,10 @@
 //
 // CinePulse HTTP client & endpoints
 // - Preserves existing public API (fetchFeed/searchStories/fetchStory/...)
-// - Adds a persistent http.Client, retries with backoff, and clearer errors.
+// - Uses a persistent http.Client
+// - Adds small retries with backoff for flaky 50x/timeouts
+// - Safer base URL + path joining
+// - Clearer, truncated error messages
 
 import 'dart:async';
 import 'dart:convert';
@@ -48,7 +51,7 @@ String _autoDeepBase() {
     return '${Uri.base.origin}/#/s';
   }
 
-  // Fallback placeholder; update in .env/defines for release builds.
+  // Fallback placeholder; update in --dart-define for release builds.
   return 'https://cinepulse.example/#/s';
 }
 
@@ -84,19 +87,16 @@ class ApiClient {
   /// Small retry/backoff helper for transient failures.
   Future<http.Response> _withRetry(
     Future<http.Response> Function() op, {
-    int attempts = 2,
+    int attempts = 2, // total tries = attempts + 1
     Duration backoff = const Duration(milliseconds: 350),
   }) async {
     Object? lastErr;
     for (var i = 0; i <= attempts; i++) {
       try {
         final r = await op().timeout(_timeout);
-        if (_isRetriableStatus(r.statusCode)) {
-          // Allow one more try for 502/503/504.
-          if (i < attempts) {
-            await Future<void>.delayed(backoff * (i + 1));
-            continue;
-          }
+        if (_isRetriableStatus(r.statusCode) && i < attempts) {
+          await Future<void>.delayed(backoff * (i + 1));
+          continue;
         }
         return r;
       } on TimeoutException catch (e) {
@@ -118,17 +118,14 @@ class ApiClient {
         rethrow;
       }
     }
-    // Shouldn't reach here; just throw the last error.
     throw lastErr ?? Exception('Unknown network error');
   }
 
-  bool _isRetriableStatus(int code) =>
-      code == 502 || code == 503 || code == 504;
+  bool _isRetriableStatus(int code) => code == 502 || code == 503 || code == 504;
 
   Never _fail(http.Response r) {
     final path = r.request?.url.path ?? '';
     String body = r.body;
-    // Truncate very long bodies to avoid flooding logs.
     if (body.length > 400) body = '${body.substring(0, 400)}…';
     throw Exception('API $path failed (${r.statusCode}): $body');
   }
@@ -157,22 +154,21 @@ class ApiClient {
     }
   }
 
-  Uri _build(String path, [Map<String, String>? q]) =>
-      _base.replace(
-        path: [
-          // Ensure we don't duplicate slashes; keep existing base path.
-          if (_base.path.isNotEmpty && _base.path != '/') _base.path,
-          path.startsWith('/') ? path.substring(1) : path,
-        ].join('/'),
-        queryParameters: q,
-      );
+  /// Safe path join that respects an existing base path.
+  Uri _build(String path, [Map<String, String>? q]) {
+    final pieces = <String>[
+      if (_base.path.isNotEmpty && _base.path != '/') _base.path,
+      path.startsWith('/') ? path.substring(1) : path,
+    ].where((s) => s.isNotEmpty).join('/');
+    return _base.replace(path: '/$pieces', queryParameters: q);
+  }
 
   // -------- Endpoints (instance) --------
 
   Future<List<Story>> fetchFeed({
     String tab = 'all',
     DateTime? since,
-    int limit = 20,
+    int limit = 30, // bumped default so the UI shows more than 5 items
   }) async {
     final norm = _normalizeTab(tab);
     final uri = _build('/v1/feed', {
@@ -250,7 +246,7 @@ final ApiClient _api = ApiClient(baseUrl: kApiBaseUrl);
 Future<List<Story>> fetchFeed({
   String tab = 'all',
   DateTime? since,
-  int limit = 20,
+  int limit = 30,
 }) =>
     _api.fetchFeed(tab: tab, since: since, limit: limit);
 
