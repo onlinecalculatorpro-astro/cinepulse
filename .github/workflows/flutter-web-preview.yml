@@ -1,3 +1,4 @@
+# .github/workflows/flutter-web-preview.yml
 name: Web Preview (Flutter - ROOT, manual)
 
 on:
@@ -90,7 +91,6 @@ jobs:
     name: Deploy to Netlify
     needs: build
     runs-on: ubuntu-latest
-
     steps:
       - name: Download web artifact
         uses: actions/download-artifact@v4
@@ -106,15 +106,26 @@ jobs:
         with:
           node-version: "20"
 
-      # Only deploy if both secrets are present (allowed at step-level)
+      # Decide whether we should deploy (don’t use `secrets` in `if:`)
+      - name: Decide deploy
+        id: decide
+        env:
+          HAS_AUTH: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          HAS_SITE: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          if [ -n "${HAS_AUTH}" ] && [ -n "${HAS_SITE}" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy to Netlify (prod)
-        if: ${{ secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '' }}
+        if: ${{ steps.decide.outputs.deploy == 'true' }}
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy $GITHUB_SHA"
 
       - name: Skip notice (Netlify secrets missing)
-        if: ${{ !(secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '') }}
-        run: |
-          echo "Skipping Netlify deploy: NETLIFY_AUTH_TOKEN or NETLIFY_SITE_ID not set."
+        if: ${{ steps.decide.outputs.deploy != 'true' }}
+        run: echo "Skipping Netlify deploy: NETLIFY_AUTH_TOKEN or NETLIFY_SITE_ID not set."
