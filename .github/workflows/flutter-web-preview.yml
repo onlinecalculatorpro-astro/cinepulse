@@ -14,9 +14,16 @@ on:
         default: ""
 
 env:
-  # Prefer repo secrets → manual inputs → fallback
+  # secrets → manual inputs → fallback
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-preview-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -59,7 +66,7 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Flutter Web (root)
+      - name: Build (release)
         run: |
           flutter build web --release \
             ${{ steps.args.outputs.args }} \
@@ -69,19 +76,16 @@ jobs:
       - name: List build outputs
         run: ls -lah build/web || true
 
-      # Best-effort check (minified builds may not contain plain strings)
-      - name: Verify dart-defines embedded (best-effort)
+      - name: Verify dart-defines (best-effort)
         run: |
           set +e
-          echo "Checking API_BASE_URL…"
           grep -R "${API_BASE_URL}" build/web/main.dart.js >/dev/null \
-            && echo "Found API_BASE_URL" || echo "Warning: not found (minified). Continuing."
-          echo "Checking DEEP_LINK_BASE…"
+            && echo "Found API_BASE_URL" || echo "Warning: API_BASE_URL not found (minified)"
           grep -R "${DEEP_LINK_BASE}" build/web/main.dart.js >/dev/null \
-            && echo "Found DEEP_LINK_BASE" || echo "Warning: not found (minified). Continuing."
+            && echo "Found DEEP_LINK_BASE" || echo "Warning: DEEP_LINK_BASE not found (minified)"
           set -e
 
-      - name: Upload Web Build
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: web-preview
@@ -92,14 +96,13 @@ jobs:
     name: Deploy to Netlify
     needs: build
     runs-on: ubuntu-latest
-    # Only attempt deploy if secrets are present
     if: ${{ secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '' }}
     concurrency:
       group: netlify-prod
       cancel-in-progress: false
 
     steps:
-      - name: Download web artifact
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: web-preview
@@ -113,7 +116,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Deploy to Netlify (prod)
+      - name: Deploy (prod)
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
