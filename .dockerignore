@@ -1,0 +1,32 @@
+# Keep source code in the build context.
+# Only ignore junk/secrets/artifacts.
+
+# VCS
+.git
+.gitignore
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Logs & OS junk
+*.log
+.DS_Store
+
+# Node artifacts (if any)
+node_modules/
+
+# Local env/secrets (never bake into images)
+.env
+.env.*
+
+# TLS / ops files that should not go into images
+infra/nginx/*.pem
+infra/nginx/*.key
+infra/nginx/*.crt
+infra/systemd/*.service
+infra/cron/pg_backup.sh
+infra/compose.db-private.yml

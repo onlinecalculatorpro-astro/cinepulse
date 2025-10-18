@@ -1,0 +1,121 @@
+name: cinepulse
+
+x-common-env: &common-env
+  env_file:
+    - ../.env
+  environment:
+    TZ: ${TZ:-UTC}
+    ENV: ${ENV:-dev}
+    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    TMDB_API_KEY: ${TMDB_API_KEY:-}
+    SOURCES_FILE: /app/config/source.yml
+
+x-sources-mount: &sources-mount
+  - ./source.yml:/app/config/source.yml:ro
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: cinepulse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    <<: *common-env
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports:
+      - "18000:8000"
+    volumes: *sources-mount
+    environment:
+      UVICORN_HOST: 0.0.0.0
+      UVICORN_PORT: 8000
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport urllib.request,sys\ntry:\n  r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)\n  sys.exit(0 if r.status==200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    <<: *common-env
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    depends_on:
+      redis: { condition: service_healthy }
+    volumes: *sources-mount
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport os,sys\nfrom redis import from_url\nfrom_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()\nsys.exit(0)\nPY"
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  scheduler:
+    <<: *common-env
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    environment:
+      POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
+      PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
+      POLL_SPREAD_SEC: ${POLL_SPREAD_SEC:-2.0}
+      POLL_JITTER_SEC: ${POLL_JITTER_SEC:-10}
+      ONE_SHOT: ${ONE_SHOT:-}
+      YT_CHANNELS: ${YT_CHANNELS:-}
+      RSS_FEEDS: ${RSS_FEEDS:-}
+      YT_MAX_ITEMS: ${YT_MAX_ITEMS:-}
+      RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-}
+    depends_on:
+      redis: { condition: service_healthy }
+    volumes: *sources-mount
+    restart: unless-stopped
+
+  renderer:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    ports:
+      - "8100:8000"
+    restart: unless-stopped
+
+volumes:
+  dbdata: {}
+  redisdata: {}
