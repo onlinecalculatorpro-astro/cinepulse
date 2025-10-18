@@ -10,6 +10,24 @@ volumes:
   dbdata:
   redisdata:
 
+x-sources-mount: &sources-mount
+  - ./source.yml:/app/config/source.yml:ro
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+networks:
+  cinepulse_network:
+    driver: bridge
+
+volumes:
+  dbdata: {}
+  redisdata: {}
+
 services:
   db:
     image: postgres:16
