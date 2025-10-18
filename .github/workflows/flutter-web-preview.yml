@@ -2,26 +2,16 @@
 name: Web Preview (Flutter - ROOT, manual)
 
 on:
-  workflow_dispatch:
-    inputs:
-      apiBase:
-        description: "API base URL (e.g. https://api.onlinecalculatorpro.org)"
-        required: false
-        default: ""
-      deepLinkBase:
-        description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
-        required: false
-        default: ""
-
-env:
-  # Prefer repo secrets → manual inputs → fallback
-  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
-  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
+  workflow_dispatch: {}
 
 jobs:
   build:
     name: Build Flutter Web
     runs-on: ubuntu-latest
+    env:
+      # Read from repo secrets (you said these are set)
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+      DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}
 
     steps:
       - name: Checkout
@@ -63,22 +53,11 @@ jobs:
         run: |
           flutter build web --release \
             ${{ steps.args.outputs.args }} \
-            --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
-            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
+            --dart-define=API_BASE_URL="$API_BASE_URL" \
+            --dart-define=DEEP_LINK_BASE="$DEEP_LINK_BASE"
 
       - name: List build outputs
         run: ls -lah build/web || true
-
-      - name: Verify dart-defines embedded (best-effort)
-        run: |
-          set +e
-          echo "Checking API_BASE_URL…"
-          grep -R "${API_BASE_URL}" build/web/main.dart.js >/dev/null \
-            && echo "Found API_BASE_URL" || echo "Warning: not found (minified). Continuing."
-          echo "Checking DEEP_LINK_BASE…"
-          grep -R "${DEEP_LINK_BASE}" build/web/main.dart.js >/dev/null \
-            && echo "Found DEEP_LINK_BASE" || echo "Warning: not found (minified). Continuing."
-          set -e
 
       - name: Upload Web Build
         uses: actions/upload-artifact@v4
@@ -91,6 +70,12 @@ jobs:
     name: Deploy to Netlify
     needs: build
     runs-on: ubuntu-latest
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+    # Use env.* in the condition (secrets context is not recognized here)
+    if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' }}
+
     steps:
       - name: Download web artifact
         uses: actions/download-artifact@v4
@@ -106,26 +91,5 @@ jobs:
         with:
           node-version: "20"
 
-      # Decide whether we should deploy (don’t use `secrets` in `if:`)
-      - name: Decide deploy
-        id: decide
-        env:
-          HAS_AUTH: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          HAS_SITE: ${{ secrets.NETLIFY_SITE_ID }}
-        run: |
-          if [ -n "${HAS_AUTH}" ] && [ -n "${HAS_SITE}" ]; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Deploy to Netlify (prod)
-        if: ${{ steps.decide.outputs.deploy == 'true' }}
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy $GITHUB_SHA"
-
-      - name: Skip notice (Netlify secrets missing)
-        if: ${{ steps.decide.outputs.deploy != 'true' }}
-        run: echo "Skipping Netlify deploy: NETLIFY_AUTH_TOKEN or NETLIFY_SITE_ID not set."
