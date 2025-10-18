@@ -20,14 +20,6 @@ x-logging: &logging
       max-size: "10m"
       max-file: "3"
 
-networks:
-  cinepulse_network:
-    driver: bridge
-
-volumes:
-  dbdata: {}
-  redisdata: {}
-
 services:
   db:
     image: postgres:16
