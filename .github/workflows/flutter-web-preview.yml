@@ -13,18 +13,6 @@ on:
         required: false
         default: ""
 
-env:
-  # secrets → manual inputs → fallback
-  API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
-  DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
-
-permissions:
-  contents: read
-
-concurrency:
-  group: web-preview-${{ github.ref_name }}
-  cancel-in-progress: false
-
 jobs:
   build:
     name: Build Flutter Web
@@ -33,6 +21,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Resolve API_BASE_URL / DEEP_LINK_BASE from inputs → secrets → fallback
+      - name: Resolve config
+        id: resolve
+        shell: bash
+        run: |
+          API="${{ github.event.inputs.apiBase }}"
+          DEEP="${{ github.event.inputs.deepLinkBase }}"
+          # fall back to secrets if inputs empty
+          if [ -z "$API" ] && [ -n "${{ secrets.API_BASE_URL }}" ]; then
+            API="${{ secrets.API_BASE_URL }}"
+          fi
+          if [ -z "$DEEP" ] && [ -n "${{ secrets.DEEP_LINK_BASE }}" ]; then
+            DEEP="${{ secrets.DEEP_LINK_BASE }}"
+          fi
+          # final hard-coded fallbacks
+          if [ -z "$API" ]; then API="https://api.onlinecalculatorpro.org"; fi
+          if [ -z "$DEEP" ]; then DEEP="https://cinepulse.netlify.app/#/s"; fi
+
+          echo "API_BASE_URL=$API"   >> "$GITHUB_ENV"
+          echo "DEEP_LINK_BASE=$DEEP" >> "$GITHUB_ENV"
+
+          echo "Using:"
+          echo "  API_BASE_URL=$API"
+          echo "  DEEP_LINK_BASE=$DEEP"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -70,8 +83,8 @@ jobs:
         run: |
           flutter build web --release \
             ${{ steps.args.outputs.args }} \
-            --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
-            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
+            --dart-define=API_BASE_URL="${API_BASE_URL}" \
+            --dart-define=DEEP_LINK_BASE="${DEEP_LINK_BASE}"
 
       - name: List build outputs
         run: ls -lah build/web || true
@@ -97,10 +110,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: ${{ secrets.NETLIFY_AUTH_TOKEN != '' && secrets.NETLIFY_SITE_ID != '' }}
-    concurrency:
-      group: netlify-prod
-      cancel-in-progress: false
-
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
