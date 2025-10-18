@@ -70,7 +70,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "18000:8000"
     volumes: *sources-mount
     environment:
       UVICORN_HOST: 0.0.0.0
