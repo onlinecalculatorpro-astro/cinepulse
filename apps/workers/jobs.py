@@ -105,6 +105,10 @@ SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "85"))
 SUMMARY_MIN = int(os.getenv("SUMMARY_MIN_WORDS", "60"))
 SUMMARY_MAX = int(os.getenv("SUMMARY_MAX_WORDS", "110"))
 
+# If the whole body is short, pass it through as-is (cleaned)
+PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "120"))
+PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "900"))
+
 # Cleaning regexes
 _BOILERPLATE_RE = re.compile(
     r"^\s*(subscribe|follow|like|comment|share|credits?:|cast:|music by|original score|prod(?:uction)? by|"
@@ -117,6 +121,11 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # Remove WordPress-style excerpt tails and dangling ellipses
 _ELLIPSIS_TAIL_RE = re.compile(r"(\[\s*(?:…|\.{3})\s*\]\s*)+$")
 _DANGLING_ELLIPSIS_RE = re.compile(r"(?:…|\.{3})\s*$")
+
+# Conjunctions that should not end a summary
+_BAD_END_WORD = re.compile(
+    r"\b(?:and|but|or|so|because|since|although|though|while|as)\.?$", re.I
+)
 
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
     if value is None:
@@ -286,65 +295,71 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
     verb_bonus = 1 if re.search(r"\b(is|are|was|were|has|have|had|will|to|set|announc\w+|releas\w+|premier\w+|exit\w+|walk\w+|cancel\w+|delay\w+)\b", s, re.I) else 0
     return overlap * 2 + verb_bonus
 
+def _tidy_end(s: str) -> str:
+    """Remove dangling conjunctions/ellipses; ensure proper final punctuation."""
+    s = _DANGLING_ELLIPSIS_RE.sub("", s).strip()
+    # Drop trailing 'and.' / 'but.' / 'and' etc.
+    s = _BAD_END_WORD.sub("", s).rstrip()
+    if s and s[-1] not in ".!?":
+        s += "."
+    return s
+
 def _select_sentences_for_summary(title: str, body_text: str) -> str:
     """
     Build a one-paragraph crux:
-    - choose best-scoring sentences (title keyword overlap)
-    - keep whole sentences; aim 60–110 words; no trailing ellipses
+    - If body is short → passthrough (cleaned)
+    - Else choose best-scoring sentences (title keyword overlap)
+    - Keep whole sentences; aim 60–110 words; professional ending
     """
+    body_text = (body_text or "").strip()
+    if not body_text:
+        return title.strip()
+
+    # Short-story passthrough
+    words = body_text.split()
+    if len(words) <= PASSTHROUGH_MAX_WORDS and len(body_text) <= PASSTHROUGH_MAX_CHARS:
+        return _tidy_end(body_text)
+
     title_kw = set(w.lower() for w in re.findall(r"[A-Za-z0-9]+", title))
-    sentences = [x.strip() for x in _SENT_SPLIT_RE.split(body_text or "") if x.strip()]
+    sentences = [x.strip() for x in _SENT_SPLIT_RE.split(body_text) if x.strip()]
 
     if not sentences:
-        base = (body_text or title).strip()
-        base = _DANGLING_ELLIPSIS_RE.sub("", base)
-        return base
+        return _tidy_end(body_text)
 
     # Rank sentences by score, but keep original order to preserve flow
-    scored: list[tuple[int, int, str]] = [( _score_sentence(title_kw, s), i, s) for i, s in enumerate(sentences)]
-    # Choose top N candidates by score, then re-order by original index
+    scored: list[tuple[int, int, str]] = [(_score_sentence(title_kw, s), i, s) for i, s in enumerate(sentences)]
     scored.sort(key=lambda x: (-x[0], x[1]))
-    top: set[int] = set(i for _, i, _ in scored[:8])  # cap pool size
+    top: set[int] = {i for _, i, _ in scored[:8]}  # cap pool size
 
     chosen: list[tuple[int, str]] = []
-    words = 0
-    # Walk original order, pick those in top until we hit targets
+    count = 0
     for i, s in enumerate(sentences):
         if i not in top:
             continue
         wc = len(s.split())
         if wc < 6:
             continue
-        if words < SUMMARY_MIN or (words + wc) <= SUMMARY_MAX:
+        if count < SUMMARY_MIN or (count + wc) <= SUMMARY_MAX:
             chosen.append((i, s))
-            words += wc
-        if words >= SUMMARY_MIN and words >= SUMMARY_TARGET:
+            count += wc
+        if count >= SUMMARY_MIN and count >= SUMMARY_TARGET:
             break
 
     if not chosen:
-        # Fallback: first informative sentence(s)
+        # Fallback: take first informative sentence
         for s in sentences:
-            wc = len(s.split())
-            if wc >= 6:
+            if len(s.split()) >= 6:
                 chosen = [(0, s)]
                 break
 
     chosen.sort(key=lambda x: x[0])
     summary = " ".join(s for _, s in chosen).strip()
 
-    # Cleanup tails and ensure it ends with punctuation
-    summary = _DANGLING_ELLIPSIS_RE.sub("", summary).strip()
-    if summary and summary[-1] not in ".!?":
-        summary += "."
-
-    # If we still exceed max by a lot, try to drop the last sentence
+    # Trim to max: drop the last sentence if far over
     if len(summary.split()) > SUMMARY_MAX and len(chosen) > 1:
         summary = " ".join(s for _, s in chosen[:-1]).strip()
-        summary = _DANGLING_ELLIPSIS_RE.sub("", summary).strip()
-        if summary and summary[-1] not in ".!?":
-            summary += "."
 
-    return _WS_RE.sub(" ", summary).strip()
+    return _WS_RE.sub(" ", _tidy_end(summary)).strip()
 
 def _detect_ott_provider(text: str) -> Optional[str]:
     m = OTT_RE.search(text or "")
@@ -354,7 +369,7 @@ def _detect_ott_provider(text: str) -> Optional[str]:
 
 INDUSTRY_ORDER = ["hollywood", "bollywood", "tollywood", "kollywood", "mollywood", "sandalwood"]
 
-# Suffix-based so subdomains work (e.g., gallery.123telugu.com)
+# Domain suffix map (subdomains OK)
 DOMAIN_TO_INDUSTRY = {
     # Hollywood trades & sites
     "variety.com": "hollywood",
