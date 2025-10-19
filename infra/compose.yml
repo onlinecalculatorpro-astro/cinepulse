@@ -12,6 +12,15 @@ x-app-env: &app_env
     TMDB_API_KEY: ${TMDB_API_KEY:-}
     FEED_KEY: ${FEED_KEY:-feed:items}
     SOURCES_FILE: /app/source.yml
+    # ---- new: API pagination + rate limits ----
+    BATCH_SIZE: ${BATCH_SIZE:-200}
+    RL_FEED_PER_MIN: ${RL_FEED_PER_MIN:-120}
+    RL_SEARCH_PER_MIN: ${RL_SEARCH_PER_MIN:-90}
+    RL_STORY_PER_MIN: ${RL_STORY_PER_MIN:-240}
+    # ---- new: worker summarization knobs ----
+    SUMMARY_TARGET_WORDS: ${SUMMARY_TARGET_WORDS:-85}
+    SUMMARY_MIN_WORDS: ${SUMMARY_MIN_WORDS:-60}
+    SUMMARY_MAX_WORDS: ${SUMMARY_MAX_WORDS:-110}
 
 x-logging: &default_logging
   driver: json-file
