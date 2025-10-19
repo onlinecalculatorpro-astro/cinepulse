@@ -122,10 +122,9 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _ELLIPSIS_TAIL_RE = re.compile(r"(\[\s*(?:…|\.{3})\s*\]\s*)+$")
 _DANGLING_ELLIPSIS_RE = re.compile(r"(?:…|\.{3})\s*$")
 
-# Conjunctions that should not end a summary
-_BAD_END_WORD = re.compile(
-    r"\b(?:and|but|or|so|because|since|although|though|while|as)\.?$", re.I
-)
+# Endings that look clipped (conjunctions, auxiliaries)
+_BAD_END_WORD = re.compile(r"\b(?:and|but|or|so|because|since|although|though|while|as)\.?$", re.I)
+_AUX_TAIL_RE = re.compile(r"\b(?:has|have|had|is|are|was|were|will|can|could|should|may|might|do|does|did)\b[\.…]*\s*$", re.I)
 
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
     if value is None:
@@ -296,9 +295,8 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
     return overlap * 2 + verb_bonus
 
 def _tidy_end(s: str) -> str:
-    """Remove dangling conjunctions/ellipses; ensure proper final punctuation."""
+    """Remove dangling ellipses / conjunctions; ensure final punctuation."""
     s = _DANGLING_ELLIPSIS_RE.sub("", s).strip()
-    # Drop trailing 'and.' / 'but.' / 'and' etc.
     s = _BAD_END_WORD.sub("", s).rstrip()
     if s and s[-1] not in ".!?":
         s += "."
@@ -310,14 +308,15 @@ def _select_sentences_for_summary(title: str, body_text: str) -> str:
     - If body is short → passthrough (cleaned)
     - Else choose best-scoring sentences (title keyword overlap)
     - Keep whole sentences; aim 60–110 words; professional ending
+    - Trim suspicious short tails like 'The distributor has had.'
     """
     body_text = (body_text or "").strip()
     if not body_text:
         return title.strip()
 
     # Short-story passthrough
-    words = body_text.split()
-    if len(words) <= PASSTHROUGH_MAX_WORDS and len(body_text) <= PASSTHROUGH_MAX_CHARS:
+    words_all = body_text.split()
+    if len(words_all) <= PASSTHROUGH_MAX_WORDS and len(body_text) <= PASSTHROUGH_MAX_CHARS:
         return _tidy_end(body_text)
 
     title_kw = set(w.lower() for w in re.findall(r"[A-Za-z0-9]+", title))
@@ -326,15 +325,15 @@ def _select_sentences_for_summary(title: str, body_text: str) -> str:
     if not sentences:
         return _tidy_end(body_text)
 
-    # Rank sentences by score, but keep original order to preserve flow
-    scored: list[tuple[int, int, str]] = [(_score_sentence(title_kw, s), i, s) for i, s in enumerate(sentences)]
+    # Rank sentences by score, keep a small pool; then select in original order
+    scored = [(_score_sentence(title_kw, s), i, s) for i, s in enumerate(sentences)]
     scored.sort(key=lambda x: (-x[0], x[1]))
-    top: set[int] = {i for _, i, _ in scored[:8]}  # cap pool size
+    pool_idx = {i for _, i, _ in scored[:10]}
 
     chosen: list[tuple[int, str]] = []
     count = 0
     for i, s in enumerate(sentences):
-        if i not in top:
+        if i not in pool_idx:
             continue
         wc = len(s.split())
         if wc < 6:
@@ -346,18 +345,27 @@ def _select_sentences_for_summary(title: str, body_text: str) -> str:
             break
 
     if not chosen:
-        # Fallback: take first informative sentence
         for s in sentences:
             if len(s.split()) >= 6:
                 chosen = [(0, s)]
                 break
 
     chosen.sort(key=lambda x: x[0])
+
+    # Drop a suspicious short tail (auxiliary-verb ending etc.)
+    while len(chosen) > 1:
+        tail = chosen[-1][1]
+        if len(tail.split()) < 8 or _AUX_TAIL_RE.search(tail):
+            chosen.pop()
+        else:
+            break
+
     summary = " ".join(s for _, s in chosen).strip()
 
-    # Trim to max: drop the last sentence if far over
-    if len(summary.split()) > SUMMARY_MAX and len(chosen) > 1:
-        summary = " ".join(s for _, s in chosen[:-1]).strip()
+    # If still over MAX, drop the last sentence rather than chopping words
+    while len(summary.split()) > SUMMARY_MAX and len(chosen) > 1:
+        chosen.pop()
+        summary = " ".join(s for _, s in chosen).strip()
 
     return _WS_RE.sub(" ", _tidy_end(summary)).strip()
 
