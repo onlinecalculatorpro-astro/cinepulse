@@ -1,4 +1,3 @@
-# apps/workers/jobs.py
 from __future__ import annotations
 
 import hashlib
@@ -6,8 +5,8 @@ import json
 import os
 import re
 import time as _time
-from datetime import datetime, timezone
-from typing import Optional, Union, TypedDict
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Union, TypedDict, Tuple
 from urllib.parse import urlparse
 
 import feedparser
@@ -16,9 +15,7 @@ from rq import Queue
 
 __all__ = ["youtube_rss_poll", "rss_poll", "normalize_event"]
 
-# ============================================================================
-# Redis / keys
-# ============================================================================
+# ============================ Redis / keys ============================
 
 def _redis() -> Redis:
     # redis://host:port/db
@@ -28,7 +25,7 @@ def _redis() -> Redis:
     )
 
 # Single source of truth for the app feed LIST key.
-# Keep default aligned with the API.
+# Keep default aligned with your API/health endpoint.
 FEED_KEY = os.getenv("FEED_KEY", "feed:items")   # LIST, newest-first
 SEEN_KEY = os.getenv("SEEN_KEY", "feed:seen")    # SET of story ids for dedupe
 
@@ -39,102 +36,72 @@ FEED_MAX = int(os.getenv("FEED_MAX", "1200"))
 YT_MAX_ITEMS = int(os.getenv("YT_MAX_ITEMS", "50"))
 RSS_MAX_ITEMS = int(os.getenv("RSS_MAX_ITEMS", "30"))
 
-# ============================================================================
-# Types
-# ============================================================================
+# =============================== Types ===============================
 
 class AdapterEventDict(TypedDict, total=False):
     source: str                  # "youtube" | "rss:<domain>"
     source_event_id: str         # unique per source (videoId | link hash)
     title: str
-    # incoming hint; final kind decided in normalize_event()
-    # trailer | ott | news | release | (legacy hints; we enrich/expand)
-    kind: str
+    kind: str                    # trailer | ott | news | release  (be conservative)
     published_at: Optional[str]  # RFC3339
     thumb_url: Optional[str]
-    payload: dict                # may include url, channelId, videoId, feed, etc.
+    payload: dict                # raw-ish fields we may use while normalizing
 
-# ============================================================================
-# Regex helpers (classification)
-# ============================================================================
+# =============================== Regexes =============================
 
-# Video/promos
-TRAILER_PAT     = re.compile(r"\b(trailer|teaser|glimpse|promo)\b", re.I)
-CLIP_PAT        = re.compile(r"\b(clip|tv\s*spot|scene|sneak\s*peek)\b", re.I)
-FEATURETTE_PAT  = re.compile(r"\b(featurette|behind\s+the\s+scenes|making\s+of|\bbts\b)\b", re.I)
-SONG_PAT        = re.compile(r"\b(song|lyric\s*video|audio\s*launch|single|title\s*track)\b", re.I)
-POSTER_PAT      = re.compile(r"\b(first\s*look|motion\s*poster|poster|title\s*reveal)\b", re.I)
+MONTH = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+ORD = r"(?:st|nd|rd|th)?"
+SP = r"[ ,.-]+"
 
-# Releases & schedule
-REL_ANNOUNCE_PAT = re.compile(
-    r"\b(announce[sd]?|set\s+to\s+(?:release|premiere)|slated\s+for|to\s+release|"
-    r"releases?\s+on|premieres?\s+on|coming\s+in|coming\s+on|opening\s+on|hits\s+theatres?)\b",
-    re.I,
-)
-SCHEDULE_CHANGE_PAT = re.compile(r"\b(postponed|pushed|advanced|preponed|shifted|rescheduled|delayed|moved)\b", re.I)
+TRAILER_RE = re.compile(r"\b(trailer|teaser)\b", re.I)
 
-# OTT platforms
-PLATFORM_PAT = re.compile(
-    r"\b("
-    r"Netflix|Prime\s*Video|Amazon\s*Prime(?:\s*Video)?|Disney\+\s*Hotstar|Hotstar|"
-    r"JioCinema|ZEE5|SonyLIV|Hulu|Max|Apple\s*TV\+|Paramount\+|Peacock|"
-    r"Lionsgate\s*Play|Aha|Sun\s*NXT|Hoichoi"
-    r")\b",
+# Strong theatrical-now signals (not just “will release”)
+THEATRICAL_NOW_RE = re.compile(
+    r"\b(now|opens?|hits?)\s+(in\s+)?(?:theatres?|theaters?|cinemas?)\b"
+    r"|in\s+(?:theatres?|theaters?|cinemas?)\s+(?:today|this\s+friday|this\s+weekend)",
     re.I,
 )
 
-# Production & business
-ANNOUNCEMENT_PAT    = re.compile(r"\b(announc(?:e|es|ed)|unveil(?:s|ed)|reveal(?:s|ed))\b", re.I)
-CASTING_PAT         = re.compile(r"\b(joins\s+cast|boards|cast\s+as|to\s+star|starring|roped\s+in|onboards?)\b", re.I)
-PROD_UPDATE_PAT     = re.compile(r"\b(shoot\s+begins|commenc(?:e|es)d?\s+shoot(?:ing)?|wrap(?:s|ped)|schedule\s+wrap|"
-                                 r"completed?\s+filming|principal\s+photography|dubbing|patchwork|kickstarts?)\b", re.I)
-ACQUISITION_PAT     = re.compile(r"\b(acquires?|acquired|rights|distribution|distributor|picked\s+up\s+by|sold\s+to)\b", re.I)
-CENSOR_PAT          = re.compile(r"\b(CBFC|censor|certificate|U\/A|U-A|U\/A|U|A\s+certificate)\b", re.I)
+# OTT hint
+OTT_RE = re.compile(
+    r"\b(netflix|prime\s*video|amazon\s*prime|disney\+?\s*hotstar|hotstar|zee5|jiocinema|sony\s*liv|hulu|apple\s*tv\+?)\b",
+    re.I,
+)
 
-# Reviews / performance / recognition
-REVIEW_PAT          = re.compile(r"\b(review|first\s+reactions?|our\s+take|rating|stars?\/\d)\b", re.I)
-BOXOFFICE_PAT       = re.compile(r"\b(box\s*office|collections?|opening|day\s*\d|weekend|lifetime|gross|nett|crore?s?)\b", re.I)
-AWARD_PAT           = re.compile(r"\b(nominat(?:ed|ions?)|wins?|best\s+(actor|actress|film|picture)|Oscars?|BAFTA|SIIMA|Filmfare)\b", re.I)
-FESTIVAL_PAT        = re.compile(r"\b(premieres?\s+at|festival|lineup|Cannes|Venice|TIFF|Sundance|IFFI|Berlinale)\b", re.I)
+# Generic “will release” marker
+RELEASE_TALK_RE = re.compile(
+    r"\b(release[sd]?|releasing|set\s+to\s+release|slated\s+to\s+release|to\s+hit\s+(?:theatres?|theaters?|cinemas?))\b",
+    re.I,
+)
 
-# People & soft news
-INTERVIEW_PAT       = re.compile(r"\b(interview|talks\s+about|speaks\s+about|Q&A)\b", re.I)
-OBITUARY_PAT        = re.compile(r"\b(passes\s+away|dies(?:\s+at)?|demise|RIP|no\s+more)\b", re.I)
-RUMOR_PAT           = re.compile(r"\b(reportedly|rumou?r(?:ed)?|speculation|buzz\s+is)\b", re.I)
+# Date patterns we try (month-first, day-first, and ISO)
+DATE_PATTERNS = [
+    # Oct 21, 2025  |  October 21, 2025
+    re.compile(rf"\b({MONTH}){SP}(\d{{1,2}}){ORD}(?:{SP}(\d{{4}}))?\b", re.I),
+    # 21 Oct 2025
+    re.compile(rf"\b(\d{{1,2}}){ORD}{SP}({MONTH})(?:{SP}(\d{{4}}))?\b", re.I),
+    # October 2025 (no day)
+    re.compile(rf"\b({MONTH})(?:{SP}(\d{{4}}))\b", re.I),
+    # ISO-like 2025-11-05
+    re.compile(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b"),
+]
 
-# Month words → number
-MONTHS = {
-    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
-    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
-    "aug": 8, "august": 8, "sep": 9, "september": 9, "oct": 10, "october": 10,
-    "nov": 11, "november": 11, "dec": 12, "december": 12,
+MONTH_MAP = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
 }
 
-# Light language hints by domain (best-effort)
-LANG_BY_DOMAIN = {
-    "123telugu.com": "te",
-    "telugu360.com": "te",
-    "greatandhra.com": "te",
-    "bollywoodhungama.com": "hi",
-    "variety.com": "en",
-    "hollywoodreporter.com": "en",
-    "deadline.com": "en",
-    "indiewire.com": "en",
-    "slashfilm.com": "en",
-}
-
-# ============================================================================
-# Utils
-# ============================================================================
-
-def _classify_from_title(title: str, fallback: str = "news") -> str:
-    """Legacy coarse classifier (still used as a weak hint in pollers)."""
-    t = title or ""
-    if TRAILER_PAT.search(t):
-        return "trailer"
-    if REL_ANNOUNCE_PAT.search(t):
-        return "release"
-    return fallback
+# =============================== Utils ===============================
 
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
     if value is None:
@@ -178,8 +145,9 @@ def _link_thumb(entry: dict) -> Optional[str]:
 def _safe_job_id(prefix: str, *parts: str) -> str:
     def clean(s: str) -> str:
         return re.sub(r"[^A-Za-z0-9_\-]+", "-", s).strip("-")
+    jid = "-join".replace("join", "").join([clean(prefix), *(clean(p) for p in parts if p)])
+    # simpler: just concatenate with hyphens
     jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)])
-    # RQ/Redis can handle long IDs, but keep it sane.
     return (jid or clean(prefix))[:200]
 
 def _domain(url: str) -> str:
@@ -191,198 +159,153 @@ def _domain(url: str) -> str:
 def _hash_link(link: str) -> str:
     return hashlib.sha1(link.encode("utf-8", "ignore")).hexdigest()
 
-def _source_domain_from(event_source: str) -> str:
-    if (event_source or "").startswith("rss:"):
-        return (event_source.split(":", 1)[1] or "rss").lower()
-    if event_source == "youtube":
-        return "youtube.com"
-    return "rss"
+def _month_to_int(name: str) -> Optional[int]:
+    return MONTH_MAP.get(name.lower())
 
-def _parse_release_date_from_title(title: str) -> Optional[str]:
-    """Extracts a YYYY-MM-DD from common title patterns. Month+Year -> day=01."""
-    t = (title or "").strip()
+# ---------------------- release info extraction ----------------------
 
-    # ISO-like: 2026-03-15
-    m = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", t)
+def _parse_release(text: str) -> Tuple[Optional[str], Optional[bool]]:
+    """
+    Try to extract a release date (RFC3339 midnight UTC) and a theatrical flag
+    from free text. Returns (release_date, is_theatrical).
+
+    * If only month+year is found -> day=01.
+    * is_theatrical is True only when strong theatre words are present.
+    """
+    if not text:
+        return None, None
+
+    theatrical = bool(THEATRICAL_NOW_RE.search(text)) or bool(
+        re.search(r"\b(in\s+(?:theatres?|theaters?|cinemas?)|theatrical)\b", text, re.I)
+    )
+
+    # ISO 2025-11-05
+    m = DATE_PATTERNS[3].search(text)
     if m:
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         try:
-            return datetime(y, mo, d, tzinfo=timezone.utc).strftime("%Y-%m-%d")
-        except Exception:
+            dt = datetime(y, mo, d, tzinfo=timezone.utc)
+            return _to_rfc3339(dt), theatrical or None
+        except ValueError:
             pass
 
-    # "March 15, 2026" or "Mar 15, 2026"
-    m = re.search(r"\b(?P<mon>[A-Za-z]{3,9})\s+(?P<day>\d{1,2}),?\s+(?P<year>20\d{2})\b", t)
+    # Oct 21, 2025  |  October 21, 2025
+    m = DATE_PATTERNS[0].search(text)
     if m:
-        mon = MONTHS.get(m.group("mon").lower())
-        if mon:
-            y, d = int(m.group("year")), int(m.group("day"))
+        mo_name, day_s, year_s = m.group(1), m.group(2), m.group(3)
+        mo = _month_to_int(mo_name)
+        if mo:
+            day = int(day_s)
+            year = int(year_s) if year_s else datetime.now(timezone.utc).year
             try:
-                return datetime(y, mon, d, tzinfo=timezone.utc).strftime("%Y-%m-%d")
-            except Exception:
+                dt = datetime(year, mo, day, tzinfo=timezone.utc)
+                return _to_rfc3339(dt), theatrical or None
+            except ValueError:
                 pass
 
-    # "March 2026" → day=1
-    m = re.search(r"\b(?P<mon>[A-Za-z]{3,9})\s+(?P<year>20\d{2})\b", t)
+    # 21 Oct 2025
+    m = DATE_PATTERNS[1].search(text)
     if m:
-        mon = MONTHS.get(m.group("mon").lower())
-        if mon:
-            y = int(m.group("year"))
+        day_s, mo_name, year_s = m.group(1), m.group(2), m.group(3)
+        mo = _month_to_int(mo_name)
+        if mo:
+            day = int(day_s)
+            year = int(year_s) if year_s else datetime.now(timezone.utc).year
             try:
-                return datetime(y, mon, 1, tzinfo=timezone.utc).strftime("%Y-%m-%d")
-            except Exception:
+                dt = datetime(year, mo, day, tzinfo=timezone.utc)
+                return _to_rfc3339(dt), theatrical or None
+            except ValueError:
                 pass
 
-    return None
+    # October 2025 (no day)
+    m = DATE_PATTERNS[2].search(text)
+    if m:
+        mo_name, year_s = m.group(1), m.group(2)
+        mo = _month_to_int(mo_name)
+        if mo:
+            year = int(year_s)
+            # default to 1st of month
+            dt = datetime(year, mo, 1, tzinfo=timezone.utc)
+            return _to_rfc3339(dt), theatrical or None
 
-def _enrich(title: str, kind_hint: str, domain: str) -> dict:
-    """
-    Return dict with:
-      kind, is_upcoming, is_theatrical, ott_platform, release_date, tags
-    """
+    return None, theatrical or None
+
+def _classify_from_title(title: str, fallback: str = "news") -> str:
+    """Conservative kind classifier (avoid false 'release')."""
     t = title or ""
-    tags = [f"source:{domain}"]
-    lang = LANG_BY_DOMAIN.get(domain)
-    if lang:
-        tags.append(f"lang:{lang}")
+    if TRAILER_RE.search(t):
+        return "trailer"
+    if OTT_RE.search(t):
+        return "ott"
+    # Only very strong signals should flip to 'release'
+    if THEATRICAL_NOW_RE.search(t):
+        return "release"
+    return fallback
 
-    # --- Strong video/promos first (specific beats generic) ---
-    if TRAILER_PAT.search(t):
-        return dict(kind="trailer", is_upcoming=True, is_theatrical=None,
-                    ott_platform=None, release_date=_parse_release_date_from_title(t), tags=tags)
-    if TE := CLIP_PAT.search(t):
-        return dict(kind="clip", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if FEATURETTE_PAT.search(t):
-        return dict(kind="featurette", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if SONG_PAT.search(t):
-        return dict(kind="song", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if POSTER_PAT.search(t):
-        return dict(kind="poster", is_upcoming=True, is_theatrical=None,
-                    ott_platform=None, release_date=_parse_release_date_from_title(t), tags=tags)
+# ===================== Normalizer (writes to feed) ====================
 
-    # --- Platforms / releases ---
-    plat_m = PLATFORM_PAT.search(t)
-    ott_platform = plat_m.group(1).strip() if plat_m else None
-    release_date = _parse_release_date_from_title(t)
-    is_releasey = bool(REL_ANNOUNCE_PAT.search(t) or release_date)
+def _enrich_release_fields(
+    title: str, payload: dict
+) -> Tuple[Optional[str], Optional[bool], Optional[bool]]:
+    """
+    Parse release info from title + any text in payload (e.g., summary).
+    Returns (release_date, is_theatrical, is_upcoming).
+    """
+    text = " ".join(
+        [
+            title or "",
+            str(payload.get("summary") or ""),
+            str(payload.get("description") or ""),
+        ]
+    )
 
-    if is_releasey:
-        if ott_platform:
-            tags += [f"platform:{ott_platform}", "channel:ott"]
-            return dict(kind="release-ott", is_upcoming=True, is_theatrical=False,
-                        ott_platform=ott_platform, release_date=release_date, tags=tags)
-        else:
-            tags += ["channel:theatrical"]
-            return dict(kind="release-theatrical", is_upcoming=True, is_theatrical=True,
-                        ott_platform=None, release_date=release_date, tags=tags)
+    rel_date, theatrical_flag = _parse_release(text)
 
-    if SCHEDULE_CHANGE_PAT.search(t):
-        tags += ["channel:theatrical"]
-        return dict(kind="schedule-change", is_upcoming=True, is_theatrical=True,
-                    ott_platform=None, release_date=release_date, tags=tags)
+    is_upcoming = None
+    if rel_date:
+        try:
+            dt = datetime.fromisoformat(rel_date.replace("Z", "+00:00"))
+            is_upcoming = dt > datetime.now(timezone.utc)
+        except Exception:
+            is_upcoming = None
 
-    # --- Production & business ---
-    if CASTING_PAT.search(t):
-        return dict(kind="casting", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if PROD_UPDATE_PAT.search(t):
-        return dict(kind="production-update", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if ACQUISITION_PAT.search(t):
-        if ott_platform:
-            tags += [f"platform:{ott_platform}", "channel:ott"]
-        return dict(kind="acquisition", is_upcoming=None, is_theatrical=None,
-                    ott_platform=ott_platform, release_date=None, tags=tags)
-    if CENSOR_PAT.search(t):
-        return dict(kind="censorship", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-
-    # --- Reviews / performance / recognition ---
-    if REVIEW_PAT.search(t):
-        return dict(kind="review", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if BOXOFFICE_PAT.search(t):
-        tags += ["channel:theatrical"]
-        return dict(kind="boxoffice", is_upcoming=None, is_theatrical=True,
-                    ott_platform=None, release_date=None, tags=tags)
-    if AWARD_PAT.search(t):
-        return dict(kind="award", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if FESTIVAL_PAT.search(t):
-        return dict(kind="festival", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-
-    # --- People & soft news ---
-    if INTERVIEW_PAT.search(t):
-        return dict(kind="interview", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if OBITUARY_PAT.search(t):
-        return dict(kind="obituary", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-    if RUMOR_PAT.search(t):
-        return dict(kind="rumor", is_upcoming=None, is_theatrical=None,
-                    ott_platform=None, release_date=None, tags=tags)
-
-    # --- Platform mention without release phrasing → OTT-aligned news ---
-    if ott_platform and (kind_hint or "news") != "trailer":
-        tags += [f"platform:{ott_platform}", "channel:ott"]
-        return dict(kind="ott", is_upcoming=None, is_theatrical=False,
-                    ott_platform=ott_platform, release_date=None, tags=tags)
-
-    # Fallback to hint or news
-    return dict(kind=(kind_hint or "news"), is_upcoming=None, is_theatrical=None,
-                ott_platform=None, release_date=None, tags=tags)
-
-# ============================================================================
-# Normalizer (writes to feed)
-# ============================================================================
+    return rel_date, theatrical_flag, is_upcoming
 
 def normalize_event(event: AdapterEventDict) -> dict:
     """
-    Convert adapter events into the canonical, enriched feed shape and append to
-    the Redis LIST (newest-first). Dedupes on <source>:<source_event_id>.
+    Converts adapter events into the canonical feed shape and appends to the
+    Redis LIST (newest-first). Dedupes on <source>:<source_event_id>.
     """
     conn = _redis()
 
     source = (event.get("source") or "src").strip()
     src_id = (event.get("source_event_id") or "").strip()
     story_id = f"{source}:{src_id}".strip(":")
-    kind_hint = (event.get("kind") or "news").strip()
+    # keep kind conservative; don't auto-upgrade to 'release'
+    kind = _classify_from_title(event.get("title") or "", fallback=(event.get("kind") or "news").strip())
     title = (event.get("title") or "").strip()
     published_at = _to_rfc3339(event.get("published_at"))
     thumb_url = event.get("thumb_url")
+    payload = event.get("payload") or {}
 
     if source == "youtube" and not thumb_url and src_id:
         thumb_url = f"https://i.ytimg.com/vi/{src_id}/hqdefault.jpg"
 
-    domain = _source_domain_from(source)
-    enrich = _enrich(title, kind_hint, domain)
-
-    # URL for "Open" buttons
-    payload = event.get("payload") or {}
-    url = payload.get("url")
-    if (not url) and (source == "youtube" and src_id):
-        url = f"https://www.youtube.com/watch?v={src_id}"
+    release_date, is_theatrical, is_upcoming = _enrich_release_fields(title, payload)
 
     story = {
         "id": story_id,
-        "kind": enrich["kind"],
+        "kind": kind,
         "title": title,
         "summary": None,
         "published_at": published_at,
         "source": source,
-        "source_domain": domain,
         "thumb_url": thumb_url,
-        "url": url,
-        "release_date": enrich.get("release_date"),
-        "is_upcoming": enrich.get("is_upcoming"),
-        "is_theatrical": enrich.get("is_theatrical"),
-        "ott_platform": enrich.get("ott_platform"),
-        "tags": enrich.get("tags") or [],
         "normalized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # enrichment
+        "release_date": release_date,
+        "is_theatrical": is_theatrical,
+        "is_upcoming": is_upcoming,
     }
 
     # Deduplicate on story id: only push if brand-new.
@@ -397,11 +320,9 @@ def normalize_event(event: AdapterEventDict) -> dict:
     print(f"[normalize_event] SKIP -> {story_id} (duplicate)")
     return story
 
-# ============================================================================
-# YouTube poller
-# ============================================================================
+# ========================== YouTube poller ===========================
 
-# Optional channel overrides (channel_id -> kind hint)
+# Optional channel overrides (channel_id -> kind)
 YOUTUBE_CHANNEL_KIND = {
     # "UCWOA1ZGywLbqmigxE4Qlvuw": "ott",      # Netflix (example)
     # "UCvC4D8onUfXzvjTOM-dBfEA": "trailer",  # Marvel (example)
@@ -444,7 +365,7 @@ def youtube_rss_poll(
         conn.setex(mod_key, 7 * 24 * 3600, str(_mktime(parsed.modified_parsed)))
 
     cutoff = _to_rfc3339(published_after)
-    q = Queue("default", connection=conn)
+    q = Queue("events", connection=conn)
     emitted = 0
 
     for entry in (parsed.entries or [])[:max_items]:
@@ -463,18 +384,19 @@ def youtube_rss_poll(
             continue
 
         # channel override > title regex fallback
-        kind_hint = YOUTUBE_CHANNEL_KIND.get(channel_id) or (
-            "trailer" if TRAILER_PAT.search(title) else "ott"
+        kind = YOUTUBE_CHANNEL_KIND.get(channel_id) or (
+            "trailer" if TRAILER_RE.search(title) else
+            "ott" if OTT_RE.search(title) else "news"
         )
 
         ev: AdapterEventDict = {
             "source": "youtube",
             "source_event_id": vid,
             "title": title,
-            "kind": kind_hint,
+            "kind": kind,
             "published_at": pub_norm,
             "thumb_url": None,  # computed in normalize if missing
-            "payload": {"channelId": channel_id, "videoId": vid},
+            "payload": {"channelId": channel_id, "videoId": vid, "summary": entry.get("summary", "")},
         }
 
         jid = _safe_job_id("normalize", ev["source"], ev["source_event_id"])
@@ -492,9 +414,7 @@ def youtube_rss_poll(
     print(f"[youtube_rss_poll] channel={channel_id} emitted={emitted}")
     return emitted
 
-# ============================================================================
-# Generic RSS poller
-# ============================================================================
+# ========================== Generic RSS poller =======================
 
 def rss_poll(
     url: str,
@@ -530,7 +450,7 @@ def rss_poll(
         conn.setex(mod_key, 7 * 24 * 3600, str(_mktime(parsed.modified_parsed)))
 
     source_domain = _domain(parsed.feed.get("link") or url)
-    q = Queue("default", connection=conn)
+    q = Queue("events", connection=conn)
     emitted = 0
 
     for entry in (parsed.entries or [])[:max_items]:
@@ -547,17 +467,21 @@ def rss_poll(
             or entry.get("updated")
         )
 
-        # legacy weak hint; final decision is in normalize_event()
-        kind_hint_local = _classify_from_title(title, fallback=kind_hint)
+        # Keep kind conservative (avoid false 'release')
+        kind = _classify_from_title(title, fallback=kind_hint)
 
         ev: AdapterEventDict = {
             "source": f"rss:{source_domain}",
             "source_event_id": src_id,
             "title": title,
-            "kind": kind_hint_local,
+            "kind": kind,
             "published_at": pub_norm,
             "thumb_url": _link_thumb(entry),
-            "payload": {"url": link, "feed": url},
+            "payload": {
+                "url": link,
+                "feed": url,
+                "summary": entry.get("summary", "") or entry.get("description", ""),
+            },
         }
 
         jid = _safe_job_id("normalize", "rss", source_domain, src_id[:10])
