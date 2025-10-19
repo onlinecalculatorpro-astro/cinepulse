@@ -159,8 +159,8 @@ def _link_thumb(entry: dict) -> Optional[str]:
 def _safe_job_id(prefix: str, *parts: str) -> str:
     def clean(s: str) -> str:
         return re.sub(r"[^A-Za-z0-9_\-]+", "-", s).strip("-")
-    jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)])
-    return (jid or clean(prefix))[:200]
+    jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)])[:200]
+    return jid or clean(prefix)
 
 def _domain(url: str) -> str:
     try:
@@ -173,16 +173,11 @@ def _hash_link(link: str) -> str:
 
 def _nearest_future(year: int, month: int, day: int | None) -> datetime:
     now = datetime.now(timezone.utc)
-    if day is None:
-        d = 1
-    else:
-        d = max(1, min(28, day))  # keep safe
-    # If year is 2-digit, expand (>=70 -> 1900s else 2000s)
+    d = 1 if day is None else max(1, min(28, day))
     if year < 100:
         year = 1900 + year if year >= 70 else 2000 + year
     candidate = datetime(year, month, d, tzinfo=timezone.utc)
     if candidate < now:
-        # If no year in text, push to next year
         if day is None or len(str(year)) <= 2:
             try:
                 candidate = datetime(year + 1, month, d, tzinfo=timezone.utc)
@@ -204,10 +199,8 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
 
     now = datetime.now(timezone.utc)
     is_theatrical = bool(THEATRE_RE.search(t))
-    # date candidates
     rd: Optional[datetime] = None
 
-    # 12 Nov 2025 / 12 November / 12 Nov
     m = DAY_MON_YR.search(t)
     if m:
         day = int(m.group(1))
@@ -215,7 +208,6 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
         yr  = int(m.group(3)) if m.group(3) else now.year
         rd = _nearest_future(yr, mon, day)
 
-    # Nov 12, 2025 / November 12
     if not rd:
         m = MON_DAY_YR.search(t)
         if m:
@@ -224,7 +216,6 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
             yr  = int(m.group(3)) if m.group(3) else now.year
             rd = _nearest_future(yr, mon, day)
 
-    # March 2026
     if not rd:
         m = MON_YR.search(t)
         if m:
@@ -232,7 +223,6 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
             yr  = int(m.group(2))
             rd = _nearest_future(yr, mon, 1)
 
-    # Fallbacks: phrases without explicit date still hint "upcoming"
     verb_release = bool(RELEASE_VERBS_RE.search(t))
     coming_flag  = bool(COMING_SOON_RE.search(t))
 
@@ -240,7 +230,6 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
     if rd:
         is_upcoming = rd > now
     else:
-        # No date, but language suggests future
         is_upcoming = coming_flag or verb_release
 
     iso = rd.strftime("%Y-%m-%dT%H:%M:%SZ") if rd else None
@@ -253,18 +242,14 @@ def _classify(title: str, fallback: str = "news") -> Tuple[str, Optional[str], O
     """
     t = title or ""
 
-    # Trailer takes precedence
     if TRAILER_RE.search(t):
         return ("trailer", None, None, False, False)
 
-    # OTT provider?
     m = OTT_RE.search(t)
     if m:
         provider = m.group(1)
-        # treat as OTT item
         return ("ott", None, provider, False, False)
 
-    # Theatrical / release style?
     rd_iso, is_theatrical, is_upcoming = _parse_release_from_title(t)
     if rd_iso or is_theatrical or is_upcoming:
         return ("release", rd_iso, None, is_theatrical, is_upcoming)
@@ -279,7 +264,6 @@ def _strip_html(s: str) -> str:
     s = html.unescape(s)
     s = _TAG_RE.sub(" ", s)
     s = _TIMESTAMP_RE.sub(" ", s)
-    # kill leftover brackets-only lines and boilerplate-y lead-ins
     lines = [ln.strip() for ln in s.splitlines()]
     keep: list[str] = []
     for ln in lines:
@@ -304,11 +288,9 @@ def _select_sentences_for_summary(title: str, body_text: str) -> str:
     chosen: list[str] = []
     words = 0
     for s in sentences:
-        # Skip microscopic or super long sentences
         wc = len(s.split())
         if wc < 6 or wc > 40:
             continue
-        # Prefer sentences that share words with the title
         overlap = len(title_kw.intersection(w.lower() for w in re.findall(r"[A-Za-z0-9]+", s)))
         score_ok = overlap >= 1 or len(chosen) == 0
         if score_ok:
@@ -318,17 +300,15 @@ def _select_sentences_for_summary(title: str, body_text: str) -> str:
             break
 
     if not chosen:
-        # Fallback to truncated body or title
         base = body_text.strip() or title.strip()
         chosen = [base]
 
-    # Join and clamp to max
     summary = " ".join(chosen)
     parts = summary.split()
     if len(parts) > SUMMARY_MAX:
         summary = " ".join(parts[:SUMMARY_MAX])
+        parts = summary.split()
 
-    # If still below min and we have more body, append tail up to min
     if len(parts) < SUMMARY_MIN:
         extra = body_text[len(summary):].strip()
         if extra:
@@ -336,7 +316,6 @@ def _select_sentences_for_summary(title: str, body_text: str) -> str:
             need = SUMMARY_MIN - len(parts)
             summary = summary + " " + " ".join(tail[:need])
 
-    # Normalize whitespace
     return _WS_RE.sub(" ", summary).strip()
 
 def _detect_ott_provider(text: str) -> Optional[str]:
@@ -371,26 +350,24 @@ def normalize_event(event: AdapterEventDict) -> dict:
     url = None
     source_domain = None
     raw_text = ""
+    ott_platform: Optional[str] = None
 
     if source == "youtube":
-        # Prefer explicit link, else build watch URL
         url = payload.get("watch_url") or (f"https://www.youtube.com/watch?v={src_id}" if src_id else None)
         source_domain = "youtube.com"
         desc = payload.get("description") or ""
         raw_text = _strip_html(desc)
-        # Also consider provider detection in description/title combo
         provider_detected = _detect_ott_provider(f"{title}\n{desc}")
         ott_platform = provider_from_title or provider_detected
     else:
         # rss:<domain>
         url = payload.get("url")
         source_domain = _domain(url or source.replace("rss:", ""))
-        # Gather text from RSS content/summary
-        raw_html = payload.get("description_html") or payload.get("content_html") or ""
+        raw_html = payload.get("content_html") or payload.get("description_html") or ""
         raw_sum = payload.get("summary") or ""
         body = raw_html or raw_sum
         raw_text = _strip_html(body)
-        ott_platform = provider_from_title  # RSS title usually has the cue
+        ott_platform = provider_from_title
 
     # Compose one short paragraph summary
     summary_text = _select_sentences_for_summary(title, raw_text)
@@ -594,11 +571,17 @@ def rss_poll(
 
         # Prefer full content HTML if present, else summary/description
         content_html = ""
-        if entry.get("content") and isinstance(entry.content, list) and entry.content:
-            first = entry.content[0]
+        content = entry.get("content")
+        if isinstance(content, list) and content:
+            first = content[0]
             if isinstance(first, dict):
                 content_html = first.get("value") or ""
-        description_html = entry.get("summary_detail", {}).get("value") or entry.get("summary") or entry.get("description") or ""
+        description_html = (
+            entry.get("summary_detail", {}).get("value")
+            or entry.get("summary")
+            or entry.get("description")
+            or ""
+        )
 
         ev: AdapterEventDict = {
             "source": f"rss:{source_domain}",
