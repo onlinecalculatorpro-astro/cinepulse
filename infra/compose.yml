@@ -3,7 +3,7 @@ name: cinepulse
 # ---------- shared anchors ----------
 x-app-env: &app_env
   env_file: [ ../.env ]
-  environment:
+  environment: &env_defaults
     TZ: ${TZ:-UTC}
     ENV: ${ENV:-prod}
     DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
@@ -47,10 +47,10 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - dbdata:/var/lib/postgresql/data
-    networks: [ app ]
+    networks: [app]
     logging: *default_logging
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d cinepulse" ]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -58,18 +58,19 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: [ "redis-server", "--appendonly", "yes" ]
+    command: ["redis-server","--appendonly","yes"]
     volumes:
       - redisdata:/data
-    networks: [ app ]
+    networks: [app]
     logging: *default_logging
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD","redis-cli","ping"]
       interval: 10s
       timeout: 3s
       retries: 5
 
   api:
+    <<: [*app_env, *hardened]
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -78,45 +79,42 @@ services:
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_healthy }
-    <<: *app_env
     environment:
-      <<: *app_env.environment
-      # API specific
+      <<: *env_defaults
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
       MAX_SCAN: ${MAX_SCAN:-400}
     volumes:
       - ./source.yml:/app/source.yml:ro
-    networks: [ app ]
+    networks: [app]
     ports:
       - "127.0.0.1:18000:8000"
-    command: >
-      gunicorn -k uvicorn.workers.UvicornWorker -w ${API_WORKERS:-2}
-      -b 0.0.0.0:8000 apps.api.app.main:app
-      --timeout 30 --keep-alive 5
-      --max-requests 1000 --max-requests-jitter 100
+    command:
+      [
+        "gunicorn",
+        "-k","uvicorn.workers.UvicornWorker",
+        "-w","${API_WORKERS:-2}",
+        "-b","0.0.0.0:8000",
+        "apps.api.app.main:app",
+        "--timeout","30",
+        "--keep-alive","5",
+        "--max-requests","1000",
+        "--max-requests-jitter","100"
+      ]
     healthcheck:
       test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import json,sys,urllib.request
-          try:
-              r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)
-              j=json.loads(r.read().decode('utf-8'))
-              ok = (r.status==200) and (j.get('status')=='ok') and isinstance(j.get('feed_len'),int)
-              sys.exit(0 if ok else 1)
-          except Exception:
-              sys.exit(1)
-          PY
+        [
+          "CMD-SHELL",
+          "python -c \"import json,sys,urllib.request; r=urllib.request.urlopen('http://localhost:8000/health',timeout=3); j=json.loads(r.read().decode()); sys.exit(0 if (r.status==200 and j.get('status')=='ok' and isinstance(j.get('feed_len'),int)) else 1)\""
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
     logging: *default_logging
     cpus: "0.50"
     mem_limit: "256m"
-    <<: *hardened
 
   worker:
+    <<: [*app_env, *hardened]
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -124,36 +122,30 @@ services:
     restart: unless-stopped
     depends_on:
       redis: { condition: service_healthy }
-    <<: *app_env
-    environment:
-      <<: *app_env.environment
     volumes:
       - ./source.yml:/app/source.yml:ro
-    networks: [ app ]
-    command: >
-      sh -lc 'rq worker -u "$${REDIS_URL:-redis://redis:6379/0}" events'
+    networks: [app]
+    command: ["sh","-lc","rq worker -u \"${REDIS_URL:-redis://redis:6379/0}\" events"]
     healthcheck:
       test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import os,sys
-          from redis import from_url
-          try:
-              from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()
-              sys.exit(0)
-          except Exception:
-              sys.exit(1)
-          PY
+        [
+          "CMD-SHELL",
+          "python -c \"import os,sys,redis; import traceback; "
+          "import sys as _s; "
+          "ok=0; "
+          "try: redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping(); ok=1 "
+          "except Exception: ok=0 "
+          "finally: _s.exit(0 if ok else 1)\""
+        ]
       interval: 20s
       timeout: 5s
       retries: 5
     logging: *default_logging
     cpus: "0.50"
     mem_limit: "256m"
-    <<: *hardened
 
   scheduler:
+    <<: [*app_env, *hardened]
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -161,9 +153,8 @@ services:
     restart: unless-stopped
     depends_on:
       redis: { condition: service_healthy }
-    <<: *app_env
     environment:
-      <<: *app_env.environment
+      <<: *env_defaults
       POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-15}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
       POLL_SPREAD_SEC: ${POLL_SPREAD_SEC:-2.0}
@@ -173,55 +164,44 @@ services:
       RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-200}
     volumes:
       - ./source.yml:/app/source.yml:ro
-    networks: [ app ]
-    command: python -m apps.scheduler.main
+    networks: [app]
+    command: ["python","-m","apps.scheduler.main"]
     healthcheck:
       test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import os,sys,time
-          from redis import from_url
-          try:
-              r = from_url(os.getenv('REDIS_URL','redis://redis:6379/0'))
-              r.ping()
-              sys.exit(0)
-          except Exception:
-              sys.exit(1)
-          PY
+        [
+          "CMD-SHELL",
+          "python -c \"import os,sys,redis; "
+          "ok=0; "
+          "try: redis.from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping(); ok=1 "
+          "except Exception: ok=0 "
+          "finally: sys.exit(0 if ok else 1)\""
+        ]
       interval: 30s
       timeout: 5s
       retries: 5
     logging: *default_logging
     cpus: "0.30"
     mem_limit: "256m"
-    <<: *hardened
 
   renderer:
+    <<: *hardened
     build:
       context: ..
       dockerfile: infra/Dockerfile
       target: renderer
     restart: unless-stopped
-    networks: [ app ]
+    networks: [app]
     ports:
       - "127.0.0.1:18100:8000"
     healthcheck:
       test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import urllib.request,sys
-          try:
-              r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)
-              sys.exit(0 if r.status==200 else 1)
-          except Exception:
-              sys.exit(1)
-          PY
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/health',timeout=3); sys.exit(0 if r.status==200 else 1)\""
+        ]
       interval: 20s
       timeout: 5s
       retries: 5
     logging: *default_logging
     cpus: "0.30"
     mem_limit: "256m"
-    <<: *hardened
