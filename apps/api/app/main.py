@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import os
 import json
+import time
 from enum import Enum
 from datetime import datetime, timezone
-from typing import List, Optional, Iterable
+from typing import List, Optional, Iterable, Tuple, Callable
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from urllib.parse import unquote
 
@@ -22,6 +25,12 @@ except Exception as e:  # pragma: no cover
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 FEED_KEY = os.getenv("FEED_KEY", "feed:items")      # LIST, index 0 = newest
 MAX_SCAN = int(os.getenv("MAX_SCAN", "400"))        # how deep search/detail can look
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "200"))    # lrange chunk size for scans
+
+# Rate limits (per IP)
+RL_FEED_PER_MIN = int(os.getenv("RL_FEED_PER_MIN", "120"))
+RL_SEARCH_PER_MIN = int(os.getenv("RL_SEARCH_PER_MIN", "90"))
+RL_STORY_PER_MIN = int(os.getenv("RL_STORY_PER_MIN", "240"))
 
 # small timeouts to avoid hanging requests when Redis has issues
 _redis_client = redis.from_url(
@@ -57,6 +66,17 @@ class FeedResponse(BaseModel):
     tab: str
     since: Optional[str] = None
     items: List[Story]
+    next_cursor: Optional[str] = None
+
+class SearchResponse(BaseModel):
+    q: str
+    items: List[Story]
+
+class ErrorBody(BaseModel):
+    ok: bool = False
+    status: int
+    error: str
+    message: str
 
 class FeedTab(str, Enum):
     all = "all"
@@ -67,7 +87,11 @@ class FeedTab(str, Enum):
 
 # ------------------------------ App / CORS -----------------------------------
 
-app = FastAPI(title="CinePulse API", version="0.2.1")
+app = FastAPI(
+    title="CinePulse API",
+    version="0.3.0",
+    description="Feed & story API for CinePulse with cursor pagination and basic rate limiting.",
+)
 
 _cors = os.getenv("CORS_ORIGINS", "*").strip()
 if _cors == "*":
@@ -85,6 +109,61 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+# ------------------------------ Error handlers -------------------------------
+
+def _json_error(status_code: int, err: str, msg: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content=ErrorBody(status=status_code, error=err, message=msg).model_dump(),
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exc_handler(_: Request, exc: HTTPException):
+    # Normalize FastAPI HTTP errors
+    detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+    return _json_error(exc.status_code, "http_error", detail)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exc_handler(_: Request, exc: RequestValidationError):
+    return _json_error(422, "validation_error", exc.errors().__repr__())
+
+@app.exception_handler(Exception)
+async def unhandled_exc_handler(_: Request, exc: Exception):
+    # Hide internals but keep a type hint
+    return _json_error(500, exc.__class__.__name__, "Internal server error")
+
+# ------------------------------ Rate limiting --------------------------------
+
+def _client_ip(req: Request) -> str:
+    # Respect common proxy headers; fall back to client host.
+    xff = req.headers.get("x-forwarded-for", "")
+    if xff:
+        # The first IP in the list is the original client
+        return xff.split(",")[0].strip()
+    return req.client.host if req.client else "unknown"
+
+def limiter(route: str, limit_per_min: int) -> Callable:
+    async def _limit_dep(req: Request):
+        ip = _client_ip(req)
+        now_bucket = int(time.time() // 60)
+        key = f"rl:{route}:{ip}:{now_bucket}"
+        try:
+            n = _redis_client.incr(key)
+            if n == 1:
+                _redis_client.expire(key, 65)  # 1 minute + small buffer
+            if n > limit_per_min:
+                # 429 with uniform error body
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded for {route}; try again shortly",
+                )
+        except redis.RedisError as e:
+            # If Redis limiter fails, we don't block the request—best effort.
+            # Optionally log e here.
+            _ = e
+            return
+    return _limit_dep
 
 # ------------------------------ Helpers --------------------------------------
 
@@ -120,18 +199,6 @@ def _redis_lrange(key: str, start: int, stop: int) -> list[str]:
     except Exception as e:
         # Bubble up as 503 so clients know it's transient infra
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
-
-def _load_feed_slice(n: int) -> list[dict]:
-    """Return up to n newest stories as dicts; skip bad JSON."""
-    raw = _redis_lrange(FEED_KEY, 0, max(0, n - 1))
-    out: list[dict] = []
-    for s in raw:
-        try:
-            out.append(json.loads(s))
-        except Exception:
-            # ignore corrupt entries
-            continue
-    return out
 
 def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
     raw = _redis_lrange(FEED_KEY, 0, max(0, max_items - 1))
@@ -191,6 +258,69 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     dt = _parse_iso(s)
     return bool(dt and dt >= since_dt)
 
+def _scan_with_cursor(
+    start_idx: int,
+    limit: int,
+    tab: FeedTab,
+    since: Optional[str],
+) -> Tuple[List[dict], Optional[int]]:
+    """
+    Scan the Redis LIST from start_idx forward (newest-first list),
+    apply filters, and collect up to `limit` items. We cap total scanned
+    rows per request at MAX_SCAN for safety.
+
+    Returns (items, next_cursor_index or None).
+    Cursor is the absolute Redis list index to resume from.
+    NOTE: New inserts at head may shift indices; cursors are best-effort.
+    """
+    try:
+        total_len = _redis_client.llen(FEED_KEY)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
+
+    if total_len is None:
+        total_len = 0
+
+    items: List[dict] = []
+    scanned = 0
+    idx = max(0, start_idx)
+
+    while len(items) < limit and idx < total_len and scanned < MAX_SCAN:
+        # Read a batch
+        batch_end = min(idx + BATCH_SIZE - 1, total_len - 1)
+        raw_batch = _redis_lrange(FEED_KEY, idx, batch_end)
+        if not raw_batch:
+            break
+
+        for offset, raw in enumerate(raw_batch):
+            pos = idx + offset
+            scanned += 1
+            try:
+                it = json.loads(raw)
+            except Exception:
+                continue
+
+            if since and not _is_since(it, since):
+                continue
+            if not _matches_tab(it, tab):
+                continue
+
+            items.append(it)
+            if len(items) >= limit:
+                next_cursor = pos + 1 if (pos + 1) < total_len else None
+                return (items, next_cursor)
+
+        idx = batch_end + 1  # move to next window
+
+        if scanned >= MAX_SCAN:
+            # We reached our scan budget; indicate where to continue
+            next_cursor = idx if idx < total_len else None
+            return (items, next_cursor)
+
+    # Exhausted or no more items
+    next_cursor = idx if idx < total_len else None
+    return (items, next_cursor)
+
 # ------------------------------ Endpoints ------------------------------------
 
 @app.get("/health")
@@ -212,48 +342,83 @@ def health():
         "error": err,
     }
 
-@app.get("/v1/feed", response_model=FeedResponse)
-def feed(
+@app.get(
+    "/v1/feed",
+    response_model=FeedResponse,
+    summary="Feed items",
+    description="Cursor-paginated feed. Newest-first (best-effort). Use the returned `next_cursor` to fetch the next page.",
+)
+async def feed(
+    request: Request,
     tab: FeedTab = Query(
         FeedTab.all,
         description="Tabs: all | trailers | ott | intheatres | comingsoon",
     ),
     since: Optional[str] = Query(
-        None, description="RFC3339; only items with date >= this time"
+        None, description="RFC3339; only items with date >= this time (checks release_date → published_at → normalized_at)"
+    ),
+    cursor: Optional[str] = Query(
+        None, description="Opaque cursor returned by the previous page; start from the beginning when omitted"
     ),
     limit: int = Query(20, ge=1, le=100),
+    _=Depends(limiter("feed", RL_FEED_PER_MIN)),
 ):
+    # Validate since
     if since is not None and _parse_iso(since) is None:
         raise HTTPException(status_code=422, detail="Invalid 'since' (use RFC3339, e.g. 2025-01-01T00:00:00Z)")
 
-    # Load extra so tab/since filters don't starve results
-    pool = _load_feed_slice(min(MAX_SCAN, limit * 4))
+    # Decode cursor (absolute list index); best-effort.
+    start_idx = 0
+    if cursor:
+        try:
+            start_idx = int(cursor)
+            if start_idx < 0:
+                start_idx = 0
+        except ValueError:
+            # Treat as invalid cursor -> start at 0
+            start_idx = 0
 
-    if since:
-        pool = [it for it in pool if _is_since(it, since)]
+    pool, next_idx = _scan_with_cursor(start_idx, limit, tab, since)
+    items = [Story(**it) for it in pool]
+    next_cursor = str(next_idx) if next_idx is not None else None
 
-    pool = [it for it in pool if _matches_tab(it, tab)]
+    return FeedResponse(tab=tab.value, since=since, items=items, next_cursor=next_cursor)
 
-    items = [Story(**it) for it in pool[:limit]]
-    return FeedResponse(tab=tab.value, since=since, items=items)
-
-@app.get("/v1/search")
-def search(
+@app.get(
+    "/v1/search",
+    response_model=SearchResponse,
+    summary="Substring search over title+summary",
+)
+async def search(
+    request: Request,
     q: str = Query(..., min_length=1),
     limit: int = Query(10, ge=1, le=50),
+    _=Depends(limiter("search", RL_SEARCH_PER_MIN)),
 ):
     ql = q.lower()
     res: list[dict] = []
+    scanned = 0
     for it in _iter_feed():
+        scanned += 1
         hay = f"{it.get('title','')} {(it.get('summary') or '')}".lower()
         if ql in hay:
             res.append(it)
             if len(res) >= limit:
                 break
-    return {"q": q, "items": [Story(**it) for it in res]}
+        if scanned >= MAX_SCAN:
+            break
+    return SearchResponse(q=q, items=[Story(**it) for it in res])
 
-@app.get("/v1/story/{story_id}", response_model=Story)
-def story_detail(story_id: str):
+@app.get(
+    "/v1/story/{story_id}",
+    response_model=Story,
+    summary="Story detail by ID",
+)
+async def story_detail(
+    request: Request,
+    story_id: str,
+    _=Depends(limiter("story", RL_STORY_PER_MIN)),
+):
     sid = unquote(story_id)
     for it in _iter_feed():
         if it.get("id") == sid:
