@@ -26,4 +26,4 @@ CMD ["python","-m","apps.scheduler.main"]
 # ---------- Renderer (optional) ----------
 FROM base AS renderer
 EXPOSE 8000
-CMD ["python","-m","apps.renderer.main"]
+CMD ["uvicorn","apps.renderer.main:app","--host","0.0.0.0","--port","8000"]
