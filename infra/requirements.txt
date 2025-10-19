@@ -1,8 +1,9 @@
 # === Web/API ===
 fastapi==0.115.5
 uvicorn[standard]==0.32.0
+gunicorn==22.0.0
 
-# === DB / ORM (adjust if you use others) ===
+# === DB / ORM (optional in current flow) ===
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
 
