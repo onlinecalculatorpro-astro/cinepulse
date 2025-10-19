@@ -81,8 +81,9 @@ services:
       retries: 5
 
   api:
-    <<: *app_env
-    <<: *hardened
+    <<:
+      - *app_env
+      - *hardened
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -130,8 +131,9 @@ services:
     mem_limit: "256m"
 
   worker:
-    <<: *app_env
-    <<: *hardened
+    <<:
+      - *app_env
+      - *hardened
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -167,8 +169,9 @@ services:
     mem_limit: "256m"
 
   scheduler:
-    <<: *app_env
-    <<: *hardened
+    <<:
+      - *app_env
+      - *hardened
     build:
       context: ..
       dockerfile: infra/Dockerfile
