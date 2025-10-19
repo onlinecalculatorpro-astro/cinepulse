@@ -7,8 +7,8 @@ import json
 import os
 import re
 import time as _time
-from datetime import datetime, timezone, timedelta
-from typing import Optional, Union, TypedDict, Tuple
+from datetime import datetime, timezone
+from typing import Optional, Union, TypedDict, Tuple, Iterable
 from urllib.parse import urlparse
 
 import feedparser
@@ -95,9 +95,6 @@ _MONTHS = {
 }
 
 # Date patterns:
-#  - 12 Nov 2025 / 12 November 2025 / 12 Nov
-#  - Nov 12, 2025 / November 12
-#  - March 2026
 _MN = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
 DAY_MON_YR = re.compile(rf"\b(\d{{1,2}})\s+({_MN})\s*(\d{{2,4}})?\b", re.I)
 MON_DAY_YR = re.compile(rf"\b({_MN})\s+(\d{{1,2}})(?:,\s*(\d{{2,4}}))?\b", re.I)
@@ -108,6 +105,7 @@ SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "85"))
 SUMMARY_MIN = int(os.getenv("SUMMARY_MIN_WORDS", "60"))
 SUMMARY_MAX = int(os.getenv("SUMMARY_MAX_WORDS", "110"))
 
+# Cleaning regexes
 _BOILERPLATE_RE = re.compile(
     r"^\s*(subscribe|follow|like|comment|share|credits?:|cast:|music by|original score|prod(?:uction)? by|"
     r"cinematograph(?:y)?|director:?|producer:?|©|copyright|http[s]?://|#\w+|the post .* appeared first on)\b",
@@ -116,6 +114,9 @@ _BOILERPLATE_RE = re.compile(
 _TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
 _WS_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")
+# Remove WordPress-style excerpt tails and dangling ellipses
+_ELLIPSIS_TAIL_RE = re.compile(r"(\[\s*(?:…|\.{3})\s*\]\s*)+$")
+_DANGLING_ELLIPSIS_RE = re.compile(r"(?:…|\.{3})\s*$")
 
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
     if value is None:
@@ -159,8 +160,8 @@ def _link_thumb(entry: dict) -> Optional[str]:
 def _safe_job_id(prefix: str, *parts: str) -> str:
     def clean(s: str) -> str:
         return re.sub(r"[^A-Za-z0-9_\-]+", "-", s).strip("-")
-    jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)])[:200]
-    return jid or clean(prefix)
+    jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)])
+    return (jid or clean(prefix))[:200]
 
 def _domain(url: str) -> str:
     try:
@@ -256,7 +257,7 @@ def _classify(title: str, fallback: str = "news") -> Tuple[str, Optional[str], O
 
     return (fallback, None, None, False, False)
 
-# ------------- Light content cleaning & summary builder --------------
+# ------------- Light content cleaning & CRUX summary builder ----------
 
 def _strip_html(s: str) -> str:
     if not s:
@@ -273,54 +274,141 @@ def _strip_html(s: str) -> str:
             continue
         keep.append(ln)
     s2 = " ".join(keep)
+    s2 = _ELLIPSIS_TAIL_RE.sub("", s2)
+    s2 = _DANGLING_ELLIPSIS_RE.sub("", s2)
     return _WS_RE.sub(" ", s2).strip()
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
 
+def _score_sentence(title_kw: set[str], s: str) -> int:
+    # Simple score: overlap with title keywords + prefer informative verbs
+    overlap = len(title_kw.intersection(w.lower() for w in re.findall(r"[A-Za-z0-9]+", s)))
+    verb_bonus = 1 if re.search(r"\b(is|are|was|were|has|have|had|will|to|set|announc\w+|releas\w+|premier\w+|exit\w+|walk\w+|cancel\w+|delay\w+)\b", s, re.I) else 0
+    return overlap * 2 + verb_bonus
+
 def _select_sentences_for_summary(title: str, body_text: str) -> str:
     """
-    Deterministic: choose the first sentences that carry info,
-    clamp to SUMMARY_MIN..SUMMARY_MAX words (aim SUMMARY_TARGET).
+    Build a one-paragraph crux:
+    - choose best-scoring sentences (title keyword overlap)
+    - keep whole sentences; aim 60–110 words; no trailing ellipses
     """
     title_kw = set(w.lower() for w in re.findall(r"[A-Za-z0-9]+", title))
-    sentences = [x.strip() for x in _SENT_SPLIT_RE.split(body_text) if x.strip()]
+    sentences = [x.strip() for x in _SENT_SPLIT_RE.split(body_text or "") if x.strip()]
 
-    chosen: list[str] = []
+    if not sentences:
+        base = (body_text or title).strip()
+        base = _DANGLING_ELLIPSIS_RE.sub("", base)
+        return base
+
+    # Rank sentences by score, but keep original order to preserve flow
+    scored: list[tuple[int, int, str]] = [( _score_sentence(title_kw, s), i, s) for i, s in enumerate(sentences)]
+    # Choose top N candidates by score, then re-order by original index
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    top: set[int] = set(i for _, i, _ in scored[:8])  # cap pool size
+
+    chosen: list[tuple[int, str]] = []
     words = 0
-    for s in sentences:
-        wc = len(s.split())
-        if wc < 6 or wc > 40:
+    # Walk original order, pick those in top until we hit targets
+    for i, s in enumerate(sentences):
+        if i not in top:
             continue
-        overlap = len(title_kw.intersection(w.lower() for w in re.findall(r"[A-Za-z0-9]+", s)))
-        score_ok = overlap >= 1 or len(chosen) == 0
-        if score_ok:
-            chosen.append(s)
+        wc = len(s.split())
+        if wc < 6:
+            continue
+        if words < SUMMARY_MIN or (words + wc) <= SUMMARY_MAX:
+            chosen.append((i, s))
             words += wc
-        if words >= SUMMARY_TARGET:
+        if words >= SUMMARY_MIN and words >= SUMMARY_TARGET:
             break
 
     if not chosen:
-        base = body_text.strip() or title.strip()
-        chosen = [base]
+        # Fallback: first informative sentence(s)
+        for s in sentences:
+            wc = len(s.split())
+            if wc >= 6:
+                chosen = [(0, s)]
+                break
 
-    summary = " ".join(chosen)
-    parts = summary.split()
-    if len(parts) > SUMMARY_MAX:
-        summary = " ".join(parts[:SUMMARY_MAX])
-        parts = summary.split()
+    chosen.sort(key=lambda x: x[0])
+    summary = " ".join(s for _, s in chosen).strip()
 
-    if len(parts) < SUMMARY_MIN:
-        extra = body_text[len(summary):].strip()
-        if extra:
-            tail = extra.split()
-            need = SUMMARY_MIN - len(parts)
-            summary = summary + " " + " ".join(tail[:need])
+    # Cleanup tails and ensure it ends with punctuation
+    summary = _DANGLING_ELLIPSIS_RE.sub("", summary).strip()
+    if summary and summary[-1] not in ".!?":
+        summary += "."
+
+    # If we still exceed max by a lot, try to drop the last sentence
+    if len(summary.split()) > SUMMARY_MAX and len(chosen) > 1:
+        summary = " ".join(s for _, s in chosen[:-1]).strip()
+        summary = _DANGLING_ELLIPSIS_RE.sub("", summary).strip()
+        if summary and summary[-1] not in ".!?":
+            summary += "."
 
     return _WS_RE.sub(" ", summary).strip()
 
 def _detect_ott_provider(text: str) -> Optional[str]:
     m = OTT_RE.search(text or "")
     return m.group(1) if m else None
+
+# -------------------------- Industry tagging --------------------------
+
+INDUSTRY_ORDER = ["hollywood", "bollywood", "tollywood", "kollywood", "mollywood", "sandalwood"]
+
+DOMAIN_TO_INDUSTRY = {
+    # Hollywood trades & sites
+    "variety.com": "hollywood",
+    "hollywoodreporter.com": "hollywood",
+    "deadline.com": "hollywood",
+    "indiewire.com": "hollywood",
+    "slashfilm.com": "hollywood",
+    "collider.com": "hollywood",
+    "vulture.com": "hollywood",
+
+    # India – segments
+    "bollywoodhungama.com": "bollywood",
+    "123telugu.com": "tollywood",
+    "greatandhra.com": "tollywood",
+    "onlykollywood.com": "kollywood",
+    "behindwoods.com": "kollywood",
+    "onmanorama.com": "mollywood",
+}
+
+KEYWORD_TO_INDUSTRY = [
+    (re.compile(r"\bbollywood\b|\bhindi\b", re.I), "bollywood"),
+    (re.compile(r"\btollywood\b|\btelugu\b", re.I), "tollywood"),
+    (re.compile(r"\bkollywood\b|\btamil\b", re.I), "kollywood"),
+    (re.compile(r"\bmollywood\b|\bmalayalam\b", re.I), "mollywood"),
+    (re.compile(r"\bsandalwood\b|\bkannada\b", re.I), "sandalwood"),
+    (re.compile(r"\bhollywood\b", re.I), "hollywood"),
+]
+
+# Optional: known YT channels → industry (extend as needed)
+YOUTUBE_CHANNEL_TAG = {
+    # "UCWOA1ZGywLbqmigxE4Qlvuw": "hollywood",  # Netflix
+}
+
+def _industry_tags(source: str, source_domain: Optional[str], title: str, body_text: str, payload: dict) -> list[str]:
+    cand = set()
+    dom = (source_domain or "").lower()
+
+    # Domain-based
+    tag = DOMAIN_TO_INDUSTRY.get(dom)
+    if tag:
+        cand.add(tag)
+
+    # Keywords from title + body
+    hay = f"{title}\n{body_text or ''}"
+    for rx, t in KEYWORD_TO_INDUSTRY:
+        if rx.search(hay):
+            cand.add(t)
+
+    # YouTube channel overrides
+    if source == "youtube":
+        ch = (payload or {}).get("channelId")
+        if ch and ch in YOUTUBE_CHANNEL_TAG:
+            cand.add(YOUTUBE_CHANNEL_TAG[ch])
+
+    return [t for t in INDUSTRY_ORDER if t in cand]
 
 # ===================== Normalizer (writes to feed) ====================
 
@@ -369,8 +457,11 @@ def normalize_event(event: AdapterEventDict) -> dict:
         raw_text = _strip_html(body)
         ott_platform = provider_from_title
 
-    # Compose one short paragraph summary
+    # Compose one short paragraph "crux"
     summary_text = _select_sentences_for_summary(title, raw_text)
+
+    # Industry tags
+    tags = _industry_tags(source, source_domain, title, raw_text, payload)
 
     story = {
         "id": story_id,
@@ -389,6 +480,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "url": url,
         "source_domain": source_domain,
         "ott_platform": ott_platform,
+        "tags": tags or None,
     }
 
     # Deduplicate on story id: only push if brand-new.
