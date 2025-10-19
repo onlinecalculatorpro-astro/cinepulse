@@ -8,7 +8,7 @@ import os
 import re
 import time as _time
 from datetime import datetime, timezone
-from typing import Optional, Union, TypedDict, Tuple, Iterable
+from typing import Optional, Union, TypedDict, Tuple
 from urllib.parse import urlparse
 
 import feedparser
@@ -354,6 +354,7 @@ def _detect_ott_provider(text: str) -> Optional[str]:
 
 INDUSTRY_ORDER = ["hollywood", "bollywood", "tollywood", "kollywood", "mollywood", "sandalwood"]
 
+# Suffix-based so subdomains work (e.g., gallery.123telugu.com)
 DOMAIN_TO_INDUSTRY = {
     # Hollywood trades & sites
     "variety.com": "hollywood",
@@ -366,11 +367,24 @@ DOMAIN_TO_INDUSTRY = {
 
     # India – segments
     "bollywoodhungama.com": "bollywood",
+    "koimoi.com": "bollywood",
+    "filmfare.com": "bollywood",
+    "pinkvilla.com": "bollywood",
+
     "123telugu.com": "tollywood",
+    "telugu360.com": "tollywood",
     "greatandhra.com": "tollywood",
+    "gulte.com": "tollywood",
+    "cinejosh.com": "tollywood",
+
     "onlykollywood.com": "kollywood",
     "behindwoods.com": "kollywood",
+    "galatta.com": "kollywood",
+
     "onmanorama.com": "mollywood",
+    "manoramaonline.com": "mollywood",
+
+    "chitraloka.com": "sandalwood",
 }
 
 KEYWORD_TO_INDUSTRY = [
@@ -391,10 +405,11 @@ def _industry_tags(source: str, source_domain: Optional[str], title: str, body_t
     cand = set()
     dom = (source_domain or "").lower()
 
-    # Domain-based
-    tag = DOMAIN_TO_INDUSTRY.get(dom)
-    if tag:
-        cand.add(tag)
+    # Domain suffix-based
+    for suffix, tag in DOMAIN_TO_INDUSTRY.items():
+        if dom.endswith(suffix):
+            cand.add(tag)
+            break
 
     # Keywords from title + body
     hay = f"{title}\n{body_text or ''}"
