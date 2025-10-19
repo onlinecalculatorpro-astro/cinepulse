@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 /// Domain model representing a single feed item/story.
 ///
 /// - Accepts snake_case and camelCase from the server
-/// - Safe parsing for dates/ints
+/// - Safe parsing for dates/ints/bools
 /// - Immutable list fields
 /// - Fallback ID if backend omits one
 /// - Handy derived helpers for UI (meta, flags, images)
@@ -74,9 +74,14 @@ class Story {
       final ms = isMillis ? v : v * 1000;
       return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
     }
-    if (v is String && v.trim().isNotEmpty) {
+    if (v is String) {
+      final s = v.trim();
+      if (s.isEmpty) return null;
       try {
-        return DateTime.parse(v).toUtc();
+        // Allow trailing Z or explicit offsets.
+        return DateTime.parse(
+          s.endsWith('Z') ? s : s,
+        ).toUtc();
       } catch (_) {
         return null;
       }
@@ -89,6 +94,18 @@ class Story {
     if (v is int) return v;
     if (v is num) return v.toInt();
     if (v is String) return int.tryParse(v.trim());
+    return null;
+  }
+
+  static bool? _parseBool(dynamic v) {
+    if (v == null) return null;
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    if (v is String) {
+      final s = v.trim().toLowerCase();
+      if (s.isEmpty) return null;
+      return s == 'true' || s == '1' || s == 'yes';
+    }
     return null;
   }
 
@@ -115,10 +132,9 @@ class Story {
 
   static String _fallbackId(Map<String, dynamic> j, DateTime? publishedAt) {
     // If source is YouTube, try to synthesize "youtube:<id>"
+    final src = (j['source'] ?? j['sourceName'] ?? '').toString().toLowerCase();
     final youtubeId = (j['youtube_id'] ?? j['video_id'])?.toString();
-    if ((j['source']?.toString().toLowerCase() ?? '') == 'youtube' &&
-        youtubeId != null &&
-        youtubeId.isNotEmpty) {
+    if (src == 'youtube' && youtubeId != null && youtubeId.isNotEmpty) {
       return 'youtube:$youtubeId';
     }
     // Otherwise a stable-ish generated id
@@ -151,14 +167,16 @@ class Story {
 
     dynamic _read(dynamic a, [String? b]) => j[a] ?? (b != null ? j[b] : null);
 
-    final publishedRaw = _read('published_at', 'publishedAt');
-    final releaseRaw = _read('release_date', 'releaseDate');
+    final publishedRaw  = _read('published_at', 'publishedAt');
+    final releaseRaw    = _read('release_date', 'releaseDate');
     final normalizedRaw = _read('normalized_at', 'normalizedAt');
-    final langsRaw = _read('languages', 'language') ?? _read('langs');
+
+    final langsRaw  = _read('languages', 'language') ?? _read('langs');
     final genresRaw = _read('genres', 'genre');
-    final tagsRaw = _read('tags', 'tag');
+    final tagsRaw   = _read('tags', 'tag');
+
     final theatrical = _read('is_theatrical', 'isTheatrical');
-    final upcoming = _read('is_upcoming', 'isUpcoming');
+    final upcoming   = _read('is_upcoming', 'isUpcoming');
 
     final published = _parseDate(publishedRaw);
     final idRaw = _readS('id');
@@ -195,8 +213,8 @@ class Story {
       thumbUrl: _readSOpt('thumb_url', 'thumbUrl'),
       posterUrl: _readSOpt('poster_url', 'posterUrl'),
 
-      isTheatricalFlag: theatrical is bool ? theatrical : null,
-      isUpcomingFlag: upcoming is bool ? upcoming : null,
+      isTheatricalFlag: _parseBool(theatrical),
+      isUpcomingFlag: _parseBool(upcoming),
     );
   }
 
@@ -229,14 +247,32 @@ class Story {
 
   /* ------------------------------ derived helpers ------------------------------ */
 
-  /// YouTube video id if this is a YouTube story ("youtube:<videoId>").
+  /// YouTube video id if this represents a YouTube video.
+  /// - Prefer "youtube:<videoId>" in `id`
+  /// - Else try to parse from `url` when it points to YouTube
   String? get youtubeVideoId {
+    // From ID prefix
     if ((source ?? '').toLowerCase() == 'youtube') {
       final p = id.split(':');
       if (p.length >= 2 && p.first == 'youtube' && p.last.isNotEmpty) {
         return p.last;
       }
     }
+    // From URL
+    final u = url;
+    if (u == null || u.isEmpty) return null;
+    try {
+      final uri = Uri.parse(u);
+      final host = uri.host.toLowerCase();
+      if (host.contains('youtube.com')) {
+        // watch?v=VIDEOID
+        final v = uri.queryParameters['v'];
+        if (v != null && v.isNotEmpty) return v;
+      } else if (host.contains('youtu.be')) {
+        final seg = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : '';
+        if (seg.isNotEmpty) return seg;
+      }
+    } catch (_) {}
     return null;
   }
 
