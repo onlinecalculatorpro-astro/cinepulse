@@ -18,14 +18,18 @@ class Story {
 
   final DateTime? publishedAt;  // RFC3339 → DateTime UTC
   final DateTime? releaseDate;  // theatrical/OTT release date
+  final DateTime? normalizedAt; // server ingest time (optional)
 
   final String? source;         // e.g. "youtube"
-  final String? ottPlatform;    // e.g. "netflix", "prime"
+  final String? url;            // canonical/watch URL
+  final String? sourceDomain;   // e.g. "youtube.com" / "variety.com"
+  final String? ottPlatform;    // e.g. "Netflix", "Prime Video"
   final String? ratingCert;     // e.g. "U", "U/A", "A"
 
   final int? runtimeMinutes;    // duration if known
   final List<String> languages; // immutable
   final List<String> genres;    // immutable
+  final List<String> tags;      // immutable
 
   final String? thumbUrl;       // small image (card/list)
   final String? posterUrl;      // larger image (detail)
@@ -42,18 +46,23 @@ class Story {
     this.summary,
     this.publishedAt,
     this.releaseDate,
+    this.normalizedAt,
     this.source,
+    this.url,
+    this.sourceDomain,
     this.ottPlatform,
     this.ratingCert,
     this.runtimeMinutes,
     List<String>? languages,
     List<String>? genres,
+    List<String>? tags,
     this.thumbUrl,
     this.posterUrl,
     this.isTheatricalFlag,
     this.isUpcomingFlag,
   })  : languages = _immutable(languages ?? const <String>[]),
-        genres = _immutable(genres ?? const <String>[]);
+        genres = _immutable(genres ?? const <String>[]),
+        tags = _immutable(tags ?? const <String>[]);
 
   /* ----------------------------- parsing helpers ----------------------------- */
 
@@ -118,6 +127,18 @@ class Story {
     return 'gen:${title.hashCode}@$ts';
   }
 
+  static String? _domainFromUrl(String? u) {
+    if (u == null || u.trim().isEmpty) return null;
+    try {
+      final uri = Uri.parse(u);
+      var host = uri.host;
+      if (host.startsWith('www.')) host = host.substring(4);
+      return host.isEmpty ? null : host;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Accepts both snake_case and camelCase keys.
   factory Story.fromJson(Map<String, dynamic> j) {
     String _readS(String a, [String? b]) =>
@@ -132,8 +153,10 @@ class Story {
 
     final publishedRaw = _read('published_at', 'publishedAt');
     final releaseRaw = _read('release_date', 'releaseDate');
+    final normalizedRaw = _read('normalized_at', 'normalizedAt');
     final langsRaw = _read('languages', 'language') ?? _read('langs');
     final genresRaw = _read('genres', 'genre');
+    final tagsRaw = _read('tags', 'tag');
     final theatrical = _read('is_theatrical', 'isTheatrical');
     final upcoming = _read('is_upcoming', 'isUpcoming');
 
@@ -144,21 +167,30 @@ class Story {
     final kindRaw = _readS('kind');
     final kindEffective = kindRaw.isNotEmpty ? kindRaw : 'news';
 
+    final url = _readSOpt('url');
+    final sourceDomainRaw = _readSOpt('source_domain', 'sourceDomain');
+    final sourceDomain = sourceDomainRaw ?? _domainFromUrl(url);
+
     return Story(
       id: idEffective,
       kind: kindEffective,
       title: _readS('title'),
       summary: _readSOpt('summary'),
+
       publishedAt: published,
       releaseDate: _parseDate(releaseRaw),
+      normalizedAt: _parseDate(normalizedRaw),
 
       source: _readSOpt('source'),
+      url: url,
+      sourceDomain: sourceDomain,
       ottPlatform: _readSOpt('ott_platform', 'ottPlatform'),
       ratingCert: _readSOpt('rating_cert', 'ratingCert'),
 
       runtimeMinutes: _parseInt(_read('runtime_minutes', 'runtimeMinutes')),
       languages: _parseStringList(langsRaw),
       genres: _parseStringList(genresRaw),
+      tags: _parseStringList(tagsRaw),
 
       thumbUrl: _readSOpt('thumb_url', 'thumbUrl'),
       posterUrl: _readSOpt('poster_url', 'posterUrl'),
@@ -178,12 +210,17 @@ class Story {
           'published_at': publishedAt!.toUtc().toIso8601String(),
         if (releaseDate != null)
           'release_date': releaseDate!.toUtc().toIso8601String(),
+        if (normalizedAt != null)
+          'normalized_at': normalizedAt!.toUtc().toIso8601String(),
         if (source != null) 'source': source,
+        if (url != null) 'url': url,
+        if (sourceDomain != null) 'source_domain': sourceDomain,
         if (ottPlatform != null) 'ott_platform': ottPlatform,
         if (ratingCert != null) 'rating_cert': ratingCert,
         if (runtimeMinutes != null) 'runtime_minutes': runtimeMinutes,
         if (languages.isNotEmpty) 'languages': languages,
         if (genres.isNotEmpty) 'genres': genres,
+        if (tags.isNotEmpty) 'tags': tags,
         if (thumbUrl != null) 'thumb_url': thumbUrl,
         if (posterUrl != null) 'poster_url': posterUrl,
         if (isTheatricalFlag != null) 'is_theatrical': isTheatricalFlag,
@@ -268,12 +305,16 @@ class Story {
     String? summary,
     DateTime? publishedAt,
     DateTime? releaseDate,
+    DateTime? normalizedAt,
     String? source,
+    String? url,
+    String? sourceDomain,
     String? ottPlatform,
     String? ratingCert,
     int? runtimeMinutes,
     List<String>? languages,
     List<String>? genres,
+    List<String>? tags,
     String? thumbUrl,
     String? posterUrl,
     bool? isTheatricalFlag,
@@ -286,12 +327,16 @@ class Story {
       summary: summary ?? this.summary,
       publishedAt: publishedAt ?? this.publishedAt,
       releaseDate: releaseDate ?? this.releaseDate,
+      normalizedAt: normalizedAt ?? this.normalizedAt,
       source: source ?? this.source,
+      url: url ?? this.url,
+      sourceDomain: sourceDomain ?? this.sourceDomain,
       ottPlatform: ottPlatform ?? this.ottPlatform,
       ratingCert: ratingCert ?? this.ratingCert,
       runtimeMinutes: runtimeMinutes ?? this.runtimeMinutes,
       languages: languages ?? this.languages,
       genres: genres ?? this.genres,
+      tags: tags ?? this.tags,
       thumbUrl: thumbUrl ?? this.thumbUrl,
       posterUrl: posterUrl ?? this.posterUrl,
       isTheatricalFlag: isTheatricalFlag ?? this.isTheatricalFlag,
