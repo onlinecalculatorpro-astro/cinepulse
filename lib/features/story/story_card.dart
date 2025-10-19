@@ -12,7 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
-import '../../core/models.dart';
+import '../../core/models.dart'; // Story + storyVideoUrl
 import '../../core/utils.dart';
 import 'story_details.dart';
 import 'ott_badge.dart';
@@ -21,14 +21,14 @@ class StoryCard extends StatelessWidget {
   const StoryCard({super.key, required this.story});
   final Story story;
 
-  // ----------------------------------------------------------------------------
-  // URL + CTA helpers
-  // ----------------------------------------------------------------------------
+  /* --------------------------- URL + CTA helpers --------------------------- */
+
+  Uri? get _videoUrl => storyVideoUrl(story);
 
   /// Prefer a playable video URL; otherwise fall back to canonical `story.url`.
   Uri? get _linkUrl {
-    final Uri? video = storyVideoUrl(story);
-    if (video != null) return video;
+    final v = _videoUrl;
+    if (v != null) return v;
 
     final raw = (story.url ?? '').trim();
     if (raw.isEmpty) return null;
@@ -47,9 +47,7 @@ class StoryCard extends StatelessWidget {
 
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
-  // ----------------------------------------------------------------------------
-  // Actions
-  // ----------------------------------------------------------------------------
+  /* -------------------------------- Actions -------------------------------- */
 
   Future<void> _openLink(BuildContext context) async {
     final url = _linkUrl;
@@ -73,8 +71,7 @@ class StoryCard extends StatelessWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content:
-              Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
         ),
       );
     } catch (_) {
@@ -91,9 +88,7 @@ class StoryCard extends StatelessWidget {
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: story)));
   }
 
-  // ----------------------------------------------------------------------------
-  // Display helpers
-  // ----------------------------------------------------------------------------
+  /* ------------------------------ Display bits ----------------------------- */
 
   String _metaLine() {
     // Context (in theatres/coming soon/ott/news)
@@ -130,16 +125,9 @@ class StoryCard extends StatelessWidget {
     return parts.join(' • ');
   }
 
-  /// First ~24 words from summary as a one-line teaser.
-  String _teaser() {
-    final s = (story.summary ?? '').trim();
-    if (s.isEmpty) return '';
-    final words = s.split(RegExp(r'\s+'));
-    if (words.length <= 24) return s;
-    return '${words.take(24).join(' ')}…';
-  }
-
   String _titleCase(String s) => s.isEmpty ? s : (s[0].toUpperCase() + s.substring(1));
+
+  /* ---------------------------------- UI ----------------------------------- */
 
   @override
   Widget build(BuildContext context) {
@@ -147,7 +135,6 @@ class StoryCard extends StatelessWidget {
     final width = MediaQuery.of(context).size.width;
     final isMobileColumn = width < 520;
     final metaText = _metaLine();
-    final teaser = _teaser();
     final hasUrl = _linkUrl != null;
 
     final child = InkWell(
@@ -159,7 +146,6 @@ class StoryCard extends StatelessWidget {
             ? _VerticalCard(
                 story: story,
                 metaText: metaText,
-                teaser: teaser,
                 isWatchCta: _isWatchCta,
                 hasUrl: hasUrl,
                 ctaLabel: _ctaLabel,
@@ -169,7 +155,6 @@ class StoryCard extends StatelessWidget {
             : _HorizontalCard(
                 story: story,
                 metaText: metaText,
-                teaser: teaser,
                 isWatchCta: _isWatchCta,
                 hasUrl: hasUrl,
                 ctaLabel: _ctaLabel,
@@ -200,7 +185,6 @@ class _VerticalCard extends StatelessWidget {
   const _VerticalCard({
     required this.story,
     required this.metaText,
-    required this.teaser,
     required this.isWatchCta,
     required this.hasUrl,
     required this.ctaLabel,
@@ -210,7 +194,6 @@ class _VerticalCard extends StatelessWidget {
 
   final Story story;
   final String metaText;
-  final String teaser;
   final bool isWatchCta;
   final bool hasUrl;
   final String ctaLabel;
@@ -299,18 +282,6 @@ class _VerticalCard extends StatelessWidget {
             ),
           ],
         ),
-        if (teaser.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text(
-            teaser,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: scheme.onSurface,
-                  height: 1.3,
-                ),
-          ),
-        ],
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
@@ -328,7 +299,6 @@ class _HorizontalCard extends StatelessWidget {
   const _HorizontalCard({
     required this.story,
     required this.metaText,
-    required this.teaser,
     required this.isWatchCta,
     required this.hasUrl,
     required this.ctaLabel,
@@ -338,7 +308,6 @@ class _HorizontalCard extends StatelessWidget {
 
   final Story story;
   final String metaText;
-  final String teaser;
   final bool isWatchCta;
   final bool hasUrl;
   final String ctaLabel;
@@ -428,26 +397,14 @@ class _HorizontalCard extends StatelessWidget {
                   ),
                 ],
               ),
-              if (teaser.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  teaser,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: scheme.onSurface,
-                        height: 1.3,
-                      ),
-                ),
-              ],
               const SizedBox(height: 10),
               Align(
                 alignment: Alignment.centerLeft,
                 child: FilledButton.icon(
                   onPressed: hasUrl ? onPrimaryAction : null, // disabled if no link
-                  icon: Icon(isWatchCta
-                      ? Icons.play_arrow_rounded
-                      : Icons.open_in_new_rounded),
+                  icon: Icon(
+                    isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded,
+                  ),
                   label: Text(ctaLabel),
                 ),
               ),
