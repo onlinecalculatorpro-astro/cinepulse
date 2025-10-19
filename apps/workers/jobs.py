@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -101,6 +102,20 @@ _MN = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:
 DAY_MON_YR = re.compile(rf"\b(\d{{1,2}})\s+({_MN})\s*(\d{{2,4}})?\b", re.I)
 MON_DAY_YR = re.compile(rf"\b({_MN})\s+(\d{{1,2}})(?:,\s*(\d{{2,4}}))?\b", re.I)
 MON_YR     = re.compile(rf"\b({_MN})\s+(\d{{4}})\b", re.I)
+
+# -------- Summary policy (one short paragraph) --------
+SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "85"))
+SUMMARY_MIN = int(os.getenv("SUMMARY_MIN_WORDS", "60"))
+SUMMARY_MAX = int(os.getenv("SUMMARY_MAX_WORDS", "110"))
+
+_BOILERPLATE_RE = re.compile(
+    r"^\s*(subscribe|follow|like|comment|share|credits?:|cast:|music by|original score|prod(?:uction)? by|"
+    r"cinematograph(?:y)?|director:?|producer:?|©|copyright|http[s]?://|#\w+|the post .* appeared first on)\b",
+    re.I,
+)
+_TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
+_WS_RE = re.compile(r"\s+")
+_TAG_RE = re.compile(r"<[^>]+>")
 
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
     if value is None:
@@ -256,6 +271,78 @@ def _classify(title: str, fallback: str = "news") -> Tuple[str, Optional[str], O
 
     return (fallback, None, None, False, False)
 
+# ------------- Light content cleaning & summary builder --------------
+
+def _strip_html(s: str) -> str:
+    if not s:
+        return ""
+    s = html.unescape(s)
+    s = _TAG_RE.sub(" ", s)
+    s = _TIMESTAMP_RE.sub(" ", s)
+    # kill leftover brackets-only lines and boilerplate-y lead-ins
+    lines = [ln.strip() for ln in s.splitlines()]
+    keep: list[str] = []
+    for ln in lines:
+        if not ln:
+            continue
+        if _BOILERPLATE_RE.search(ln):
+            continue
+        keep.append(ln)
+    s2 = " ".join(keep)
+    return _WS_RE.sub(" ", s2).strip()
+
+_SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
+
+def _select_sentences_for_summary(title: str, body_text: str) -> str:
+    """
+    Deterministic: choose the first sentences that carry info,
+    clamp to SUMMARY_MIN..SUMMARY_MAX words (aim SUMMARY_TARGET).
+    """
+    title_kw = set(w.lower() for w in re.findall(r"[A-Za-z0-9]+", title))
+    sentences = [x.strip() for x in _SENT_SPLIT_RE.split(body_text) if x.strip()]
+
+    chosen: list[str] = []
+    words = 0
+    for s in sentences:
+        # Skip microscopic or super long sentences
+        wc = len(s.split())
+        if wc < 6 or wc > 40:
+            continue
+        # Prefer sentences that share words with the title
+        overlap = len(title_kw.intersection(w.lower() for w in re.findall(r"[A-Za-z0-9]+", s)))
+        score_ok = overlap >= 1 or len(chosen) == 0
+        if score_ok:
+            chosen.append(s)
+            words += wc
+        if words >= SUMMARY_TARGET:
+            break
+
+    if not chosen:
+        # Fallback to truncated body or title
+        base = body_text.strip() or title.strip()
+        chosen = [base]
+
+    # Join and clamp to max
+    summary = " ".join(chosen)
+    parts = summary.split()
+    if len(parts) > SUMMARY_MAX:
+        summary = " ".join(parts[:SUMMARY_MAX])
+
+    # If still below min and we have more body, append tail up to min
+    if len(parts) < SUMMARY_MIN:
+        extra = body_text[len(summary):].strip()
+        if extra:
+            tail = extra.split()
+            need = SUMMARY_MIN - len(parts)
+            summary = summary + " " + " ".join(tail[:need])
+
+    # Normalize whitespace
+    return _WS_RE.sub(" ", summary).strip()
+
+def _detect_ott_provider(text: str) -> Optional[str]:
+    m = OTT_RE.search(text or "")
+    return m.group(1) if m else None
+
 # ===================== Normalizer (writes to feed) ====================
 
 def normalize_event(event: AdapterEventDict) -> dict:
@@ -272,18 +359,47 @@ def normalize_event(event: AdapterEventDict) -> dict:
 
     # base classification (use adapter hint as fallback)
     base_fallback = (event.get("kind") or "news").strip()
-    kind, rd_iso, _provider, is_theatrical, is_upcoming = _classify(title, fallback=base_fallback)
+    kind, rd_iso, provider_from_title, is_theatrical, is_upcoming = _classify(title, fallback=base_fallback)
 
     published_at = _to_rfc3339(event.get("published_at"))
     thumb_url = event.get("thumb_url")
     if source == "youtube" and not thumb_url and src_id:
         thumb_url = f"https://i.ytimg.com/vi/{src_id}/hqdefault.jpg"
 
+    # Build text inputs for summary + canonical URL/domain
+    payload = event.get("payload") or {}
+    url = None
+    source_domain = None
+    raw_text = ""
+
+    if source == "youtube":
+        # Prefer explicit link, else build watch URL
+        url = payload.get("watch_url") or (f"https://www.youtube.com/watch?v={src_id}" if src_id else None)
+        source_domain = "youtube.com"
+        desc = payload.get("description") or ""
+        raw_text = _strip_html(desc)
+        # Also consider provider detection in description/title combo
+        provider_detected = _detect_ott_provider(f"{title}\n{desc}")
+        ott_platform = provider_from_title or provider_detected
+    else:
+        # rss:<domain>
+        url = payload.get("url")
+        source_domain = _domain(url or source.replace("rss:", ""))
+        # Gather text from RSS content/summary
+        raw_html = payload.get("description_html") or payload.get("content_html") or ""
+        raw_sum = payload.get("summary") or ""
+        body = raw_html or raw_sum
+        raw_text = _strip_html(body)
+        ott_platform = provider_from_title  # RSS title usually has the cue
+
+    # Compose one short paragraph summary
+    summary_text = _select_sentences_for_summary(title, raw_text)
+
     story = {
         "id": story_id,
         "kind": kind,
         "title": title,
-        "summary": None,
+        "summary": summary_text or None,
         "published_at": published_at,
         "source": source,
         "thumb_url": thumb_url,
@@ -292,6 +408,10 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "is_theatrical": True if is_theatrical else None,
         "is_upcoming": True if is_upcoming else None,
         "normalized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # new enrichments used by API/UI
+        "url": url,
+        "source_domain": source_domain,
+        "ott_platform": ott_platform,
     }
 
     # Deduplicate on story id: only push if brand-new.
@@ -376,6 +496,16 @@ def youtube_rss_poll(
         else:
             kind = "trailer" if TRAILER_RE.search(title) else "ott" if OTT_RE.search(title) else "news"
 
+        # Description: media_description or summary
+        yt_desc = (
+            entry.get("media_description")
+            or entry.get("summary")
+            or entry.get("subtitle")
+            or ""
+        )
+
+        watch_url = entry.get("link") or f"https://www.youtube.com/watch?v={vid}"
+
         ev: AdapterEventDict = {
             "source": "youtube",
             "source_event_id": vid,
@@ -383,7 +513,12 @@ def youtube_rss_poll(
             "kind": kind,
             "published_at": pub_norm,
             "thumb_url": None,  # computed in normalize if missing
-            "payload": {"channelId": channel_id, "videoId": vid},
+            "payload": {
+                "channelId": channel_id,
+                "videoId": vid,
+                "description": yt_desc,
+                "watch_url": watch_url,
+            },
         }
 
         jid = _safe_job_id("normalize", ev["source"], ev["source_event_id"])
@@ -457,6 +592,14 @@ def rss_poll(
         # classify with hint as fallback
         kind, _, _, _, _ = _classify(title, fallback=kind_hint)
 
+        # Prefer full content HTML if present, else summary/description
+        content_html = ""
+        if entry.get("content") and isinstance(entry.content, list) and entry.content:
+            first = entry.content[0]
+            if isinstance(first, dict):
+                content_html = first.get("value") or ""
+        description_html = entry.get("summary_detail", {}).get("value") or entry.get("summary") or entry.get("description") or ""
+
         ev: AdapterEventDict = {
             "source": f"rss:{source_domain}",
             "source_event_id": src_id,
@@ -464,7 +607,13 @@ def rss_poll(
             "kind": kind,
             "published_at": pub_norm,
             "thumb_url": _link_thumb(entry),
-            "payload": {"url": link, "feed": url},
+            "payload": {
+                "url": link,
+                "feed": url,
+                "content_html": content_html,
+                "description_html": description_html,
+                "summary": entry.get("summary") or "",
+            },
         }
 
         jid = _safe_job_id("normalize", "rss", source_domain, src_id[:10])
