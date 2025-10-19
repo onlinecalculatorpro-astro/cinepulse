@@ -8,7 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // deepLinkForStoryId
+import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
@@ -18,22 +18,40 @@ class StoryDetailsScreen extends StatelessWidget {
   const StoryDetailsScreen({super.key, required this.story});
   final Story story;
 
+  // -- URL helpers ------------------------------------------------------------
+
+  /// Prefer a playable video URL; fallback to canonical URL if present.
+  Uri? get _linkUrl {
+    final Uri? video = storyVideoUrl(story);
+    if (video != null) return video;
+
+    final String? raw = (story.url ?? '').trim();
+    if (raw.isEmpty) return null;
+    final Uri? parsed = Uri.tryParse(raw);
+    if (parsed == null || !(parsed.isScheme('http') || parsed.isScheme('https'))) return null;
+    return parsed;
+  }
+
   bool get _isWatchCta {
+    final host = _linkUrl?.host?.toLowerCase() ?? '';
     final kind = story.kind.toLowerCase();
     final source = (story.source ?? '').toLowerCase();
-    return kind == 'trailer' || source == 'youtube';
+    final isYoutube = host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
+    return isYoutube || kind == 'trailer';
   }
 
-  Uri? get _videoUrl => storyVideoUrl(story);
+  String _ctaLabel() => _isWatchCta ? 'Watch' : 'Read';
 
-  // Prefer deep link (opens inside app). Fallback to video URL if available.
   String _shareText() {
+    // Prefer deep link (keeps users inside app). Fallback to the external link.
     final deep = deepLinkForStoryId(story.id).toString();
-    return deep.isNotEmpty ? deep : (_videoUrl?.toString() ?? story.title);
-  }
+    if (deep.isNotEmpty) return deep;
+    final link = _linkUrl?.toString();
+    return (link != null && link.isNotEmpty) ? link : story.title;
+    }
 
   Future<void> _openExternal(BuildContext context) async {
-    final url = _videoUrl;
+    final url = _linkUrl;
     if (url == null) return; // Button disabled in UI when null
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
@@ -66,12 +84,14 @@ class StoryDetailsScreen extends StatelessWidget {
     }
   }
 
+  // -- Meta line --------------------------------------------------------------
+
   String _metaLine() {
     final String ctx;
     if (story.isTheatrical) {
       ctx = story.isUpcoming ? 'Coming soon' : 'In theatres';
     } else {
-      ctx = story.kind.toLowerCase() == 'ott' ? 'OTT' : story.kind;
+      ctx = story.kind.toLowerCase() == 'ott' ? 'OTT' : _titleCase(story.kind);
     }
 
     final DateTime? d = story.releaseDate ?? story.publishedAt;
@@ -96,10 +116,14 @@ class StoryDetailsScreen extends StatelessWidget {
     if ((story.ratingCert ?? '').isNotEmpty) extras.add(story.ratingCert!);
     if ((story.runtimeMinutes ?? 0) > 0) extras.add('${story.runtimeMinutes}m');
 
-    final parts = <String>[]; // Platform is shown via OttBadge
+    // Append source domain if available (e.g., variety.com / youtube.com)
+    final String sourceDomain = (story.sourceDomain ?? '').trim();
+
+    final parts = <String>[];
     if (ctx.isNotEmpty) parts.add(ctx);
     if (dateText.isNotEmpty) parts.add(dateText);
     if (extras.isNotEmpty) parts.add(extras.join(' • '));
+    if (sourceDomain.isNotEmpty) parts.add(sourceDomain);
     return parts.join(' • ');
   }
 
@@ -110,7 +134,7 @@ class StoryDetailsScreen extends StatelessWidget {
     final s = Theme.of(context).colorScheme;
     final onSurface = s.onSurface;
     final isPhone = MediaQuery.of(context).size.width < 600;
-    final hasUrl = _videoUrl != null;
+    final hasUrl = _linkUrl != null;
 
     return Scaffold(
       body: CustomScrollView(
@@ -148,8 +172,7 @@ class StoryDetailsScreen extends StatelessWidget {
             ],
             flexibleSpace: FlexibleSpaceBar(
               collapseMode: CollapseMode.parallax,
-              titlePadding:
-                  const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
+              titlePadding: const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
               stretchModes: const [StretchMode.zoomBackground, StretchMode.blurBackground],
               background: _HeaderHero(story: story),
             ),
@@ -194,7 +217,7 @@ class StoryDetailsScreen extends StatelessWidget {
 
                       const SizedBox(height: 16),
 
-                      // Summary
+                      // Summary (single short paragraph)
                       if ((story.summary ?? '').isNotEmpty)
                         Text(
                           story.summary!,
@@ -223,14 +246,14 @@ class StoryDetailsScreen extends StatelessWidget {
                         children: [
                           Semantics(
                             button: true,
-                            label: _isWatchCta ? 'Watch' : 'Open',
+                            label: _ctaLabel(),
                             enabled: hasUrl,
                             child: FilledButton.icon(
                               onPressed: hasUrl ? () => _openExternal(context) : null,
                               icon: Icon(_isWatchCta
                                   ? Icons.play_arrow_rounded
                                   : Icons.open_in_new_rounded),
-                              label: Text(_isWatchCta ? 'Watch' : 'Open'),
+                              label: Text(_ctaLabel()),
                             ),
                           ),
                           const SizedBox(width: 12),
