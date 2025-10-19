@@ -33,12 +33,17 @@ class Story(BaseModel):
     published_at: Optional[str] = None  # RFC3339 (UTC)
     source: Optional[str] = None
     thumb_url: Optional[str] = None
-    # optional extras if present in feed items; keep loose
+
+    # --- New (enriched) optional fields exposed by the worker ---
+    url: Optional[str] = None
+    source_domain: Optional[str] = None
     poster_url: Optional[str] = None
-    release_date: Optional[str] = None
+    release_date: Optional[str] = None            # YYYY-MM-DD when known
     is_theatrical: Optional[bool] = None
     is_upcoming: Optional[bool] = None
-
+    ott_platform: Optional[str] = None
+    tags: Optional[List[str]] = None
+    normalized_at: Optional[str] = None
 
 class FeedResponse(BaseModel):
     tab: str
@@ -47,7 +52,7 @@ class FeedResponse(BaseModel):
 
 # ------------------------------ App / CORS -----------------------------------
 
-app = FastAPI(title="CinePulse API", version="0.1.0")
+app = FastAPI(title="CinePulse API", version="0.2.0")
 
 _cors = os.getenv("CORS_ORIGINS", "*").strip()
 if _cors == "*":
@@ -67,6 +72,17 @@ else:
     )
 
 # ------------------------------ Helpers --------------------------------------
+
+# Buckets for the UI tabs
+TRAILER_KINDS = {
+    "trailer", "teaser", "clip", "featurette", "song", "poster",
+}
+OTT_ALIGNED_KINDS = {
+    "release-ott", "ott", "acquisition",
+}
+THEATRICAL_KINDS = {
+    "release-theatrical", "schedule-change", "re-release", "boxoffice",
+}
 
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
     """Parse RFC3339/ISO8601 into UTC-aware datetime."""
@@ -107,25 +123,44 @@ def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
 
 
 def _matches_tab(item: dict, tab: str) -> bool:
-    """Tab filter: all | trailers | ott | intheatres | comingsoon"""
+    """
+    Tab filter:
+      - all
+      - trailers  (trailer|teaser|clip|featurette|song|poster)
+      - ott       (release-ott|ott|acquisition OR is_theatrical == False OR has ott_platform)
+      - intheatres(release-theatrical|schedule-change|re-release|boxoffice OR is_theatrical == True)
+      - comingsoon(release_date in future OR is_upcoming == True)
+    """
     t = (tab or "all").lower()
     if t in ("all", ""):
         return True
 
     kind = (item.get("kind") or "").lower()
-    if t in ("trailers", "trailer"):
-        return kind == "trailer"
-    if t == "ott":
-        return kind == "ott"
 
-    # Best-effort theatrical classification
+    if t in ("trailers", "trailer"):
+        return kind in TRAILER_KINDS
+
+    if t == "ott":
+        return (
+            kind in OTT_ALIGNED_KINDS
+            or item.get("is_theatrical") is False
+            or bool(item.get("ott_platform"))
+        )
+
     if t == "intheatres":
-        return kind == "release" or item.get("is_theatrical") is True
+        return (
+            kind in THEATRICAL_KINDS
+            or item.get("is_theatrical") is True
+        )
 
     if t == "comingsoon":
+        # Prefer explicit is_upcoming if present, else future release_date
+        if item.get("is_upcoming") is True:
+            return True
         rd = _parse_iso(item.get("release_date"))
         return bool(rd and rd > datetime.now(timezone.utc))
 
+    # Fallback: include (acts like "all")
     return True
 
 
@@ -148,13 +183,17 @@ def health():
     return {
         "status": "ok",
         "redis": REDIS_URL,
+        "feed_key": FEED_KEY,
         "feed_len": r.llen(FEED_KEY),  # list length
     }
 
 
 @app.get("/v1/feed", response_model=FeedResponse)
 def feed(
-    tab: str = Query("all", description="all | trailers | ott | intheatres | comingsoon"),
+    tab: str = Query(
+        "all",
+        description="Tabs: all | trailers | ott | intheatres | comingsoon",
+    ),
     since: Optional[str] = Query(None, description="RFC3339; only items >= this time"),
     limit: int = Query(20, ge=1, le=100),
 ):
