@@ -8,9 +8,9 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
+import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
-import '../../core/models.dart';
+import '../../core/models.dart'; // Story + storyVideoUrl
 import '../../core/utils.dart';
 import 'ott_badge.dart';
 
@@ -18,41 +18,44 @@ class StoryDetailsScreen extends StatelessWidget {
   const StoryDetailsScreen({super.key, required this.story});
   final Story story;
 
-  // -- URL helpers ------------------------------------------------------------
+  /* ------------------------------ URL helpers ------------------------------ */
 
-  /// Prefer a playable video URL; fallback to canonical URL if present.
-  Uri? get _linkUrl {
-    final Uri? video = storyVideoUrl(story);
-    if (video != null) return video;
+  Uri? get _videoUrl => storyVideoUrl(story);
 
-    final String? raw = (story.url ?? '').trim();
+  Uri? get _canonicalUrl {
+    final raw = (story.url ?? '').trim();
     if (raw.isEmpty) return null;
-    final Uri? parsed = Uri.tryParse(raw);
-    if (parsed == null || !(parsed.isScheme('http') || parsed.isScheme('https'))) return null;
-    return parsed;
+    final u = Uri.tryParse(raw);
+    if (u == null) return null;
+    if (!(u.isScheme('http') || u.isScheme('https'))) return null;
+    return u;
   }
 
+  /// Primary link preference: playable video if available, else article URL.
+  Uri? get _primaryUrl => _videoUrl ?? _canonicalUrl;
+
   bool get _isWatchCta {
-    final host = _linkUrl?.host?.toLowerCase() ?? '';
+    final host = _primaryUrl?.host?.toLowerCase() ?? '';
     final kind = story.kind.toLowerCase();
     final source = (story.source ?? '').toLowerCase();
-    final isYoutube = host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
+    final isYoutube =
+        host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
     return isYoutube || kind == 'trailer';
   }
 
   String _ctaLabel() => _isWatchCta ? 'Watch' : 'Read';
 
   String _shareText() {
-    // Prefer deep link (keeps users inside app). Fallback to the external link.
+    // Prefer deep link (keeps users inside app). Fallback to the primary link.
     final deep = deepLinkForStoryId(story.id).toString();
     if (deep.isNotEmpty) return deep;
-    final link = _linkUrl?.toString();
+    final link = _primaryUrl?.toString();
     return (link != null && link.isNotEmpty) ? link : story.title;
-    }
+  }
 
-  Future<void> _openExternal(BuildContext context) async {
-    final url = _linkUrl;
-    if (url == null) return; // Button disabled in UI when null
+  Future<void> _openPrimary(BuildContext context) async {
+    final url = _primaryUrl;
+    if (url == null) return;
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context)
@@ -84,7 +87,7 @@ class StoryDetailsScreen extends StatelessWidget {
     }
   }
 
-  // -- Meta line --------------------------------------------------------------
+  /* --------------------------------- meta ---------------------------------- */
 
   String _metaLine() {
     final String ctx;
@@ -116,7 +119,6 @@ class StoryDetailsScreen extends StatelessWidget {
     if ((story.ratingCert ?? '').isNotEmpty) extras.add(story.ratingCert!);
     if ((story.runtimeMinutes ?? 0) > 0) extras.add('${story.runtimeMinutes}m');
 
-    // Append source domain if available (e.g., variety.com / youtube.com)
     final String sourceDomain = (story.sourceDomain ?? '').trim();
 
     final parts = <String>[];
@@ -129,12 +131,14 @@ class StoryDetailsScreen extends StatelessWidget {
 
   String _titleCase(String s) => s.isEmpty ? s : (s[0].toUpperCase() + s.substring(1));
 
+  /* --------------------------------- UI ------------------------------------ */
+
   @override
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
     final onSurface = s.onSurface;
     final isPhone = MediaQuery.of(context).size.width < 600;
-    final hasUrl = _linkUrl != null;
+    final hasPrimary = _primaryUrl != null;
 
     return Scaffold(
       body: CustomScrollView(
@@ -172,7 +176,8 @@ class StoryDetailsScreen extends StatelessWidget {
             ],
             flexibleSpace: FlexibleSpaceBar(
               collapseMode: CollapseMode.parallax,
-              titlePadding: const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
+              titlePadding:
+                  const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
               stretchModes: const [StretchMode.zoomBackground, StretchMode.blurBackground],
               background: _HeaderHero(story: story),
             ),
@@ -241,22 +246,24 @@ class StoryDetailsScreen extends StatelessWidget {
 
                       const SizedBox(height: 20),
 
-                      // Actions
+                      // Single primary CTA + Share + Save
                       Row(
                         children: [
                           Semantics(
                             button: true,
                             label: _ctaLabel(),
-                            enabled: hasUrl,
+                            enabled: hasPrimary,
                             child: FilledButton.icon(
-                              onPressed: hasUrl ? () => _openExternal(context) : null,
-                              icon: Icon(_isWatchCta
-                                  ? Icons.play_arrow_rounded
-                                  : Icons.open_in_new_rounded),
+                              onPressed: hasPrimary ? () => _openPrimary(context) : null,
+                              icon: Icon(
+                                _isWatchCta
+                                    ? Icons.play_arrow_rounded
+                                    : Icons.open_in_new_rounded,
+                              ),
                               label: Text(_ctaLabel()),
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 10),
                           OutlinedButton.icon(
                             onPressed: () => _share(context),
                             icon: const Icon(Icons.ios_share),
