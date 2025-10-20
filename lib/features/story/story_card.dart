@@ -74,7 +74,9 @@ class _StoryCardState extends State<StoryCard> {
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
+        SnackBar(
+          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+        ),
       );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
@@ -90,29 +92,44 @@ class _StoryCardState extends State<StoryCard> {
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
   }
 
-  // Leading for CTA: ▶ (Material icon) for watch, 📖 emoji for read
+  // Leading for CTA: ▶ for watch, 📖 for read
   Widget _ctaLeading() {
     if (_isWatchCta) {
       return const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white);
     }
     return const _Emoji(emoji: '📖', size: 18);
+  }
+
+  // Remove the kind prefix like "News •", "Release •", "Trailer •", "OTT •"
+  String _stripKindPrefix(String meta, String kind) {
+    final prefixes = ['news', 'release', 'trailer', 'ott'];
+    var out = meta;
+    for (final p in prefixes) {
+      final re = RegExp(r'^\s*' + RegExp.escape(p) + r'\s*•\s*', caseSensitive: false);
+      out = out.replaceFirst(re, '');
     }
+    return out.trim();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final metaText = widget.story.metaLine;
-    final hasUrl = _linkUrl != null;
+
     final kind = widget.story.kind.toLowerCase();
+    final rawMeta = widget.story.metaLine;
+    final metaText = _stripKindPrefix(rawMeta, kind); // keep only time after 🕐
+    final hasUrl = _linkUrl != null;
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
       transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92) : scheme.surface.withOpacity(0.97),
+        color: isDark
+            ? const Color(0xFF181E2A).withOpacity(0.92)
+            : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
@@ -155,7 +172,9 @@ class _StoryCardState extends State<StoryCard> {
                     height: mediaH.toDouble(),
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(22),
+                        ),
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
@@ -168,7 +187,7 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Info/Meta (NEWS pill removed; show only 🕐 time)
+                  // Info/Badge/Meta Section — badge left, then 🕐 + time (no "News")
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
@@ -177,7 +196,8 @@ class _StoryCardState extends State<StoryCard> {
                         children: [
                           Row(
                             children: [
-                              // 🕐 exact emoji for time
+                              KindMetaBadge(kind),
+                              const SizedBox(width: 10),
                               Container(
                                 padding: const EdgeInsets.all(4),
                                 decoration: BoxDecoration(
@@ -192,7 +212,10 @@ class _StoryCardState extends State<StoryCard> {
                                   metaText,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
+                                  style: TextStyle(
+                                    color: Colors.grey[400],
+                                    fontSize: 13.5,
+                                  ),
                                 ),
                               ),
                             ],
@@ -208,7 +231,9 @@ class _StoryCardState extends State<StoryCard> {
                               fontSize: 15,
                               height: 1.32,
                               fontWeight: FontWeight.w800,
-                              color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                              color: isDark
+                                  ? Colors.white.withOpacity(0.96)
+                                  : scheme.onSurface,
                             ),
                           ),
                           const Spacer(),
@@ -232,7 +257,10 @@ class _StoryCardState extends State<StoryCard> {
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(10),
                                         ),
-                                        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                                        textStyle: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 16,
+                                        ),
                                       ),
                                       label: Text(_ctaLabel),
                                     ),
@@ -240,14 +268,12 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
                               const SizedBox(width: 12),
-                              // 🔖 Save (placeholder action)
                               _ActionIconBox(
                                 tooltip: 'Save',
-                                onTap: () {}, // hook up to your save flow
+                                onTap: () {}, // hook up save flow
                                 icon: const _Emoji(emoji: '🔖', size: 18),
                               ),
                               const SizedBox(width: 8),
-                              // 📤 Share
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
@@ -283,7 +309,43 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-// --------- Sample Card Icon (category-specific with fallback) ---------
+/* --------------------------- Kind badge (restored) --------------------------- */
+Widget KindMetaBadge(String kind) {
+  final lower = kind.toLowerCase();
+  Color bg;
+  String label = kind.toUpperCase();
+
+  if (lower == 'news') {
+    bg = const Color(0xFF723A3C);
+  } else if (lower == 'release') {
+    bg = const Color(0xFFF9D359);
+  } else if (lower == 'trailer') {
+    bg = const Color(0xFF56BAF8);
+  } else if (lower == 'ott') {
+    bg = const Color(0xFFC377F2);
+  } else {
+    bg = Colors.grey.shade800;
+  }
+
+  return Container(
+    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 13),
+    decoration: BoxDecoration(
+      color: bg.withOpacity(0.96),
+      borderRadius: BorderRadius.circular(6),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(
+        color: lower == 'release' ? Colors.black : Colors.white,
+        fontWeight: FontWeight.w700,
+        fontSize: 13,
+        letterSpacing: 0.15,
+      ),
+    ),
+  );
+}
+
+/* ------------------------- Category/fallback icon ------------------------- */
 class _SampleIcon extends StatelessWidget {
   final String kind;
 
@@ -311,7 +373,6 @@ class _SampleIcon extends StatelessWidget {
 }
 
 /* --------------------------------- Utils -------------------------------- */
-
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 18});
   final String emoji;
@@ -326,7 +387,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-// --------- Compact secondary action icon (supports emoji widget) ---------
+/* --------- Compact secondary action icon (supports emoji widget) --------- */
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
