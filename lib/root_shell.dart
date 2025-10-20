@@ -120,7 +120,7 @@ class _RootShellState extends State<RootShell> {
   Widget build(BuildContext context) {
     final compact = _isCompact(context);
 
-    // FIX: Always show bottom navigation on web to match Local HTML preview.
+    // Show bottom nav on web (always) and on compact layouts for mobile/tablet.
     final showBottomNav = kIsWeb || compact;
 
     return WillPopScope(
@@ -185,7 +185,7 @@ class _RootShellState extends State<RootShell> {
           child: IndexedStack(index: _index, children: _pages),
         ),
 
-        // Bottom nav: ON for web (always) and for compact layouts on mobile/tablet.
+        // Bottom nav: emoji exact for Saved (🔖)
         bottomNavigationBar: showBottomNav
             ? SafeArea(
                 top: false,
@@ -204,9 +204,10 @@ class _RootShellState extends State<RootShell> {
                       selectedIcon: Icon(Icons.explore),
                       label: 'Discover',
                     ),
+                    // 🔖 exact emoji for Saved
                     NavigationDestination(
-                      icon: Icon(Icons.bookmark_outline),
-                      selectedIcon: Icon(Icons.bookmark),
+                      icon: Text('🔖', style: TextStyle(fontSize: 20, height: 1)),
+                      selectedIcon: Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Saved',
                     ),
                     NavigationDestination(
