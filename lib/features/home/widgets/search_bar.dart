@@ -13,7 +13,7 @@ class SearchBarInput extends StatefulWidget {
     this.onChanged,
     this.onSubmitted,
     this.onMicTap,
-    this.onRefresh, // if null, refresh button is hidden
+    this.onExitSearch, // tap to exit the Search mode (shows 🚪 on the right)
     this.hintText = 'Search movies, shows, trailers…',
     this.enabled = true,
   });
@@ -29,8 +29,8 @@ class SearchBarInput extends StatefulWidget {
   /// Mic action (tap). Will be disabled when offline or `enabled=false`.
   final VoidCallback? onMicTap;
 
-  /// Refresh action (tap). If null, refresh button is hidden.
-  final VoidCallback? onRefresh;
+  /// Exit action (tap). When provided, a 🚪 emoji button is shown on the right.
+  final VoidCallback? onExitSearch;
 
   final String hintText;
   final bool enabled;
@@ -111,7 +111,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
     } else {
       _hideOverlay();
     }
-    // Do NOT call onChanged here; TextField.onChanged handles it.
+    // onChanged is driven by TextField.onChanged.
   }
 
   void _onFocus() {
@@ -307,19 +307,14 @@ class _SearchBarInputState extends State<SearchBarInput> {
                 icon: const _Emoji(emoji: '🎤', size: 18),
               ),
 
-            // Refresh (ONLY if provided)
-            if (widget.onRefresh != null)
+            // 🚪 Exit search (only when parent supplies the callback)
+            if (widget.onExitSearch != null)
               Padding(
                 padding: const EdgeInsets.only(right: 4),
                 child: IconButton(
-                  tooltip: 'Refresh',
-                  onPressed: widget.enabled ? widget.onRefresh : null,
-                  icon: Icon(
-                    Icons.refresh_rounded,
-                    color: widget.enabled
-                        ? (isDark ? const Color(0xFF94a3b8) : Colors.grey[700])
-                        : cs.onSurfaceVariant,
-                  ),
+                  tooltip: 'Exit search',
+                  onPressed: widget.enabled ? widget.onExitSearch : null,
+                  icon: const _Emoji(emoji: '🚪', size: 18),
                 ),
               ),
           ],
