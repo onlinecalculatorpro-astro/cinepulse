@@ -1,5 +1,6 @@
 // lib/features/home/home_screen.dart
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
@@ -10,9 +11,8 @@ import '../../core/models.dart';
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton_card.dart';
-import 'widgets/search_bar.dart';
+import 'widgets/search_bar.dart'; // (ok to keep; not required by this file)
 import '../../features/story/story_card.dart';
-import 'dart:ui' show ImageFilter;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
