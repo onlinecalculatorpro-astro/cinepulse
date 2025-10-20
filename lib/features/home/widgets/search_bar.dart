@@ -7,8 +7,33 @@ import 'package:flutter/material.dart';
 import '../../../core/cache.dart';
 
 class SearchBarInput extends StatefulWidget {
-  const SearchBarInput({super.key, this.controller});
+  const SearchBarInput({
+    super.key,
+    this.controller,
+    this.onChanged,
+    this.onSubmitted,
+    this.onMicTap,
+    this.onRefresh,
+    this.hintText = 'Search movies, shows, trailers…',
+    this.enabled = true,
+  });
+
   final TextEditingController? controller;
+
+  /// Fires on user typing (for live filtering in Home).
+  final ValueChanged<String>? onChanged;
+
+  /// Fires on keyboard submit/Search.
+  final ValueChanged<String>? onSubmitted;
+
+  /// Mic action (tap). Will be disabled when offline or `enabled=false`.
+  final VoidCallback? onMicTap;
+
+  /// Refresh action (tap). Shown always; caller decides what to do.
+  final VoidCallback? onRefresh;
+
+  final String hintText;
+  final bool enabled;
 
   @override
   State<SearchBarInput> createState() => _SearchBarInputState();
@@ -32,11 +57,11 @@ class _SearchBarInputState extends State<SearchBarInput> {
   void initState() {
     super.initState();
     _focus.addListener(_onFocus);
-    _c.addListener(_onChanged);
+    _c.addListener(_handleControllerChange);
 
     _loadRecents();
 
-    // Connectivity (robust to plugin API differences)
+    // Connectivity
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
       final hasNetwork = _hasNetworkFrom(event);
       if (mounted) setState(() => _offline = !hasNetwork);
@@ -53,8 +78,9 @@ class _SearchBarInputState extends State<SearchBarInput> {
     _recentDebounce?.cancel();
     _hideOverlay();
     _connSub?.cancel();
+
     _focus.removeListener(_onFocus);
-    _c.removeListener(_onChanged);
+    _c.removeListener(_handleControllerChange);
     if (widget.controller == null) {
       _c.dispose();
     }
@@ -75,18 +101,17 @@ class _SearchBarInputState extends State<SearchBarInput> {
       final list = await RecentQueriesStore.instance.list();
       if (mounted) setState(() => _recents = list);
     } catch (_) {
-      // suggestions are optional; ignore errors
+      // non-fatal
     }
   }
 
-  void _onChanged() {
-    // Show recents when empty & focused; hide when typing
+  // Keeps overlay state in sync with controller/focus.
+  void _handleControllerChange() {
     if (_c.text.trim().isEmpty && _focus.hasFocus) {
       _showOverlay();
     } else {
       _hideOverlay();
     }
-    // Home screen listens to the controller for filtering; no extra calls here.
   }
 
   void _onFocus() {
@@ -129,7 +154,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 720, maxHeight: 360),
             child: SizedBox(
-              width: MediaQuery.of(context).size.width, // expand; container clamps
+              width: MediaQuery.of(context).size.width,
               child: items.isEmpty
                   ? _SuggestionsEmpty(onClearAll: () async {
                       await RecentQueriesStore.instance.clear();
@@ -155,7 +180,6 @@ class _SearchBarInputState extends State<SearchBarInput> {
                             onPressed: () async {
                               await RecentQueriesStore.instance.remove(q);
                               await _loadRecents();
-                              // Recreate overlay to reflect the list smoothly
                               _hideOverlay();
                               if (_focus.hasFocus && _c.text.trim().isEmpty) {
                                 _showOverlay();
@@ -167,6 +191,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                             _c.selection =
                                 TextSelection.collapsed(offset: _c.text.length);
                             _hideOverlay();
+                            widget.onSubmitted?.call(q);
                           },
                         );
                       },
@@ -184,23 +209,30 @@ class _SearchBarInputState extends State<SearchBarInput> {
     );
   }
 
-  Future<void> _onSubmitted(String q) async {
+  Future<void> _saveRecent(String q) async {
     final query = q.trim();
     if (query.isEmpty) return;
-    // Save to recents (debounced to avoid rapid dupes)
     _recentDebounce?.cancel();
     _recentDebounce = Timer(const Duration(milliseconds: 150), () async {
       await RecentQueriesStore.instance.add(query);
       await _loadRecents();
     });
+  }
+
+  Future<void> _handleSubmit(String q) async {
+    await _saveRecent(q);
     _hideOverlay();
+    widget.onSubmitted?.call(q.trim());
   }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     final hasText = _c.text.trim().isNotEmpty;
+
+    final micEnabled = widget.enabled && !_offline;
 
     return CompositedTransformTarget(
       link: _link,
@@ -227,42 +259,67 @@ class _SearchBarInputState extends State<SearchBarInput> {
               child: TextField(
                 controller: _c,
                 focusNode: _focus,
+                enabled: widget.enabled,
                 textInputAction: TextInputAction.search,
-                onSubmitted: _onSubmitted,
-                decoration: const InputDecoration(
-                  hintText: 'Search movies, shows, trailers…',
+                onChanged: widget.onChanged,
+                onSubmitted: _handleSubmit,
+                decoration: InputDecoration(
+                  hintText: widget.hintText,
+                  hintStyle: TextStyle(
+                    color: isDark ? const Color(0xFF64748b) : Colors.grey[600],
+                    fontSize: 15,
+                  ),
                   border: InputBorder.none,
                   contentPadding:
-                      EdgeInsets.symmetric(horizontal: 0, vertical: 14),
+                      const EdgeInsets.symmetric(horizontal: 0, vertical: 14),
                 ),
               ),
             ),
+
+            // Offline indicator (subtle)
             if (_offline)
               Tooltip(
                 message: 'Offline',
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child:
-                      Icon(Icons.cloud_off, color: scheme.onSurfaceVariant),
+                  child: Icon(Icons.cloud_off, color: cs.onSurfaceVariant),
                 ),
               ),
+
+            // Clear (when typing) or Mic (when empty)
             if (hasText)
               IconButton(
                 tooltip: 'Clear',
+                onPressed: !widget.enabled
+                    ? null
+                    : () {
+                        _c.clear();
+                        widget.onChanged?.call('');
+                        if (_focus.hasFocus) _showOverlay();
+                      },
                 icon: const Icon(Icons.close_rounded),
-                onPressed: () {
-                  _c.clear();
-                  if (_focus.hasFocus) {
-                    _showOverlay(); // show recents again
-                  }
-                },
               )
             else
               IconButton(
-                tooltip: 'Voice (coming soon)',
-                onPressed: () {},
+                tooltip: micEnabled ? 'Voice' : 'Voice (offline)',
+                onPressed: micEnabled ? widget.onMicTap : null,
                 icon: const Icon(Icons.mic_rounded),
               ),
+
+            // Refresh (always shown)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: IconButton(
+                tooltip: 'Refresh',
+                onPressed: widget.enabled ? widget.onRefresh : null,
+                icon: Icon(
+                  Icons.refresh_rounded,
+                  color: widget.enabled
+                      ? (isDark ? const Color(0xFF94a3b8) : Colors.grey[700])
+                      : cs.onSurfaceVariant,
+                ),
+              ),
+            ),
           ],
         ),
       ),
