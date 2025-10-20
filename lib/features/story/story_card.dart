@@ -8,13 +8,13 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:vector_math/vector_math_64.dart' as vm; // <-- needed for Matrix4
+import 'package:vector_math/vector_math_64.dart' as vm; // for Matrix4
 
 import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
 import '../../core/models.dart'; // Story + storyVideoUrl + metaLine/kindLabel
 import '../../core/utils.dart';
-import '../../widgets/kind_badge.dart'; // <-- reusable badge
+import '../../widgets/kind_badge.dart';
 import 'story_details.dart';
 import 'ott_badge.dart';
 
@@ -76,8 +76,7 @@ class _StoryCardState extends State<StoryCard> {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content:
-              Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
         ),
       );
     } catch (_) {
@@ -91,8 +90,7 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   void _openDetails(BuildContext context) {
-    Navigator.of(context)
-        .push(fadeRoute(StoryDetailsScreen(story: widget.story)));
+    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
   }
 
   @override
@@ -104,17 +102,13 @@ class _StoryCardState extends State<StoryCard> {
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      // Wrap cascade in parentheses, and use vm.Matrix4 (vector_math)
-      transform: _hover
-          ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0))
-          : null,
+      // Use vector_math Matrix4 and wrap the cascade in parentheses
+      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
       decoration: BoxDecoration(
         color: scheme.surface.withOpacity(0.60),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: _hover
-              ? const Color(0x33dc2626)
-              : Colors.white.withOpacity(0.04),
+          color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.04),
           width: 1,
         ),
         boxShadow: _hover
@@ -137,11 +131,7 @@ class _StoryCardState extends State<StoryCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Thumbnail / poster (16:9) with subtle gradient scrim + quick actions
-                _Thumb(
-                  story: widget.story,
-                  onShare: () => _share(context),
-                ),
+                _Thumb(story: widget.story, onShare: () => _share(context)),
                 const SizedBox(height: 12),
 
                 // Badge + meta line (e.g., NEWS • 20 Oct 2025, 7:23 PM)
@@ -154,7 +144,6 @@ class _StoryCardState extends State<StoryCard> {
                       widget.story.kindLabel ?? widget.story.kind,
                       compact: true,
                     ),
-                    // Optional OTT badge if streaming information exists
                     OttBadge.fromStory(widget.story, dense: true),
                     Text(
                       metaText,
@@ -184,21 +173,19 @@ class _StoryCardState extends State<StoryCard> {
                   children: [
                     FilledButton.icon(
                       onPressed: hasUrl ? () => _openLink(context) : null,
-                      icon: Icon(_isWatchCta
-                          ? Icons.play_arrow_rounded
-                          : Icons.open_in_new_rounded),
+                      icon: Icon(
+                        _isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded,
+                      ),
                       label: Text(_ctaLabel),
                     ),
                     const Spacer(),
                     AnimatedBuilder(
                       animation: SavedStore.instance,
                       builder: (_, __) {
-                        final saved =
-                            SavedStore.instance.isSaved(widget.story.id);
+                        final saved = SavedStore.instance.isSaved(widget.story.id);
                         return _ActionIcon(
                           tooltip: saved ? 'Remove from Saved' : 'Save',
-                          icon:
-                              saved ? Icons.bookmark : Icons.bookmark_add_outlined,
+                          icon: saved ? Icons.bookmark : Icons.bookmark_add_outlined,
                           onTap: () => SavedStore.instance.toggle(widget.story.id),
                         );
                       },
@@ -303,7 +290,7 @@ class _Thumb extends StatelessWidget {
           ),
         ),
 
-        // Bottom gradient scrim for future text overlays (visual depth)
+        // Bottom gradient scrim for visual depth
         Positioned.fill(
           child: IgnorePointer(
             child: DecoratedBox(
