@@ -1,6 +1,7 @@
 // lib/core/models.dart
 import 'dart:collection'; // for UnmodifiableListView (when callers pass it)
 import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
 
 /// Domain model representing a single feed item/story.
 ///
@@ -79,9 +80,7 @@ class Story {
       if (s.isEmpty) return null;
       try {
         // Allow trailing Z or explicit offsets.
-        return DateTime.parse(
-          s.endsWith('Z') ? s : s,
-        ).toUtc();
+        return DateTime.parse(s.endsWith('Z') ? s : s).toUtc();
       } catch (_) {
         return null;
       }
@@ -265,8 +264,7 @@ class Story {
       final uri = Uri.parse(u);
       final host = uri.host.toLowerCase();
       if (host.contains('youtube.com')) {
-        // watch?v=VIDEOID
-        final v = uri.queryParameters['v'];
+        final v = uri.queryParameters['v']; // watch?v=VIDEOID
         if (v != null && v.isNotEmpty) return v;
       } else if (host.contains('youtu.be')) {
         final seg = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : '';
@@ -308,7 +306,30 @@ class Story {
     return db.compareTo(da); // newest first
   }
 
-  /// Compact “meta line” helpers the UI can use.
+  /// Human label for kind (title-cased), e.g., "News", "Trailer".
+  String get kindLabel => _titleCase(kind);
+
+  /// Hide origin host entirely (UI will not show a site).
+  String get originHost => '';
+
+  /// Localized pretty timestamp; falls back: published → release → normalized.
+  /// Example: "20 Oct 2025, 1:59 PM"
+  String get publishedAtLocalPretty {
+    final d = publishedAt ?? releaseDate ?? normalizedAt;
+    if (d == null) return '';
+    final local = d.toLocal();
+    return DateFormat('d MMM yyyy, h:mm a').format(local);
+  }
+
+  /// One-liner for meta row: "News • 20 Oct 2025, 1:59 PM"
+  String get metaLine {
+    final parts = <String>[kindLabel];
+    final when = publishedAtLocalPretty;
+    if (when.isNotEmpty) parts.add(when);
+    return parts.join(' • ');
+  }
+
+  /// Compact “meta” that can still be used elsewhere if needed.
   String get primaryMeta {
     if ((ottPlatform ?? '').isNotEmpty) return _titleCase(ottPlatform!);
     if (ratingCert != null && runtimeMinutes != null) {
@@ -319,8 +340,7 @@ class Story {
   }
 
   String dateLabel({bool preferRelease = true}) {
-    final d =
-        preferRelease ? (releaseDate ?? publishedAt) : (publishedAt ?? releaseDate);
+    final d = preferRelease ? (releaseDate ?? publishedAt) : (publishedAt ?? releaseDate);
     if (d == null) return '';
     final y = d.year.toString().padLeft(4, '0');
     final m = d.month.toString().padLeft(2, '0');
@@ -394,8 +414,7 @@ class Story {
     if (s.isEmpty) return s;
     final parts = s.split(RegExp(r'[\s_\-]+'));
     return parts
-        .map((p) =>
-            p.isEmpty ? p : '${p[0].toUpperCase()}${p.substring(1).toLowerCase()}')
+        .map((p) => p.isEmpty ? p : '${p[0].toUpperCase()}${p.substring(1).toLowerCase()}')
         .join(' ');
   }
 }
