@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:vector_math/vector_math_64.dart' as vm; // <-- needed for Matrix4
 
 import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
@@ -103,7 +104,10 @@ class _StoryCardState extends State<StoryCard> {
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover ? Matrix4.identity()..translate(0.0, -2.0, 0.0) : null,
+      // Wrap cascade in parentheses, and use vm.Matrix4 (vector_math)
+      transform: _hover
+          ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0))
+          : null,
       decoration: BoxDecoration(
         color: scheme.surface.withOpacity(0.60),
         borderRadius: BorderRadius.circular(18),
@@ -151,8 +155,7 @@ class _StoryCardState extends State<StoryCard> {
                       compact: true,
                     ),
                     // Optional OTT badge if streaming information exists
-                    if (OttBadge.canBuildFrom(widget.story))
-                      OttBadge.fromStory(widget.story, dense: true),
+                    OttBadge.fromStory(widget.story, dense: true),
                     Text(
                       metaText,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
