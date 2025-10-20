@@ -120,6 +120,9 @@ class _RootShellState extends State<RootShell> {
   Widget build(BuildContext context) {
     final compact = _isCompact(context);
 
+    // FIX: Always show bottom navigation on web to match Local HTML preview.
+    final showBottomNav = kIsWeb || compact;
+
     return WillPopScope(
       // Back button pops detail routes if any; otherwise allow system back.
       onWillPop: () async {
@@ -134,7 +137,7 @@ class _RootShellState extends State<RootShell> {
               padding: EdgeInsets.zero,
               children: [
                 const _BrandDrawerHeader(),
-                // Quick navigation (handy on wide screens where bottom nav is hidden)
+                // Quick navigation
                 ListTile(
                   leading: const Icon(Icons.home_outlined),
                   title: const Text('Home'),
@@ -182,8 +185,8 @@ class _RootShellState extends State<RootShell> {
           child: IndexedStack(index: _index, children: _pages),
         ),
 
-        // Mobile bottom nav; hide on tablets/desktop to match your local vs Netlify diff.
-        bottomNavigationBar: compact
+        // Bottom nav: ON for web (always) and for compact layouts on mobile/tablet.
+        bottomNavigationBar: showBottomNav
             ? SafeArea(
                 top: false,
                 child: NavigationBar(
