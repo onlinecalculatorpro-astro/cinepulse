@@ -182,7 +182,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
                 IconButton(
                   tooltip: 'Discover',
-                  icon: const Icon(Icons.explore_outlined), // Discover next to refresh
+                  icon: Icon(kIsWeb ? Icons.explore_outlined : Icons.manage_search_rounded),
                   onPressed: widget.onOpenDiscover,
                 ),
                 const SizedBox(width: 4),
@@ -194,12 +194,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                  child: SearchBarInput(
-                    controller: _search,
-                    onRefresh: () {
-                      _refreshKey.currentState?.show();
-                      unawaited(_refresh());
-                    },
+                  child: const SearchBarInput(
+                    // no onRefresh here -> no refresh icon in the bar
                   ),
                 ),
               ),
@@ -316,14 +312,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
       ),
-      // FAB to refresh all feeds (optional, useful on desktop)
-      floatingActionButton: kIsWeb
-          ? FloatingActionButton.extended(
-              onPressed: _refreshAll,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Refresh all'),
-            )
-          : null,
+      // No FAB refresh — single refresh lives in the header.
+      floatingActionButton: null,
     );
   }
 }
