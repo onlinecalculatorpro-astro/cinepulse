@@ -22,15 +22,16 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  int _index = 0;
+  final _scaffoldKey = GlobalKey<ScaffoldState>(); // for hamburger open
 
-  // Keep pages alive; constructors should be const for perf.
-  static const List<Widget> _pages = [
-    HomeScreen(),
-    _DiscoverPlaceholder(),
-    SavedScreen(),
-    AlertsScreen(),
-  ];
+  // Which page is visible in the body (Home, Discover, Saved, Alerts).
+  int _pageIndex = 0;
+
+  // Which item is highlighted in the bottom nav (Home, Search, Saved, Alerts).
+  int _navIndex = 0;
+
+  // Whether HomeScreen should show its search bar (toggled via bottom-nav Search).
+  bool _showSearchBar = false;
 
   String? _pendingDeepLinkId;
   bool _deepLinkHandled = false;
@@ -39,7 +40,8 @@ class _RootShellState extends State<RootShell> {
   void initState() {
     super.initState();
     _captureInitialDeepLink();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tryOpenPendingDeepLink());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _tryOpenPendingDeepLink());
   }
 
   /// Parses links like `/#/s/<id>` or `/s/<id>` from the current URL.
@@ -82,23 +84,56 @@ class _RootShellState extends State<RootShell> {
 
     if (mounted && kIsWeb) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Opening… fetching story may take a moment')),
+        const SnackBar(
+            content: Text(
+                'Opening… fetching story may take a moment')),
       );
     }
   }
 
   Future<void> _openDetails(Story s) async {
     _deepLinkHandled = true;
-    if (_index != 0) setState(() => _index = 0); // ensure Home is visible beneath
+    if (_pageIndex != 0) setState(() => _pageIndex = 0); // ensure Home beneath
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!mounted) return;
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: s)));
   }
 
-  void _goTo(int i) {
-    if (_index == i) return;
-    setState(() => _index = i);
-    Navigator.of(context).maybePop(); // close drawer if open
+  // Called by header "Discover" action.
+  void _openDiscover() {
+    setState(() {
+      _pageIndex = 1; // Discover page in the body
+      _navIndex = (_navIndex == 1) ? 0 : _navIndex; // de-highlight Search if needed
+      _showSearchBar = false;
+    });
+  }
+
+  // Called by hamburger in HomeScreen.
+  void _openDrawer() {
+    _scaffoldKey.currentState?.openDrawer();
+  }
+
+  // Called by bottom navigation.
+  void _onDestinationSelected(int i) {
+    // Index map for bottom nav: 0=Home, 1=Search, 2=Saved, 3=Alerts
+    if (i == 1) {
+      // Search item: show Home and reveal search bar
+      setState(() {
+        _pageIndex = 0;        // ensure Home is visible
+        _navIndex = 1;         // highlight Search item
+        _showSearchBar = true; // HomeScreen should render & focus search
+      });
+      return;
+    }
+
+    // Normal navigation for other items
+    setState(() {
+      _navIndex = i;
+      _showSearchBar = false; // hide search when leaving Search/Home trigger
+      if (i == 0) _pageIndex = 0;        // Home
+      if (i == 2) _pageIndex = 2;        // Saved
+      if (i == 3) _pageIndex = 3;        // Alerts
+    });
   }
 
   Future<void> _openThemePicker(BuildContext context) async {
@@ -114,13 +149,13 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  bool _isCompact(BuildContext context) => MediaQuery.of(context).size.width < 900;
+  bool _isCompact(BuildContext context) =>
+      MediaQuery.of(context).size.width < 900;
 
   @override
   Widget build(BuildContext context) {
     final compact = _isCompact(context);
-
-    // Show bottom nav on web (always) and on compact layouts for mobile/tablet.
+    // Show bottom nav on web (always) and on compact layouts.
     final showBottomNav = kIsWeb || compact;
 
     return WillPopScope(
@@ -131,6 +166,7 @@ class _RootShellState extends State<RootShell> {
         return !canPop;
       },
       child: Scaffold(
+        key: _scaffoldKey,
         drawer: Drawer(
           child: SafeArea(
             child: ListView(
@@ -141,22 +177,46 @@ class _RootShellState extends State<RootShell> {
                 ListTile(
                   leading: const Icon(Icons.home_outlined),
                   title: const Text('Home'),
-                  onTap: () => _goTo(0),
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() {
+                      _pageIndex = 0;
+                      _navIndex = 0;
+                      _showSearchBar = false;
+                    });
+                  },
                 ),
                 ListTile(
                   leading: const Icon(Icons.explore_outlined),
                   title: const Text('Discover'),
-                  onTap: () => _goTo(1),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _openDiscover();
+                  },
                 ),
                 ListTile(
                   leading: const Icon(Icons.bookmark_outline),
                   title: const Text('Saved'),
-                  onTap: () => _goTo(2),
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() {
+                      _pageIndex = 2;
+                      _navIndex = 2;
+                      _showSearchBar = false;
+                    });
+                  },
                 ),
                 ListTile(
                   leading: const Icon(Icons.notifications_outlined),
                   title: const Text('Alerts'),
-                  onTap: () => _goTo(3),
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() {
+                      _pageIndex = 3;
+                      _navIndex = 3;
+                      _showSearchBar = false;
+                    });
+                  },
                 ),
                 const Divider(height: 24),
                 ListTile(
@@ -182,32 +242,58 @@ class _RootShellState extends State<RootShell> {
 
         // Keep tab states with an IndexedStack. Center on wide screens.
         body: _ResponsiveWidth(
-          child: IndexedStack(index: _index, children: _pages),
+          child: IndexedStack(
+            index: _pageIndex,
+            children: [
+              // Home — receives controls so it can:
+              // - open drawer (hamburger fix)
+              // - show header actions: Refresh + Discover
+              // - show/hide search bar based on bottom-nav Search
+              HomeScreen(
+                showSearchBar: _showSearchBar,
+                onMenuPressed: _openDrawer,
+                onOpenDiscover: _openDiscover,
+                // HomeScreen should show the Refresh icon on the header and call this when tapped.
+                // It can internally refresh its feeds.
+                onHeaderRefresh: () {
+                  // no-op here; HomeScreen implements the actual refresh logic
+                  // We keep this callback for API symmetry / future wiring if needed.
+                },
+              ),
+              const _DiscoverPlaceholder(),
+              const SavedScreen(),
+              const AlertsScreen(),
+            ],
+          ),
         ),
 
-        // Bottom nav: emoji exact for Saved (🔖)
+        // Bottom nav: Discover replaced by Search (🔍), Saved uses 🔖 emoji
         bottomNavigationBar: showBottomNav
             ? SafeArea(
                 top: false,
                 child: NavigationBar(
-                  selectedIndex: _index,
-                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-                  onDestinationSelected: _goTo,
+                  selectedIndex: _navIndex,
+                  labelBehavior:
+                      NavigationDestinationLabelBehavior.alwaysShow,
+                  onDestinationSelected: _onDestinationSelected,
                   destinations: const [
                     NavigationDestination(
                       icon: Icon(Icons.home_outlined),
                       selectedIcon: Icon(Icons.home),
                       label: 'Home',
                     ),
+                    // Search trigger (reveals search bar on Home)
                     NavigationDestination(
-                      icon: Icon(Icons.explore_outlined),
-                      selectedIcon: Icon(Icons.explore),
-                      label: 'Discover',
+                      icon: Text('🔍', style: TextStyle(fontSize: 20, height: 1)),
+                      selectedIcon:
+                          Text('🔍', style: TextStyle(fontSize: 22, height: 1)),
+                      label: 'Search',
                     ),
-                    // 🔖 exact emoji for Saved
+                    // Saved
                     NavigationDestination(
                       icon: Text('🔖', style: TextStyle(fontSize: 20, height: 1)),
-                      selectedIcon: Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
+                      selectedIcon:
+                          Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Saved',
                     ),
                     NavigationDestination(
@@ -345,7 +431,8 @@ class _ThemePicker extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Theme',
-                style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
+                style: GoogleFonts.inter(
+                    fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             for (final entry in options.entries)
               RadioListTile<ThemeMode>(
