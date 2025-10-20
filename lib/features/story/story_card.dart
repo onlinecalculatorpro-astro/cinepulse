@@ -1,4 +1,3 @@
-// lib/features/story/story_card.dart
 import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -8,11 +7,11 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:vector_math/vector_math_64.dart' as vm; // for Matrix4
+import 'package:vector_math/vector_math_64.dart' as vm;
 
-import '../../core/api.dart'; // deepLinkForStoryId
+import '../../core/api.dart';
 import '../../core/cache.dart';
-import '../../core/models.dart'; // Story + storyVideoUrl + metaLine/kindLabel
+import '../../core/models.dart';
 import '../../core/utils.dart';
 import '../../widgets/kind_badge.dart';
 import 'story_details.dart';
@@ -31,7 +30,6 @@ class _StoryCardState extends State<StoryCard> {
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
-  /// Prefer a playable video URL; otherwise fall back to canonical `story.url`.
   Uri? get _linkUrl {
     final v = _videoUrl;
     if (v != null) return v;
@@ -64,7 +62,6 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // Share a deep link that opens inside the app; clipboard on web.
   Future<void> _share(BuildContext context) async {
     final deep = deepLinkForStoryId(widget.story.id).toString();
     try {
@@ -102,10 +99,9 @@ class _StoryCardState extends State<StoryCard> {
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      // Use vector_math Matrix4 and wrap the cascade in parentheses
       transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: scheme.surface.withOpacity(0.60),
+        color: scheme.surface.withOpacity(0.70),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.04),
@@ -133,8 +129,6 @@ class _StoryCardState extends State<StoryCard> {
               children: [
                 _Thumb(story: widget.story, onShare: () => _share(context)),
                 const SizedBox(height: 12),
-
-                // Badge + meta line (e.g., NEWS • 20 Oct 2025, 7:23 PM)
                 Wrap(
                   crossAxisAlignment: WrapCrossAlignment.center,
                   spacing: 8,
@@ -154,8 +148,6 @@ class _StoryCardState extends State<StoryCard> {
                   ],
                 ),
                 const SizedBox(height: 8),
-
-                // Title
                 Text(
                   widget.story.title,
                   maxLines: 3,
@@ -166,17 +158,23 @@ class _StoryCardState extends State<StoryCard> {
                     color: scheme.onSurface,
                   ),
                 ),
-                const SizedBox(height: 12),
-
-                // Actions
+                const SizedBox(height: 14),
                 Row(
                   children: [
                     FilledButton.icon(
                       onPressed: hasUrl ? () => _openLink(context) : null,
                       icon: Icon(
                         _isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded,
+                        size: 20,
                       ),
-                      label: Text(_ctaLabel),
+                      label: Text(_ctaLabel, style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFFdc2626),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        textStyle: const TextStyle(fontSize: 15),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
                     ),
                     const Spacer(),
                     AnimatedBuilder(
@@ -209,7 +207,7 @@ class _StoryCardState extends State<StoryCard> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: kIsWeb
-          ? card // Skip BackdropFilter blur on web for perf
+          ? card
           : ClipRRect(
               borderRadius: BorderRadius.circular(18),
               child: BackdropFilter(
@@ -222,7 +220,6 @@ class _StoryCardState extends State<StoryCard> {
 }
 
 /* ------------------------------- Thumbnail ------------------------------- */
-
 class _Thumb extends StatelessWidget {
   const _Thumb({required this.story, required this.onShare});
 
@@ -238,7 +235,7 @@ class _Thumb extends StatelessWidget {
     if (kind.contains('ott') || kind.contains('stream')) {
       return Icons.tv_rounded;
     }
-    return Icons.article_rounded; // news/others
+    return Icons.article_rounded;
   }
 
   @override
@@ -261,10 +258,10 @@ class _Thumb extends StatelessWidget {
                       memCacheWidth: 900,
                       fadeInDuration: const Duration(milliseconds: 150),
                       placeholder: (c, _) => Container(
-                        color: scheme.surfaceVariant.withOpacity(0.20),
+                        color: scheme.surfaceVariant.withOpacity(0.18),
                       ),
                       errorWidget: (c, _, __) => Container(
-                        color: scheme.surfaceVariant.withOpacity(0.20),
+                        color: scheme.surfaceVariant.withOpacity(0.18),
                       ),
                     )
                   : Container(
@@ -273,8 +270,8 @@ class _Thumb extends StatelessWidget {
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [
-                            scheme.surfaceVariant.withOpacity(0.18),
-                            scheme.surfaceVariant.withOpacity(0.10),
+                            scheme.surfaceVariant.withOpacity(0.16),
+                            scheme.surfaceVariant.withOpacity(0.09),
                           ],
                         ),
                       ),
@@ -289,8 +286,7 @@ class _Thumb extends StatelessWidget {
             ),
           ),
         ),
-
-        // Bottom gradient scrim for visual depth
+        // Bottom gradient scrim for depth
         Positioned.fill(
           child: IgnorePointer(
             child: DecoratedBox(
@@ -300,7 +296,7 @@ class _Thumb extends StatelessWidget {
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
                   colors: [
-                    Colors.black.withOpacity(0.25),
+                    Colors.black.withOpacity(0.28),
                     Colors.transparent,
                   ],
                   stops: const [0.0, 0.5],
@@ -309,7 +305,6 @@ class _Thumb extends StatelessWidget {
             ),
           ),
         ),
-
         // Quick actions (top-right)
         Positioned(
           right: 8,
@@ -326,7 +321,6 @@ class _Thumb extends StatelessWidget {
 }
 
 /* --------------------------------- UI bits -------------------------------- */
-
 class _ActionIcon extends StatelessWidget {
   const _ActionIcon({
     required this.icon,
@@ -348,7 +342,7 @@ class _ActionIcon extends StatelessWidget {
         radius: 24,
         child: Container(
           decoration: BoxDecoration(
-            color: scheme.surface.withOpacity(0.65),
+            color: scheme.surface.withOpacity(0.70),
             shape: BoxShape.circle,
             border: Border.all(
               color: Colors.white.withOpacity(0.06),
@@ -380,7 +374,7 @@ class _CircleIconButton extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: scheme.surface.withOpacity(0.70),
+        color: scheme.surface.withOpacity(0.72),
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
