@@ -476,7 +476,7 @@ class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-// Responsive Feed List [as before]
+// Responsive Feed List [adjusted aspect ratio for tall cards]
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -498,10 +498,11 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
+  // Lowered aspect ratios for much taller cards.
   double _aspectRatioFor(int cols, double maxWidth) {
-    if (cols >= 3) return 1.18;
-    if (cols == 2) return 1.08;
-    return 0.92;
+    if (cols >= 3) return 0.60;  // was 1.18, lower means "taller"
+    if (cols == 2) return 0.52;  // was 1.08
+    return 0.44;                  // was 0.92
   }
 
   @override
