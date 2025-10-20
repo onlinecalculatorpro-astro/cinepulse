@@ -91,7 +91,7 @@ class _StoryCardState extends State<StoryCard> {
     final metaText = widget.story.metaLine;
     final hasUrl = _linkUrl != null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final showNewsBadge = widget.story.kind.toLowerCase() == 'news';
+    final kind = widget.story.kind.toLowerCase();
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -124,11 +124,11 @@ class _StoryCardState extends State<StoryCard> {
         child: InkWell(
           onTap: () => _openDetails(context),
           child: SizedBox(
-            height: 370, // Increased height so all content fits
+            height: 440,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // --------------- Icon/Thumbnail Section ----------------
+                // Icon/Thumbnail Section
                 Container(
                   height: 170,
                   decoration: BoxDecoration(
@@ -152,7 +152,7 @@ class _StoryCardState extends State<StoryCard> {
                     child: _SampleIcon(kind: widget.story.kind),
                   ),
                 ),
-                // ----------- Info/Badge/Meta Section -------------
+                // Info/Badge/Meta Section
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
@@ -160,64 +160,52 @@ class _StoryCardState extends State<StoryCard> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Only one NEWS badge per card, along with meta
                         Row(
                           children: [
-                            if (showNewsBadge)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 4, horizontal: 14),
-                                decoration: BoxDecoration(
-                                  color:
-                                      const Color(0xFF723A3C).withOpacity(0.96),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: const Text(
-                                  "NEWS",
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 13,
-                                    letterSpacing: 0.2,
-                                  ),
-                                ),
+                            KindMetaBadge(kind),
+                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.13),
+                                shape: BoxShape.circle,
                               ),
-                            if (showNewsBadge) const SizedBox(width: 12),
-                            Icon(Icons.circle, size: 7, color: Colors.grey[500]),
-                            const SizedBox(width: 6),
+                              child: const Icon(
+                                Icons.access_time_rounded,
+                                size: 17,
+                                color: Color(0xFFA1A5B0),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
                             Text(
                               metaText,
                               style: TextStyle(
                                 color: Colors.grey[400],
-                                fontSize: 13,
+                                fontSize: 14,
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 16),
-
-                        // ---------------- Title -----------------
                         Text(
                           widget.story.title,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.inter(
-                            fontSize: 17.5,
-                            height: 1.35,
+                            fontSize: 18,
+                            height: 1.32,
                             fontWeight: FontWeight.w800,
                             color: isDark
                                 ? Colors.white.withOpacity(0.96)
                                 : scheme.onSurface,
                           ),
                         ),
-                        const Spacer(), // Push CTAs to bottom
-
-                        // ---------- Read, Edit, Share CTAs ----------
+                        const Spacer(),
                         Row(
                           children: [
                             Expanded(
                               child: SizedBox(
-                                height: 44,
+                                height: 46,
                                 child: ElevatedButton.icon(
                                   icon: const Icon(Icons.menu_book_rounded,
                                       size: 22, color: Colors.white),
@@ -242,9 +230,7 @@ class _StoryCardState extends State<StoryCard> {
                             _ActionIconBox(
                               icon: Icons.edit_rounded,
                               tooltip: "Edit",
-                              onTap: () {
-                                // Place your edit logic here
-                              },
+                              onTap: () {},
                             ),
                             const SizedBox(width: 8),
                             _ActionIconBox(
@@ -279,6 +265,42 @@ class _StoryCardState extends State<StoryCard> {
             ),
     );
   }
+}
+
+// Badge Widget for News/Release/Trailer/Other Types
+Widget KindMetaBadge(String kind) {
+  final lower = kind.toLowerCase();
+  Color bg;
+  String label = kind.toUpperCase();
+
+  if (lower == "news") {
+    bg = const Color(0xFF723A3C);
+  } else if (lower == "release") {
+    bg = const Color(0xFFF9D359);
+  } else if (lower == "trailer") {
+    bg = const Color(0xFF56BAF8);
+  } else if (lower == "ott") {
+    bg = const Color(0xFFC377F2);
+  } else {
+    bg = Colors.grey.shade800;
+  }
+
+  return Container(
+    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 13),
+    decoration: BoxDecoration(
+      color: bg.withOpacity(0.96),
+      borderRadius: BorderRadius.circular(6),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(
+        color: lower == "release" ? Colors.black : Colors.white,
+        fontWeight: FontWeight.w700,
+        fontSize: 13,
+        letterSpacing: 0.15,
+      ),
+    ),
+  );
 }
 
 // --------- Sample Card Icon ---------
