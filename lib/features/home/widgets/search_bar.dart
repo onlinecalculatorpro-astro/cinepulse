@@ -112,6 +112,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
     } else {
       _hideOverlay();
     }
+    widget.onChanged?.call(_c.text);
   }
 
   void _onFocus() {
@@ -250,9 +251,10 @@ class _SearchBarInputState extends State<SearchBarInput> {
         child: Row(
           children: [
             const SizedBox(width: 8),
+            // 🔍 exact emoji for search
             const Padding(
               padding: EdgeInsets.only(left: 4.0),
-              child: Icon(Icons.search_rounded),
+              child: _Emoji(emoji: '🔍', size: 18),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -286,7 +288,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                 ),
               ),
 
-            // Clear (when typing) or Mic (when empty)
+            // Clear (when typing) or Mic (when empty) — 🎤 exact emoji
             if (hasText)
               IconButton(
                 tooltip: 'Clear',
@@ -303,10 +305,10 @@ class _SearchBarInputState extends State<SearchBarInput> {
               IconButton(
                 tooltip: micEnabled ? 'Voice' : 'Voice (offline)',
                 onPressed: micEnabled ? widget.onMicTap : null,
-                icon: const Icon(Icons.mic_rounded),
+                icon: const _Emoji(emoji: '🎤', size: 18),
               ),
 
-            // Refresh (always shown)
+            // Refresh (always shown) – keeping Material refresh icon
             Padding(
               padding: const EdgeInsets.only(right: 4),
               child: IconButton(
@@ -340,7 +342,7 @@ class _SuggestionsEmpty extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
       child: Row(
         children: [
-          Icon(Icons.search_rounded, color: cs.onSurfaceVariant),
+          const _Emoji(emoji: '🔍', size: 16),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -358,6 +360,23 @@ class _SuggestionsEmpty extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/* --------------------------------- Utils -------------------------------- */
+
+class _Emoji extends StatelessWidget {
+  const _Emoji({required this.emoji, this.size = 18});
+  final String emoji;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      emoji,
+      // Use system emoji font; do not apply GoogleFonts or color.
+      style: TextStyle(fontSize: size, height: 1),
     );
   }
 }
