@@ -118,9 +118,18 @@ _BOILERPLATE_RE = re.compile(
 _TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
 _WS_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")
+
 # Remove WordPress-style excerpt tails and dangling ellipses
 _ELLIPSIS_TAIL_RE = re.compile(r"(\[\s*(?:…|\.{3})\s*\]\s*)+$")
 _DANGLING_ELLIPSIS_RE = re.compile(r"(?:…|\.{3})\s*$")
+
+# Inline noise scrubbers (URLs, hashtags, pushy CTAs)
+_URL_INLINE_RE     = re.compile(r"https?://\S+", re.I)
+_HASHTAG_INLINE_RE = re.compile(r"(?<!\w)#\w+\b")
+_CTA_NOISE_RE      = re.compile(
+    r"\b(get\s+tickets?|book\s+now|buy\s+now|pre[- ]?order|link\s+in\s+bio|watch\s+now|stream\s+now)\b",
+    re.I,
+)
 
 # Endings that look clipped (conjunctions, auxiliaries)
 _BAD_END_WORD = re.compile(r"\b(?:and|but|or|so|because|since|although|though|while|as)\.?$", re.I)
@@ -273,17 +282,27 @@ def _strip_html(s: str) -> str:
     s = html.unescape(s)
     s = _TAG_RE.sub(" ", s)
     s = _TIMESTAMP_RE.sub(" ", s)
+
     lines = [ln.strip() for ln in s.splitlines()]
     keep: list[str] = []
     for ln in lines:
         if not ln:
             continue
-        if _BOILERPLATE_RE.search(ln):
+        # drop boilerplate and pushy CTA lines anywhere in the line
+        if _BOILERPLATE_RE.search(ln) or _CTA_NOISE_RE.search(ln):
             continue
         keep.append(ln)
+
     s2 = " ".join(keep)
+
+    # scrub inline links & hashtags that can still leak through
+    s2 = _URL_INLINE_RE.sub(" ", s2)
+    s2 = _HASHTAG_INLINE_RE.sub(" ", s2)
+
+    # remove tails & dangling ellipses
     s2 = _ELLIPSIS_TAIL_RE.sub("", s2)
     s2 = _DANGLING_ELLIPSIS_RE.sub("", s2)
+
     return _WS_RE.sub(" ", s2).strip()
 
 _SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
