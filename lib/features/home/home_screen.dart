@@ -1,332 +1,373 @@
-// lib/features/home/home_screen.dart
+// lib/root_shell.dart
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 
-import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
-import '../../core/api.dart';
-import '../../core/cache.dart';
-import '../../core/models.dart';
-import '../../widgets/error_view.dart';
-import '../../widgets/offline_banner.dart';
-import '../../widgets/skeleton_card.dart';
-import 'widgets/search_bar.dart';
-import '../../features/story/story_card.dart';
+import 'app/app_settings.dart';
+import 'core/api.dart' show fetchStory; // deep-link fallback
+import 'core/cache.dart';
+import 'core/models.dart';
+import 'core/utils.dart'; // fadeRoute()
+import 'features/home/home_screen.dart';
+import 'features/saved/saved_screen.dart';
+import 'features/story/story_details.dart';
+import 'features/alerts/alerts_screen.dart';
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({
-    super.key,
-    this.showSearch = false,          // <- Search bar appears only when true
-    this.onTapDiscover,               // <- Header Discover button callback
-  });
-
-  /// When true, the search bar sliver is rendered.
-  final bool showSearch;
-
-  /// Called when the header's Discover icon is tapped (parent can switch tab).
-  final VoidCallback? onTapDiscover;
-
+class RootShell extends StatefulWidget {
+  const RootShell({super.key});
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<RootShell> createState() => _RootShellState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  static const Map<String, String> _tabs = {
-    'all': 'All',
-    'trailers': 'Trailers',
-    'ott': 'OTT',
-    'intheatres': 'In Theatres',
-    'comingsoon': 'Coming Soon',
-  };
+class _RootShellState extends State<RootShell> {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  late final TabController _tab =
-      TabController(length: _tabs.length, vsync: this);
+  int _index = 0; // 0=Home, 1=Search, 2=Saved, 3=Alerts
 
-  final TextEditingController _search = TextEditingController();
-  final GlobalKey<RefreshIndicatorState> _refreshKey =
-      GlobalKey<RefreshIndicatorState>();
-
-  final Map<String, _PagedFeed> _feeds = {
-    for (final k in _tabs.keys) k: _PagedFeed(tab: k),
-  };
-
-  bool _offline = false;
-  StreamSubscription? _connSub;
-  Timer? _debounce;
+  String? _pendingDeepLinkId;
+  bool _deepLinkHandled = false;
 
   @override
   void initState() {
     super.initState();
-    for (final f in _feeds.values) {
-      unawaited(f.load(reset: true));
+    _captureInitialDeepLink();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tryOpenPendingDeepLink());
+  }
+
+  /// Parses links like `/#/s/<id>` or `/s/<id>` from the current URL.
+  void _captureInitialDeepLink() {
+    final frag = Uri.base.fragment; // hash-part on web ("" on mobile)
+    final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
+    final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
+    if (match != null) {
+      _pendingDeepLinkId = match.group(2);
     }
-    _connSub = Connectivity().onConnectivityChanged.listen((event) {
-      final hasNetwork = _hasNetworkFrom(event);
+  }
+
+  Future<void> _tryOpenPendingDeepLink() async {
+    if (_deepLinkHandled || _pendingDeepLinkId == null) return;
+
+    const maxWait = Duration(seconds: 4);
+    const tick = Duration(milliseconds: 200);
+    final started = DateTime.now();
+
+    // 1) Try mem-cache first.
+    while (mounted && DateTime.now().difference(started) < maxWait) {
+      final Story? s = FeedCache.get(_pendingDeepLinkId!);
+      if (s != null) {
+        await _openDetails(s);
+        return;
+      }
+      await Future<void>.delayed(tick);
+    }
+
+    // 2) Fallback fetch.
+    try {
+      final s = await fetchStory(_pendingDeepLinkId!);
       if (!mounted) return;
-      setState(() => _offline = !hasNetwork);
-    });
-    () async {
-      final initial = await Connectivity().checkConnectivity();
-      final hasNetwork = _hasNetworkFrom(initial);
-      if (!mounted) return;
-      setState(() => _offline = !hasNetwork);
-    }();
-    _search.addListener(_onSearchChanged);
-  }
-
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    _connSub?.cancel();
-    _search.removeListener(_onSearchChanged);
-    _search.dispose();
-    for (final f in _feeds.values) {
-      f.dispose();
+      FeedCache.put(s);
+      await _openDetails(s);
+      return;
+    } catch (_) {
+      // Show Home silently.
     }
-    _tab.dispose();
-    super.dispose();
-  }
 
-  bool _hasNetworkFrom(dynamic event) {
-    if (event is ConnectivityResult) return event != ConnectivityResult.none;
-    if (event is List<ConnectivityResult>) {
-      return event.any((r) => r != ConnectivityResult.none);
+    if (mounted && kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Opening… fetching story may take a moment')),
+      );
     }
-    return true;
   }
 
-  void _onSearchChanged() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) setState(() {});
-    });
+  Future<void> _openDetails(Story s) async {
+    _deepLinkHandled = true;
+    if (_index != 0) setState(() => _index = 0); // ensure Home beneath
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: s)));
   }
 
-  Future<void> _refresh() async {
-    final key = _tabs.keys.elementAt(_tab.index);
-    await _feeds[key]!.load(reset: true);
+  void _goTo(int i) {
+    if (_index == i) return;
+    setState(() => _index = i);
+    _scaffoldKey.currentState?.closeDrawer();
+    Navigator.of(context).maybePop(); // close any sheets/routes
   }
+
+  Future<void> _openThemePicker(BuildContext context) async {
+    final current = AppSettings.instance.themeMode;
+    Navigator.pop(context); // close drawer before sheet
+    final picked = await showModalBottomSheet<ThemeMode>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => _ThemePicker(current: current),
+    );
+    if (picked != null) {
+      await AppSettings.instance.setThemeMode(picked);
+    }
+  }
+
+  bool _isCompact(BuildContext context) => MediaQuery.of(context).size.width < 900;
+
+  // Build pages so we can pass "showSearch" to Home when on the Search tab.
+  List<Widget> _buildPages() => [
+        HomeScreen(
+          showSearch: _index == 1,      // Search bar only when Search tab active
+          onTapDiscover: () => _goTo(1),// Header “Discover” icon -> Search tab
+        ),
+        // The “Search” tab shows the same Home screen but with the search bar shown.
+        HomeScreen(
+          showSearch: true,
+          onTapDiscover: () => _goTo(1),
+        ),
+        const SavedScreen(),
+        const AlertsScreen(),
+      ];
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final compact = _isCompact(context);
 
-    return Scaffold(
-      backgroundColor:
-          isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
-      body: RefreshIndicator.adaptive(
-        key: _refreshKey,
-        onRefresh: _refresh,
-        color: const Color(0xFFdc2626),
-        child: CustomScrollView(
-          slivers: [
-            // Glassy app bar
-            SliverAppBar(
-              floating: true,
-              pinned: true,
-              elevation: 0,
-              backgroundColor: isDark
-                  ? const Color(0xFF0f172a).withOpacity(0.95)
-                  : theme.colorScheme.surface.withOpacity(0.95),
-              surfaceTintColor: Colors.transparent,
-              toolbarHeight: 70,
-              flexibleSpace: ClipRRect(
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: isDark
-                            ? [
-                                const Color(0xFF0f172a).withOpacity(0.95),
-                                const Color(0xFF0f172a).withOpacity(0.8),
-                              ]
-                            : [
-                                theme.colorScheme.surface.withOpacity(0.95),
-                                theme.colorScheme.surface.withOpacity(0.8),
-                              ],
-                      ),
-                      border: const Border(
-                        bottom: BorderSide(
-                          color: Color(0x0Fffffff),
-                          width: 1,
-                        ),
-                      ),
-                    ),
-                  ),
+    // Always show bottom nav on web; on devices only for compact layouts.
+    final showBottomNav = kIsWeb || compact;
+
+    return WillPopScope(
+      onWillPop: () async {
+        final canPop = Navigator.of(context).canPop();
+        if (canPop) Navigator.of(context).maybePop();
+        return !canPop;
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: Drawer(
+          child: SafeArea(
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                const _BrandDrawerHeader(),
+                ListTile(
+                  leading: const Icon(Icons.home_outlined),
+                  title: const Text('Home'),
+                  onTap: () => _goTo(0),
                 ),
-              ),
-              leading: Builder(
-                builder: (ctx) => IconButton(
-                  icon: const Icon(Icons.menu_rounded),
-                  // Open the ROOT scaffold's drawer (fixes non-working hamburger)
-                  onPressed: () => ctx
-                      .findRootAncestorStateOfType<ScaffoldState>()
-                      ?.openDrawer(),
-                  tooltip: 'Menu',
+                ListTile(
+                  leading: const Icon(Icons.search_rounded),
+                  title: const Text('Search'),
+                  onTap: () => _goTo(1),
                 ),
-              ),
-              title: const _ModernBrandLogo(), // 🎬
-              actions: [
-                // Discover in header (beside Refresh)
-                IconButton(
-                  tooltip: 'Discover',
-                  icon: const Icon(Icons.explore_outlined),
-                  onPressed: widget.onTapDiscover,
+                ListTile(
+                  leading: const Icon(Icons.bookmark_outline),
+                  title: const Text('Saved'),
+                  onTap: () => _goTo(2),
                 ),
-                // Refresh current tab (moved here from search bar)
-                IconButton(
-                  tooltip: 'Refresh',
-                  icon: const Icon(Icons.refresh_rounded),
-                  onPressed: () {
-                    _refreshKey.currentState?.show();
-                    unawaited(_refresh());
-                  },
+                ListTile(
+                  leading: const Icon(Icons.notifications_outlined),
+                  title: const Text('Alerts'),
+                  onTap: () => _goTo(3),
                 ),
-                const SizedBox(width: 4),
+                const Divider(height: 24),
+                ListTile(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text('Theme'),
+                  subtitle: const Text('System / Light / Dark'),
+                  onTap: () => _openThemePicker(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.settings_outlined),
+                  title: const Text('Settings'),
+                  onTap: () => Navigator.pop(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('About'),
+                  onTap: () => Navigator.pop(context),
+                ),
               ],
             ),
+          ),
+        ),
 
-            // Search bar (only when Search tab/screen is active)
-            if (widget.showSearch)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                  child: SearchBarInput(
-                    controller: _search,
-                    // No refresh here anymore; it lives in the header
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-              ),
+        // Keep tab states with an IndexedStack. Center on wide screens.
+        body: _ResponsiveWidth(
+          child: IndexedStack(index: _index, children: _buildPages()),
+        ),
 
-            // Offline banner if applicable
-            if (_offline)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: OfflineBanner(),
-                ),
-              ),
-
-            // Tabs (sticky)
-            SliverPersistentHeader(
-              pinned: true,
-              delegate: _ModernTabsDelegate(
-                child: Builder(
-                  builder: (context) {
-                    return Container(
-                      color: isDark
-                          ? const Color(0xFF0a0e1a)
-                          : theme.colorScheme.surface,
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? const Color(0xFF1e293b).withOpacity(0.4)
-                              : theme.colorScheme.surfaceContainerHighest
-                                  .withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.05),
-                            width: 1,
-                          ),
-                        ),
-                        child: TabBar(
-                          controller: _tab,
-                          isScrollable: true,
-                          tabAlignment: TabAlignment.start,
-                          labelPadding:
-                              const EdgeInsets.symmetric(horizontal: 16),
-                          dividerColor: Colors.transparent,
-                          indicatorSize: TabBarIndicatorSize.tab,
-                          indicator: BoxDecoration(
-                            color: const Color(0xFFdc2626),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color:
-                                    const Color(0xFFdc2626).withOpacity(0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          labelColor: Colors.white,
-                          labelStyle: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          unselectedLabelColor: isDark
-                              ? const Color(0xFF94a3b8)
-                              : theme.colorScheme.onSurfaceVariant,
-                          unselectedLabelStyle: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
-                          onTap: (_) => setState(() {}),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-
-            // “Trending Now” header (🔥)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFFdc2626), Color(0xFFef4444)],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
+        // Bottom nav: replace Discover with Search
+        bottomNavigationBar: showBottomNav
+            ? SafeArea(
+                top: false,
+                child: NavigationBar(
+                  selectedIndex: _index,
+                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+                  onDestinationSelected: _goTo,
+                  destinations: const [
+                    NavigationDestination(
+                      icon: Icon(Icons.home_outlined),
+                      selectedIcon: Icon(Icons.home),
+                      label: 'Home',
                     ),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Trending Now',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: isDark
-                            ? const Color(0xFFf1f5f9)
-                            : theme.colorScheme.onSurface,
-                      ),
+                    NavigationDestination(
+                      icon: Icon(Icons.search_rounded),
+                      selectedIcon: Icon(Icons.manage_search_rounded),
+                      label: 'Search',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.bookmark_outline),
+                      selectedIcon: Icon(Icons.bookmark),
+                      label: 'Saved',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.notifications_outlined),
+                      selectedIcon: Icon(Icons.notifications),
+                      label: 'Alerts',
                     ),
                   ],
                 ),
-              ),
-            ),
+              )
+            : null,
+      ),
+    );
+  }
+}
 
-            // Main tabbed feed list — auto-responsive grid
-            SliverFillRemaining(
-              child: TabBarView(
-                controller: _tab,
-                children: _tabs.keys.map((key) {
-                  final feed = _feeds[key]!;
-                  return _FeedList(
-                    key: PageStorageKey('feed-$key'),
-                    feed: feed,
-                    searchText: _search,
-                    offline: _offline,
-                  );
-                }).toList(),
+/* ------------------------------ Branding ------------------------------ */
+
+class _BrandDrawerHeader extends StatelessWidget {
+  const _BrandDrawerHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DrawerHeader(
+      margin: EdgeInsets.zero,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            scheme.primaryContainer.withOpacity(0.85),
+            scheme.surfaceContainerHighest.withOpacity(0.6),
+          ],
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const _LogoMark(size: 44),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'CinePulse',
+                style: GoogleFonts.inter(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: scheme.onPrimaryContainer,
+                ),
               ),
-            ),
+              Text(
+                'Movies & OTT, in a minute.',
+                style: GoogleFonts.inter(
+                  fontSize: 12.5,
+                  color: scheme.onPrimaryContainer.withOpacity(0.8),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Uses your branded asset for the logomark; falls back to a simple glyph if missing.
+class _LogoMark extends StatelessWidget {
+  const _LogoMark({this.size = 40});
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size * 0.22),
+      child: Container(
+        width: size,
+        height: size,
+        color: scheme.surface,
+        child: Image.asset(
+          'assets/logo.png',
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) {
+            // Fallback: minimal CP mark if asset not found yet.
+            return Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [scheme.primary, scheme.tertiary],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                'CP',
+                style: GoogleFonts.inter(
+                  fontSize: size * 0.42,
+                  fontWeight: FontWeight.w900,
+                  color: scheme.onPrimary,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/* --------------------------- Theme picker sheet --------------------------- */
+
+class _ThemePicker extends StatelessWidget {
+  const _ThemePicker({required this.current});
+  final ThemeMode current;
+
+  @override
+  Widget build(BuildContext context) {
+    final options = <ThemeMode, (String, IconData)>{
+      ThemeMode.system: ('System', Icons.auto_awesome),
+      ThemeMode.light: ('Light', Icons.light_mode_outlined),
+      ThemeMode.dark: ('Dark', Icons.dark_mode_outlined),
+    };
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Theme',
+                style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            for (final entry in options.entries)
+              RadioListTile<ThemeMode>(
+                value: entry.key,
+                groupValue: current,
+                onChanged: (val) => Navigator.pop(context, val),
+                title: Row(
+                  children: [
+                    Icon(entry.value.$2, size: 18),
+                    const SizedBox(width: 8),
+                    Text(entry.value.$1),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -334,322 +375,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-// Brand Logo Widget (🎬)
-class _ModernBrandLogo extends StatelessWidget {
-  const _ModernBrandLogo();
+/* ----------------------------- Responsiveness ----------------------------- */
 
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFdc2626), Color(0xFFef4444)],
-            ),
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFFdc2626).withOpacity(0.3),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: const Center(
-            child: Text('🎬', style: TextStyle(fontSize: 20, height: 1)),
-          ),
-        ),
-        const SizedBox(width: 10),
-        ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFFdc2626), Color(0xFFef4444)],
-          ).createShader(bounds),
-          child: const Text(
-            'CinePulse',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
-              letterSpacing: -0.5,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// Tabs Delegate
-class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
-  _ModernTabsDelegate({required this.child});
+/// Centers content on tablets/desktop so pages don’t grow too wide.
+/// On phones, it passes the page through unchanged.
+class _ResponsiveWidth extends StatelessWidget {
+  const _ResponsiveWidth({super.key, required this.child});
   final Widget child;
 
   @override
-  double get minExtent => 64;
-  @override
-  double get maxExtent => 64;
-
-  @override
-  Widget build(
-    BuildContext context,
-    double shrinkOffset,
-    bool overlapsContent,
-  ) {
-    return child;
-  }
-
-  @override
-  bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
-}
-
-// Responsive Feed List (auto columns + adaptive aspect ratio)
-class _FeedList extends StatefulWidget {
-  const _FeedList({
-    super.key,
-    required this.feed,
-    required this.searchText,
-    required this.offline,
-  });
-
-  final _PagedFeed feed;
-  final TextEditingController searchText;
-  final bool offline;
-
-  @override
-  State<_FeedList> createState() => _FeedListState();
-}
-
-class _FeedListState extends State<_FeedList>
-    with AutomaticKeepAliveClientMixin<_FeedList> {
-  @override
-  bool get wantKeepAlive => true;
-
-  SliverGridDelegate _gridDelegateFor(double width, double textScale) {
-    double maxTileW;
-    if (width < 520) {
-      maxTileW = width; // 1 col phones
-    } else if (width < 900) {
-      maxTileW = width / 2; // 2 cols
-    } else if (width < 1400) {
-      maxTileW = width / 3; // 3 cols
-    } else {
-      maxTileW = width / 4; // 4 cols
-    }
-    maxTileW = maxTileW.clamp(320.0, 460.0);
-
-    double ratio;
-    if (maxTileW <= 340) {
-      ratio = 0.78;
-    } else if (maxTileW <= 380) {
-      ratio = 0.84;
-    } else if (maxTileW <= 420) {
-      ratio = 0.92;
-    } else {
-      ratio = 1.02;
-    }
-    ratio /= textScale.clamp(1.0, 1.6);
-
-    return SliverGridDelegateWithMaxCrossAxisExtent(
-      maxCrossAxisExtent: maxTileW,
-      mainAxisSpacing: 16,
-      crossAxisSpacing: 16,
-      childAspectRatio: ratio,
-    );
-  }
-
-  @override
   Widget build(BuildContext context) {
-    super.build(context);
-    final feed = widget.feed;
+    return LayoutBuilder(builder: (context, c) {
+      final w = c.maxWidth;
+      if (w <= 720) return child; // phones: full-bleed
 
-    return AnimatedBuilder(
-      animation: feed,
-      builder: (context, _) {
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final w = constraints.maxWidth;
-            final textScale = MediaQuery.textScaleFactorOf(context);
-            final gridDelegate = _gridDelegateFor(w, textScale);
-
-            const horizontalPad = 16.0;
-            const topPad = 0.0;
-            final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
-            final bottomPad = 24.0 + bottomSafe;
-
-            if (feed.isInitialLoading) {
-              return GridView.builder(
-                padding: const EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
-                physics: const AlwaysScrollableScrollPhysics(),
-                cacheExtent: 1200,
-                gridDelegate: gridDelegate,
-                itemCount: 9,
-                itemBuilder: (_, __) => const SkeletonCard(),
-              );
-            }
-
-            if (feed.hasError && feed.items.isEmpty) {
-              return ListView(
-                padding: const EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  ErrorView(
-                    message: feed.errorMessage ?? 'Something went wrong.',
-                    onRetry: () => feed.load(reset: true),
-                  ),
-                ],
-              );
-            }
-
-            final q = widget.searchText.text.trim().toLowerCase();
-            final filtered = (q.isEmpty)
-                ? feed.items
-                : feed.items
-                    .where((s) =>
-                        s.title.toLowerCase().contains(q) ||
-                        (s.summary ?? '').toLowerCase().contains(q))
-                    .toList();
-
-            if (filtered.isEmpty) {
-              final msg = widget.offline
-                  ? "You're offline and no results match your search."
-                  : "No matching items.";
-              return ListView(
-                padding: const EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  Center(child: Text(msg)),
-                ],
-              );
-            }
-
-            const showLoadMore = false;
-
-            return GridView.builder(
-              padding: const EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
-              physics: const AlwaysScrollableScrollPhysics(),
-              cacheExtent: 1400,
-              gridDelegate: gridDelegate,
-              itemCount: filtered.length + (showLoadMore ? 1 : 0),
-              itemBuilder: (_, i) {
-                if (showLoadMore && i == filtered.length) {
-                  return Center(
-                    child: feed.isLoadingMore
-                        ? const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 16),
-                            child: CircularProgressIndicator(),
-                          )
-                        : OutlinedButton.icon(
-                            onPressed: feed.loadMore,
-                            icon: const Icon(Icons.expand_more_rounded),
-                            label: const Text('Load more'),
-                          ),
-                  );
-                }
-                return StoryCard(story: filtered[i]);
-              },
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-// Paging/feed model (unchanged)
-class _PagedFeed extends ChangeNotifier {
-  _PagedFeed({required this.tab});
-  final String tab;
-  final List<Story> _items = [];
-  bool _initialLoading = false;
-  bool _loadingMore = false;
-  bool _hasError = false;
-  String? _errorMessage;
-  bool _canLoadMore = false;
-
-  List<Story> get items => List.unmodifiable(_items);
-  bool get isInitialLoading => _initialLoading;
-  bool get isLoadingMore => _loadingMore;
-  bool get hasError => _hasError;
-  String? get errorMessage => _errorMessage;
-  bool get canLoadMore => _canLoadMore;
-
-  DateTime? _sinceCursor;
-
-  Future<void> load({required bool reset}) async {
-    if (reset) {
-      _initialLoading = true;
-      _loadingMore = false;
-      _hasError = false;
-      _errorMessage = null;
-      _sinceCursor = null;
-      _items.clear();
-
-      final cached = await FeedDiskCache.load(tab);
-      if (cached.isNotEmpty) {
-        _items.addAll(cached);
-        _sortNewestFirst(_items);
-        for (final s in cached) FeedCache.put(s);
-        _initialLoading = false;
-        notifyListeners();
-      } else {
-        notifyListeners();
-      }
-    }
-    try {
-      final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
-
-      final byId = {for (final s in _items) s.id: s};
-      for (final s in list) {
-        byId[s.id] = s;
-        FeedCache.put(s);
-      }
-      _items
-        ..clear()
-        ..addAll(byId.values);
-
-      _sortNewestFirst(_items);
-
-      final dates = _items.map((e) => e.publishedAt).whereType<DateTime>();
-      _sinceCursor =
-          dates.isEmpty ? null : dates.reduce((a, b) => a.isBefore(b) ? a : b);
-
-      _hasError = false;
-      _errorMessage = null;
-
-      if (reset) {
-        unawaited(FeedDiskCache.save(tab, _items));
-      }
-    } catch (e) {
-      _hasError = true;
-      _errorMessage = '$e';
-    } finally {
-      _initialLoading = false;
-      _loadingMore = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> loadMore() async {
-    if (_loadingMore || !_canLoadMore) return;
-    _loadingMore = true;
-    notifyListeners();
-    await load(reset: false);
-  }
-
-  void _sortNewestFirst(List<Story> list) {
-    list.sort((a, b) {
-      final pa = a.publishedAt;
-      final pb = b.publishedAt;
-      if (pa == null && pb == null) return 0;
-      if (pa == null) return 1;
-      if (pb == null) return -1;
-      return pb.compareTo(pa);
+      // Tablets & web: center with a comfortable max width.
+      final maxW = w >= 1400 ? 1200.0 : (w >= 1200 ? 1080.0 : 980.0);
+      return Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: child,
+        ),
+      );
     });
   }
 }
