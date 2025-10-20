@@ -345,7 +345,7 @@ class _ThemePicker extends StatelessWidget {
     final options = <ThemeMode, (String, IconData)>{
       ThemeMode.system: ('System', Icons.auto_awesome),
       ThemeMode.light: ('Light', Icons.light_mode_outlined),
-      ThemeMode dark: ('Dark', Icons.dark_mode_outlined),
+      ThemeMode.dark: ('Dark', Icons.dark_mode_outlined), // <- fixed dot
     };
 
     return SafeArea(
