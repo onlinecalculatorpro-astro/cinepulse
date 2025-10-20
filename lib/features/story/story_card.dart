@@ -12,9 +12,7 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
-import '../../widgets/kind_badge.dart';
 import 'story_details.dart';
-import 'ott_badge.dart';
 
 class StoryCard extends StatefulWidget {
   const StoryCard({super.key, required this.story});
@@ -32,7 +30,6 @@ class _StoryCardState extends State<StoryCard> {
   Uri? get _linkUrl {
     final v = _videoUrl;
     if (v != null) return v;
-
     final raw = (widget.story.url ?? '').trim();
     if (raw.isEmpty) return null;
     final u = Uri.tryParse(raw);
@@ -55,9 +52,8 @@ class _StoryCardState extends State<StoryCard> {
     if (url == null) return;
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open link')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Could not open link')));
     }
   }
 
@@ -71,11 +67,9 @@ class _StoryCardState extends State<StoryCard> {
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(kIsWeb
-              ? 'Link copied to clipboard'
-              : 'Share sheet opened'),
-        ),
+        SnackBar(content: Text(kIsWeb
+            ? 'Link copied to clipboard'
+            : 'Share sheet opened')),
       );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
@@ -88,8 +82,7 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   void _openDetails(BuildContext context) {
-    Navigator.of(context)
-        .push(fadeRoute(StoryDetailsScreen(story: widget.story)));
+    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
   }
 
   @override
@@ -98,6 +91,7 @@ class _StoryCardState extends State<StoryCard> {
     final metaText = widget.story.metaLine;
     final hasUrl = _linkUrl != null;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final showNewsBadge = widget.story.kind.toLowerCase() == 'news';
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -129,143 +123,143 @@ class _StoryCardState extends State<StoryCard> {
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _openDetails(context),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // ---------------------- Icon/Thumbnail Area ----------------------
-              Container(
-                height: 170,
-                decoration: BoxDecoration(
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(22)),
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: isDark
-                        ? [
-                            const Color(0xFF101626),
-                            const Color(0xFF232941),
-                          ]
-                        : [
-                            const Color(0xFFE7EBF2),
-                            const Color(0xFFD1D5DC),
-                          ],
+          child: SizedBox(
+            height: 370, // Increased height so all content fits
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // --------------- Icon/Thumbnail Section ----------------
+                Container(
+                  height: 170,
+                  decoration: BoxDecoration(
+                    borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(22)),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: isDark
+                          ? [
+                              const Color(0xFF101626),
+                              const Color(0xFF232941),
+                            ]
+                          : [
+                              const Color(0xFFE7EBF2),
+                              const Color(0xFFD1D5DC),
+                            ],
+                    ),
+                  ),
+                  child: Center(
+                    child: _SampleIcon(kind: widget.story.kind),
                   ),
                 ),
-                child: Center(
-                  child: _SampleIcon(kind: widget.story.kind),
-                ),
-              ),
-
-              // -------------------- Info/Badge/MetaSection ---------------------
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? const Color(0xFF181E2A).withOpacity(0.94)
-                      : scheme.surface.withOpacity(0.98),
-                  borderRadius: const BorderRadius.vertical(
-                      bottom: Radius.circular(22)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // NEWS badge, meta, time
-                    Row(
+                // ----------- Info/Badge/Meta Section -------------
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 4, horizontal: 14),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF723A3C).withOpacity(0.96),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Text(
-                            "NEWS",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              letterSpacing: 0.2,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Icon(Icons.circle, size: 7, color: Colors.grey[500]),
-                        const SizedBox(width: 6),
-                        Text(
-                          metaText,
-                          style: TextStyle(
-                            color: Colors.grey[400],
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    // ---------------------- Headline/title ----------------------
-                    Text(
-                      widget.story.title,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.inter(
-                        fontSize: 17.5,
-                        height: 1.35,
-                        fontWeight: FontWeight.w800,
-                        color: isDark
-                            ? Colors.white.withOpacity(0.96)
-                            : scheme.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 22),
-
-                    // --------------- CTA Row: Read + edit/share ----------------
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 44,
-                            child: ElevatedButton.icon(
-                              icon: const Icon(Icons.menu_book_rounded,
-                                  size: 22, color: Colors.white),
-                              onPressed:
-                                  hasUrl ? () => _openLink(context) : null,
-                              style: ElevatedButton.styleFrom(
-                                foregroundColor: Colors.white,
-                                backgroundColor: const Color(0xFFdc2626),
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
+                        // Only one NEWS badge per card, along with meta
+                        Row(
+                          children: [
+                            if (showNewsBadge)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 4, horizontal: 14),
+                                decoration: BoxDecoration(
+                                  color:
+                                      const Color(0xFF723A3C).withOpacity(0.96),
+                                  borderRadius: BorderRadius.circular(6),
                                 ),
-                                textStyle: const TextStyle(
-                                    fontWeight: FontWeight.bold, fontSize: 16),
+                                child: const Text(
+                                  "NEWS",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                    letterSpacing: 0.2,
+                                  ),
+                                ),
                               ),
-                              label: const Text("Read"),
+                            if (showNewsBadge) const SizedBox(width: 12),
+                            Icon(Icons.circle, size: 7, color: Colors.grey[500]),
+                            const SizedBox(width: 6),
+                            Text(
+                              metaText,
+                              style: TextStyle(
+                                color: Colors.grey[400],
+                                fontSize: 13,
+                              ),
                             ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+
+                        // ---------------- Title -----------------
+                        Text(
+                          widget.story.title,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.inter(
+                            fontSize: 17.5,
+                            height: 1.35,
+                            fontWeight: FontWeight.w800,
+                            color: isDark
+                                ? Colors.white.withOpacity(0.96)
+                                : scheme.onSurface,
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        _ActionIconBox(
-                          icon: Icons.edit_rounded,
-                          tooltip: "Edit",
-                          onTap: () {
-                            // Place your edit logic here
-                          },
-                        ),
-                        const SizedBox(width: 8),
-                        _ActionIconBox(
-                          icon: Icons.ios_share_rounded,
-                          tooltip: "Share",
-                          onTap: () => _share(context),
+                        const Spacer(), // Push CTAs to bottom
+
+                        // ---------- Read, Edit, Share CTAs ----------
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: 44,
+                                child: ElevatedButton.icon(
+                                  icon: const Icon(Icons.menu_book_rounded,
+                                      size: 22, color: Colors.white),
+                                  onPressed:
+                                      hasUrl ? () => _openLink(context) : null,
+                                  style: ElevatedButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    backgroundColor: const Color(0xFFdc2626),
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    textStyle: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16),
+                                  ),
+                                  label: const Text("Read"),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            _ActionIconBox(
+                              icon: Icons.edit_rounded,
+                              tooltip: "Edit",
+                              onTap: () {
+                                // Place your edit logic here
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            _ActionIconBox(
+                              icon: Icons.ios_share_rounded,
+                              tooltip: "Share",
+                              onTap: () => _share(context),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
