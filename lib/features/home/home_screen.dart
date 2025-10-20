@@ -1,3 +1,4 @@
+#lib/features/home/home_screen.dart
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
@@ -257,7 +258,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Trending Now header (more visually prominent)
+            // “Trending Now” header (kept visible)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
@@ -294,7 +295,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Main tabbed feed list, using responsive grid for cards
+            // Main tabbed feed list — auto-responsive grid
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -316,7 +317,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-// Brand Logo Widget [as before]
+// Brand Logo Widget
 class _ModernBrandLogo extends StatelessWidget {
   const _ModernBrandLogo();
 
@@ -369,7 +370,7 @@ class _ModernBrandLogo extends StatelessWidget {
   }
 }
 
-// Modern Search Bar Widget [as before]
+// Modern Search Bar Widget
 class _ModernSearchBar extends StatelessWidget {
   const _ModernSearchBar({
     required this.controller,
@@ -453,7 +454,7 @@ class _ModernSearchBar extends StatelessWidget {
   }
 }
 
-// Tabs Delegate [as before]
+// Tabs Delegate
 class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   _ModernTabsDelegate({required this.child});
   final Widget child;
@@ -476,7 +477,7 @@ class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-// Responsive Feed List [adjusted aspect ratio for tall cards]
+// Responsive Feed List (auto columns + adaptive aspect ratio)
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -498,11 +499,42 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
-  // Lowered aspect ratios for much taller cards.
-  double _aspectRatioFor(int cols, double maxWidth) {
-    if (cols >= 3) return 0.90;  // was 1.18, lower means "taller"
-    if (cols == 2) return 0.82;  // was 1.08
-    return 0.74;                  // was 0.92
+  SliverGridDelegate _gridDelegateFor(double width, double textScale) {
+    // Target max tile width: auto-decides columns across phone/tablet/web.
+    double maxTileW;
+    if (width < 520) {
+      maxTileW = width; // 1 col phones
+    } else if (width < 900) {
+      maxTileW = width / 2; // 2 cols tablets / small web
+    } else if (width < 1400) {
+      maxTileW = width / 3; // 3 cols desktop
+    } else {
+      maxTileW = width / 4; // 4 cols wide desktop
+    }
+    // Clamp the tile width to keep card readability consistent.
+    maxTileW = maxTileW.clamp(320.0, 460.0);
+
+    // Aspect ratio adapts to available width and text scale:
+    // smaller width or larger text -> taller cards (smaller ratio).
+    double ratio;
+    if (maxTileW <= 340) {
+      ratio = 0.78;
+    } else if (maxTileW <= 380) {
+      ratio = 0.84;
+    } else if (maxTileW <= 420) {
+      ratio = 0.92;
+    } else {
+      ratio = 1.02;
+    }
+    // Adjust for larger accessibility text sizes.
+    ratio /= textScale.clamp(1.0, 1.6);
+
+    return SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: maxTileW,
+      mainAxisSpacing: 16,
+      crossAxisSpacing: 16,
+      childAspectRatio: ratio,
+    );
   }
 
   @override
@@ -516,39 +548,31 @@ class _FeedListState extends State<_FeedList>
         return LayoutBuilder(
           builder: (context, constraints) {
             final w = constraints.maxWidth;
-            int cols = 1;
-            if (w >= 1200) {
-              cols = 3;
-            } else if (w >= 800) {
-              cols = 2;
-            }
-            final ratio = _aspectRatioFor(cols, w);
+            final textScale = MediaQuery.textScaleFactorOf(context);
+            final gridDelegate = _gridDelegateFor(w, textScale);
 
-            const hPad = 16.0;
-            const vPadTop = 0.0;
-            const vPadBottom = 96.0; // space for fixed bottom nav
-            final gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: cols,
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
-              childAspectRatio: ratio,
-            );
+            final horizontalPad = 16.0;
+            final topPad = 0.0;
+            final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
+            final bottomPad = 24.0 + bottomSafe;
 
             if (feed.isInitialLoading) {
-              final skeletonCount = cols * 3;
+              // Show enough skeletons to fill 2–3 rows regardless of column count.
               return GridView.builder(
-                padding: const EdgeInsets.fromLTRB(hPad, 8, hPad, vPadBottom),
+                padding:
+                    EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 cacheExtent: 1200,
                 gridDelegate: gridDelegate,
-                itemCount: skeletonCount,
+                itemCount: 9,
                 itemBuilder: (_, __) => const SkeletonCard(),
               );
             }
 
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
-                padding: const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
+                padding:
+                    EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
@@ -573,7 +597,8 @@ class _FeedListState extends State<_FeedList>
                   ? "You're offline and no results match your search."
                   : "No matching items.";
               return ListView(
-                padding: const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
+                padding:
+                    EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
@@ -585,7 +610,7 @@ class _FeedListState extends State<_FeedList>
 
             return GridView.builder(
               padding:
-                  const EdgeInsets.fromLTRB(hPad, vPadTop, hPad, vPadBottom),
+                  EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 1400,
               gridDelegate: gridDelegate,
@@ -615,7 +640,7 @@ class _FeedListState extends State<_FeedList>
   }
 }
 
-// Paging/feed model [unchanged]
+// Paging/feed model (unchanged)
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
   final String tab;
