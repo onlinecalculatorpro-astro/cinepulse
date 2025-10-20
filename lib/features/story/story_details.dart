@@ -4,13 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
-import '../../core/models.dart'; // Story + storyVideoUrl
+import '../../core/models.dart'; // Story + storyVideoUrl + metaLine
 import '../../core/utils.dart';
 import 'ott_badge.dart';
 
@@ -87,50 +86,6 @@ class StoryDetailsScreen extends StatelessWidget {
     }
   }
 
-  /* --------------------------------- meta ---------------------------------- */
-
-  String _metaLine() {
-    final String ctx;
-    if (story.isTheatrical) {
-      ctx = story.isUpcoming ? 'Coming soon' : 'In theatres';
-    } else {
-      ctx = story.kind.toLowerCase() == 'ott' ? 'OTT' : _titleCase(story.kind);
-    }
-
-    final DateTime? d = story.releaseDate ?? story.publishedAt;
-    String dateText = '';
-    if (d != null) {
-      final now = DateTime.now().toUtc();
-      final diff = now.difference(d);
-      if (diff.inDays >= 0 && diff.inDays <= 10) {
-        if (diff.inDays == 0) {
-          dateText = 'Today';
-        } else if (diff.inDays == 1) {
-          dateText = 'Yesterday';
-        } else {
-          dateText = '${diff.inDays}d ago';
-        }
-      } else {
-        dateText = DateFormat('d MMM').format(d.toLocal());
-      }
-    }
-
-    final extras = <String>[];
-    if ((story.ratingCert ?? '').isNotEmpty) extras.add(story.ratingCert!);
-    if ((story.runtimeMinutes ?? 0) > 0) extras.add('${story.runtimeMinutes}m');
-
-    final String sourceDomain = (story.sourceDomain ?? '').trim();
-
-    final parts = <String>[];
-    if (ctx.isNotEmpty) parts.add(ctx);
-    if (dateText.isNotEmpty) parts.add(dateText);
-    if (extras.isNotEmpty) parts.add(extras.join(' • '));
-    if (sourceDomain.isNotEmpty) parts.add(sourceDomain);
-    return parts.join(' • ');
-  }
-
-  String _titleCase(String s) => s.isEmpty ? s : (s[0].toUpperCase() + s.substring(1));
-
   /* --------------------------------- UI ------------------------------------ */
 
   @override
@@ -205,14 +160,14 @@ class StoryDetailsScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
 
-                      // OTT badge + Meta line
+                      // OTT badge + Meta line ("News • 20 Oct 2025, 1:59 PM")
                       Wrap(
                         crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 8,
                         children: [
                           OttBadge.fromStory(story, dense: true),
                           Text(
-                            _metaLine(),
+                            story.metaLine, // <- from Story model
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: s.onSurfaceVariant,
                                 ),
