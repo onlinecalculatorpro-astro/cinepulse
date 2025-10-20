@@ -1,11 +1,9 @@
 # =============================================================================
-# CinePulse Sources Catalog
-# One place for YouTube, News (RSS), Awards, Box Office, and TMDb knobs.
-# Nothing secret belongs here—use .env for tokens.
+# CinePulse Sources Catalog — BOLLYWOOD + HINDI TV/OTT SCOPE
 # =============================================================================
 
 meta:
-  regions: ["US", "IN"]
+  regions: ["IN"]   # narrowed to India
   # Deep-link base your app shares (hash route handled by RootShell)
   share_base_url: "https://cinepusle.netlify.app/#/s"
 
@@ -18,76 +16,26 @@ throttle:
     default: 300
     youtube.com: 300
     googlevideo.com: 300
-    variety.com: 600
-    deadline.com: 600
-    hollywoodreporter.com: 600
-    indiewire.com: 600
-    koimoi.com: 600
+    bollywoodhungama.com: 600
+    filmcompanion.in: 600
     pinkvilla.com: 600
-    123telugu.com: 600
-    telugu360.com: 600
-    greatandhra.com: 600
+    koimoi.com: 600
+    tellyupdates.com: 600
 
 # -----------------------------------------------------------------------------
-# YOUTUBE (official trailers, teasers, OTT promos)
+# YOUTUBE (official trailers, teasers, OTT promos) — Bollywood/Hindi only
 # -----------------------------------------------------------------------------
 youtube:
   defaults:
     enabled: true
-    kind_hint: trailer              # channel can override to "ott"
+    kind_hint: trailer               # channel can override to "ott"
     max_items_per_poll: 20
     published_after_hours: 72
     language: "en"
-    region: "global"
+    region: "IN"
 
   channels:
-    # --- Hollywood ------------------------------------------------------------
-    - name: "Netflix"
-      enabled: true
-      channel_id: "UCWOA1ZGywLbqmigxE4Qlvuw"
-      industry: "hollywood"
-      kind_hint: "ott"
-      tags: ["ott","hollywood"]
-
-    - name: "Marvel Entertainment"
-      enabled: true
-      channel_id: "UCvC4D8onUfXzvjTOM-dBfEA"
-      industry: "hollywood"
-      kind_hint: "trailer"
-      tags: ["studio","hollywood"]
-
-    - name: "Sony Pictures Entertainment"
-      enabled: true
-      channel_id: "UCz97F7dMxBNOfGYu3rx8aCw"
-      industry: "hollywood"
-      kind_hint: "trailer"
-
-    - name: "Warner Bros. Pictures"
-      enabled: true
-      channel_id: "UCjmJDM5pRKbUlVIzDYYWb6g"
-      industry: "hollywood"
-      kind_hint: "trailer"
-
-    - name: "Paramount Pictures"
-      enabled: true
-      channel_id: "UCF9imwPMSGz4Vq1NiTWCC7g"
-      industry: "hollywood"
-      kind_hint: "trailer"
-
-    - name: "Universal Pictures"
-      enabled: true
-      channel_id: "UCq0OueAsdxH6b8NY18-uhug"
-      industry: "hollywood"
-      kind_hint: "trailer"
-
-    # Optional studios/labels to add later (IDs to verify):
-    - name: "20th Century Studios"   # TODO: verify channel_id
-      enabled: false
-      channel_id: "UCi8e0iOVk1fEOogdfu4YgfA"
-      industry: "hollywood"
-      kind_hint: "trailer"
-
-    # --- Bollywood ------------------------------------------------------------
+    # --- Bollywood studios ----------------------------------------------------
     - name: "T-Series"
       enabled: true
       channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
@@ -102,41 +50,64 @@ youtube:
       kind_hint: "trailer"
       region: "IN"
 
-    - name: "Zee Studios"            # TODO: verify channel_id
+    - name: "Zee Studios"
       enabled: true
       channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
 
-    - name: "Dharma Productions"     # TODO: verify channel_id
+    - name: "Dharma Productions"
       enabled: true
       channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
 
-    # --- Tollywood ------------------------------------------------------------
-    - name: "Mythri Movie Makers"     # TODO: verify channel_id
-      enabled: true
-      channel_id: "UCwSRZ9YQ9V0-3cN0iK8gVtQ"
-      industry: "tollywood"
-      kind_hint: "trailer"
+    # --- Hindi OTT platforms (enable after verifying channel_id) --------------
+    - name: "Netflix India"
+      enabled: false                  # TODO: verify channel_id before enabling
+      channel_id: ""                  # e.g., official India channel ID
+      industry: "bollywood"
+      kind_hint: "ott"
       region: "IN"
 
-    - name: "UV Creations"            # TODO: verify channel_id
-      enabled: true
-      channel_id: "UCpO4t7d4AFFqU8xM3A4J3og"
-      industry: "tollywood"
-      kind_hint: "trailer"
+    - name: "Prime Video India"
+      enabled: false                  # TODO: verify channel_id before enabling
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
       region: "IN"
 
-    - name: "Geetha Arts"             # TODO: verify channel_id
-      enabled: true
-      channel_id: "UCYx3Feo0iF4cGzJpmKfOaYg"
-      industry: "tollywood"
-      kind_hint: "trailer"
+    - name: "Disney+ Hotstar"
+      enabled: false                  # TODO: verify channel_id before enabling
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
       region: "IN"
+
+    - name: "JioCinema"
+      enabled: false                  # TODO: verify channel_id before enabling
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+
+    - name: "ZEE5"
+      enabled: false                  # TODO: verify channel_id before enabling
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+
+    - name: "Sony LIV"
+      enabled: false                  # TODO: verify channel_id before enabling
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+
+    # All Hollywood/Tollywood channels are intentionally disabled/omitted.
 
 # -----------------------------------------------------------------------------
 # NEWS (RSS)
@@ -147,7 +118,7 @@ rss:
     enabled: true
     kind_hint: news
     max_items_per_poll: 20
-    include_keywords: []            # if non-empty, title must contain one
+    include_keywords: []             # per-feed override supported
     ignore_keywords:
       - "behind the scenes"
       - "interview"
@@ -155,39 +126,7 @@ rss:
 
   buckets:
 
-    news_hollywood:
-      enabled: true
-      feeds:
-        - name: "Variety"
-          enabled: true
-          url: "https://variety.com/feed/"
-          industry: "hollywood"
-        - name: "Deadline"
-          enabled: true
-          url: "https://deadline.com/feed/"
-          industry: "hollywood"
-        - name: "The Hollywood Reporter"
-          enabled: true
-          url: "https://www.hollywoodreporter.com/feed/"
-          industry: "hollywood"
-        - name: "IndieWire"
-          enabled: true
-          url: "https://www.indiewire.com/feed/"
-          industry: "hollywood"
-        - name: "Slashfilm"
-          enabled: true
-          url: "https://www.slashfilm.com/rss.xml"
-          industry: "hollywood"
-          max_items_per_poll: 10
-        - name: "Collider (All)"     # broad; can be noisy
-          enabled: false
-          url: "https://collider.com/rss/all/"
-          industry: "hollywood"
-        - name: "The Playlist"
-          enabled: false
-          url: "https://theplaylist.net/feed/"
-          industry: "hollywood"
-
+    # Core Bollywood news
     news_india:
       enabled: true
       feeds:
@@ -207,83 +146,98 @@ rss:
           enabled: true
           url: "https://www.koimoi.com/feed/"
           industry: "bollywood"
-        - name: "123Telugu"
+
+    # Focused Hindi TV Serials + OTT series/movies (keyword-filtered)
+    news_hindi_tv_ott:
+      enabled: true
+      feeds:
+        # Reuse the same sources but restrict to OTT/TV topics via keywords
+        - name: "Bollywood Hungama — OTT/TV"
           enabled: true
-          url: "https://www.123telugu.com/feed"
-          industry: "tollywood"
-        - name: "Telugu360"
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+        - name: "Pinkvilla — OTT/TV"
           enabled: true
-          url: "https://www.telugu360.com/feed/"
-          industry: "tollywood"
-        - name: "GreatAndhra"
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+        - name: "Film Companion — OTT/TV"
           enabled: true
-          url: "https://www.greatandhra.com/rss/english/movies.xml"
-          industry: "tollywood"
-        - name: "Bollywood Life"     # noisy; keep optional
-          enabled: false
-          url: "https://www.bollywoodlife.com/feed/"
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+
+        # Dedicated Hindi TV/serials portals (safe pick with standard WP feed)
+        - name: "TellyUpdates"
+          enabled: true
+          url: "https://www.tellyupdates.com/feed/"
+          industry: "bollywood"       # keep unified tag
+          include_keywords: []        # already TV-only
+
+        # Placeholders to enable after verifying RSS URLs:
+        - name: "TellyChakkar"
+          enabled: false              # TODO: add/verify RSS URL, then enable
+          url: ""
+          industry: "bollywood"
+        - name: "OTTplay"
+          enabled: false              # TODO: add/verify RSS URL, then enable
+          url: ""
           industry: "bollywood"
 
+    # Reviews/editorial (keep off until you add a Reviews tab)
     reviews_editorial:
-      enabled: false                 # turn on if you add a “Reviews” tab
-      feeds:
-        - name: "Empire (All)"       # TODO: verify if still active
-          enabled: false
-          url: "https://www.empireonline.com/feeds/all/"
-          industry: "hollywood"
-        - name: "ScreenRant"         # mixed editorial/news
-          enabled: false
-          url: "https://screenrant.com/feed/"
-          industry: "hollywood"
+      enabled: false
+      feeds: []
 
 # -----------------------------------------------------------------------------
-# AWARDS
-# Many award bodies don’t offer RSS. 'mode: scrape' placeholders for later.
+# AWARDS (kept off for now)
 # -----------------------------------------------------------------------------
 awards:
   defaults:
     enabled: false
     kind_hint: award
-  sources:
-    # US / Global
-    - name: "Academy Awards (Oscars) — Newsroom"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.oscars.org/news"
-      regions: ["US"]
-    - name: "Golden Globes — News"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.goldenglobes.com/news"
-      regions: ["US"]
-    - name: "BAFTA — Media Centre"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.bafta.org/media-centre"
-      regions: ["UK"]
-
-    # India
-    - name: "Filmfare — Awards"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.filmfare.com/awards"
-      regions: ["IN"]
-    - name: "IIFA — Media"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.iifa.com/media"
-      regions: ["IN"]
-    - name: "SIIMA — News"
-      enabled: false
-      mode: "scrape"
-      url: "https://siima.in/news"
-      regions: ["IN"]
-
+  sources: []
   calendar:
-    - name: "Oscars"
-      region: "US"
-      tz: "America/Los_Angeles"
-      date_utc: ""    # e.g. "2026-03-08T01:00:00Z"
     - name: "Filmfare"
       region: "IN"
       tz: "Asia/Kolkata"
@@ -296,34 +250,14 @@ box_office:
   defaults:
     enabled: false
     kind_hint: bo
-  sources:
-    - name: "Box Office Mojo — Weekend"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.boxofficemojo.com/weekend/"
-      regions: ["US"]
-    - name: "The Numbers — Weekend"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.the-numbers.com/box-office-chart/weekend"
-      regions: ["US"]
-    - name: "Bollywood Hungama — Box Office"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.bollywoodhungama.com/box-office/"
-      regions: ["IN"]
-    - name: "Sacnilk — Box Office"
-      enabled: false
-      mode: "scrape"
-      url: "https://www.sacnilk.com/boxoffice/"
-      regions: ["IN"]
+  sources: []
 
 # -----------------------------------------------------------------------------
-# TMDb (free; attribution required)
+# TMDb (free; attribution required) — India region only
 # -----------------------------------------------------------------------------
 tmdb:
-  api_key_env: "TMDB_API_KEY"     # read from environment
-  regions: ["US", "IN"]
+  api_key_env: "TMDB_API_KEY"   # read from environment
+  regions: ["IN"]
   enable_trending: true
   enable_upcoming: true
   ott_providers:
@@ -331,13 +265,15 @@ tmdb:
     - "Amazon Prime Video"
     - "Disney Plus Hotstar"
     - "JioCinema"
+    - "ZEE5"
+    - "Sony LIV"
 
 # -----------------------------------------------------------------------------
 # (Optional) IMDb — disabled (no free official API; scraping breaks ToS)
 # -----------------------------------------------------------------------------
 imdb:
   enabled: false
-  mode: "scrape"                  # placeholder only; do not enable unless compliant
+  mode: "scrape"
   notes: "IMDb ratings not ingested due to lack of free official API."
 
 # -----------------------------------------------------------------------------
@@ -356,6 +292,10 @@ rules:
     - "coming soon"
     - "on netflix"
     - "on prime"
+    - "on hotstar"
+    - "on jiocinema"
+    - "on zee5"
+    - "on sonyliv"
   award_keywords:
     - "awards"
     - "nominations"
@@ -383,13 +323,12 @@ ranking_weights:
 scheduler:
   poll_interval_min: 15
   published_after_hours: 72
-  # If true, scheduler will read this file to enqueue both YouTube & RSS polls.
   use_sources_file: true
-  # Optional: choose which buckets to schedule from rss.buckets
+  # Only Bollywood/Hindi buckets
   rss_buckets_enabled:
-    - news_hollywood
     - news_india
-  # Cap per-run to avoid floods when first enabling many feeds
+    - news_hindi_tv_ott
+  # Cap per-run to avoid floods while scoped
   per_run_limits:
-    youtube_channels: 20
-    rss_feeds: 30
+    youtube_channels: 10
+    rss_feeds: 12
