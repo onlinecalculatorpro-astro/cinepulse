@@ -192,7 +192,7 @@ class _StoryCardState extends State<StoryCard> {
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                           style: GoogleFonts.inter(
-                            fontSize: 18,
+                            fontSize: 14,
                             height: 1.32,
                             fontWeight: FontWeight.w800,
                             color: isDark
