@@ -1,3 +1,5 @@
+// lib/features/story/story_card.dart
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -46,11 +48,16 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
+  IconData get _ctaIcon => _isWatchCta ? Icons.play_arrow_rounded : Icons.menu_book_rounded;
 
   Future<void> _openLink(BuildContext context) async {
     final url = _linkUrl;
     if (url == null) return;
-    final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
+    final ok = await launchUrl(
+      url,
+      mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+      webOnlyWindowName: kIsWeb ? '_blank' : null,
+    );
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Could not open link')));
@@ -67,9 +74,7 @@ class _StoryCardState extends State<StoryCard> {
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(kIsWeb
-            ? 'Link copied to clipboard'
-            : 'Share sheet opened')),
+        SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
       );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
@@ -87,27 +92,22 @@ class _StoryCardState extends State<StoryCard> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
     final metaText = widget.story.metaLine;
     final hasUrl = _linkUrl != null;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final kind = widget.story.kind.toLowerCase();
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover
-          ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0))
-          : null,
+      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF181E2A).withOpacity(0.92)
-            : scheme.surface.withOpacity(0.97),
+        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92) : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: _hover
-              ? const Color(0x33dc2626)
-              : Colors.white.withOpacity(0.08),
+          color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
           width: 2,
         ),
         boxShadow: [
@@ -123,129 +123,133 @@ class _StoryCardState extends State<StoryCard> {
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _openDetails(context),
-          child: SizedBox(
-            height: 420,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Icon/Thumbnail Section
-                Container(
-                  height: 170,
-                  decoration: BoxDecoration(
-                    borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(22)),
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: isDark
-                          ? [
-                              const Color(0xFF101626),
-                              const Color(0xFF232941),
-                            ]
-                          : [
-                              const Color(0xFFE7EBF2),
-                              const Color(0xFFD1D5DC),
-                            ],
+          child: LayoutBuilder(
+            builder: (context, box) {
+              final w = box.maxWidth;
+              final h = box.maxHeight;
+
+              // Hero/media height adapts to available tile size & width.
+              // Phone: taller media; Desktop: slightly shorter.
+              final targetAspect =
+                  w >= 1200 ? (16 / 7) : w >= 900 ? (16 / 9) : w >= 600 ? (3 / 2) : (4 / 3);
+              final mediaH = (w / targetAspect)
+                  .clamp(120.0, math.max(140.0, h.isFinite ? h * 0.45 : 220.0));
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Icon/Thumbnail Section (responsive height)
+                  SizedBox(
+                    height: mediaH.toDouble(),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: isDark
+                              ? [const Color(0xFF101626), const Color(0xFF232941)]
+                              : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
+                        ),
+                      ),
+                      child: Center(child: _SampleIcon(kind: widget.story.kind)),
                     ),
                   ),
-                  child: Center(
-                    child: _SampleIcon(kind: widget.story.kind),
-                  ),
-                ),
-                // Info/Badge/Meta Section
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            KindMetaBadge(kind),
-                            const SizedBox(width: 10),
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.13),
-                                shape: BoxShape.circle,
+
+                  // Info/Badge/Meta Section
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Badges row
+                          Row(
+                            children: [
+                              KindMetaBadge(kind),
+                              const SizedBox(width: 10),
+                              Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.13),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.access_time_rounded, size: 17, color: Color(0xFFA1A5B0)),
                               ),
-                              child: const Icon(
-                                Icons.access_time_rounded,
-                                size: 17,
-                                color: Color(0xFFA1A5B0),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              metaText,
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          widget.story.title,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            height: 1.32,
-                            fontWeight: FontWeight.w800,
-                            color: isDark
-                                ? Colors.white.withOpacity(0.96)
-                                : scheme.onSurface,
-                          ),
-                        ),
-                        const Spacer(),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: SizedBox(
-                                height: 46,
-                                child: ElevatedButton.icon(
-                                  icon: const Icon(Icons.menu_book_rounded,
-                                      size: 22, color: Colors.white),
-                                  onPressed:
-                                      hasUrl ? () => _openLink(context) : null,
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: Colors.white,
-                                    backgroundColor: const Color(0xFFdc2626),
-                                    elevation: 0,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    textStyle: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16),
-                                  ),
-                                  label: const Text("Read"),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  metaText,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
                                 ),
                               ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+
+                          // Title (2–3 lines depending on space)
+                          Text(
+                            widget.story.title,
+                            maxLines: h.isFinite && h < 360 ? 2 : 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                              fontSize: 15,
+                              height: 1.32,
+                              fontWeight: FontWeight.w800,
+                              color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
                             ),
-                            const SizedBox(width: 12),
-                            _ActionIconBox(
-                              icon: Icons.edit_rounded,
-                              tooltip: "Edit",
-                              onTap: () {},
-                            ),
-                            const SizedBox(width: 8),
-                            _ActionIconBox(
-                              icon: Icons.ios_share_rounded,
-                              tooltip: "Share",
-                              onTap: () => _share(context),
-                            ),
-                          ],
-                        ),
-                      ],
+                          ),
+                          const Spacer(),
+
+                          // CTA row: full-width primary + compact secondary actions
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Semantics(
+                                  button: true,
+                                  label: '${_ctaLabel} ${widget.story.title}',
+                                  child: SizedBox(
+                                    height: 46,
+                                    child: ElevatedButton.icon(
+                                      icon: Icon(_ctaIcon, size: 22, color: Colors.white),
+                                      onPressed: hasUrl ? () => _openLink(context) : null,
+                                      style: ElevatedButton.styleFrom(
+                                        foregroundColor: Colors.white,
+                                        backgroundColor: const Color(0xFFdc2626),
+                                        elevation: 0,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                                      ),
+                                      label: Text(_ctaLabel),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              _ActionIconBox(
+                                icon: Icons.edit_rounded,
+                                tooltip: 'Edit',
+                                onTap: () {}, // reserved for future use
+                              ),
+                              const SizedBox(width: 8),
+                              _ActionIconBox(
+                                icon: Icons.ios_share_rounded,
+                                tooltip: 'Share',
+                                onTap: () => _share(context),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -273,13 +277,13 @@ Widget KindMetaBadge(String kind) {
   Color bg;
   String label = kind.toUpperCase();
 
-  if (lower == "news") {
+  if (lower == 'news') {
     bg = const Color(0xFF723A3C);
-  } else if (lower == "release") {
+  } else if (lower == 'release') {
     bg = const Color(0xFFF9D359);
-  } else if (lower == "trailer") {
+  } else if (lower == 'trailer') {
     bg = const Color(0xFF56BAF8);
-  } else if (lower == "ott") {
+  } else if (lower == 'ott') {
     bg = const Color(0xFFC377F2);
   } else {
     bg = Colors.grey.shade800;
@@ -294,7 +298,7 @@ Widget KindMetaBadge(String kind) {
     child: Text(
       label,
       style: TextStyle(
-        color: lower == "release" ? Colors.black : Colors.white,
+        color: lower == 'release' ? Colors.black : Colors.white,
         fontWeight: FontWeight.w700,
         fontSize: 13,
         letterSpacing: 0.15,
@@ -303,7 +307,7 @@ Widget KindMetaBadge(String kind) {
   );
 }
 
-// --------- Sample Card Icon ---------
+// --------- Sample Card Icon (category-specific with fallback) ---------
 class _SampleIcon extends StatelessWidget {
   final String kind;
 
@@ -314,26 +318,23 @@ class _SampleIcon extends StatelessWidget {
     IconData iconData = Icons.movie_rounded;
     Color iconColor = const Color(0xFFECC943);
 
-    if (kind.toLowerCase().contains("trailer")) {
+    final k = kind.toLowerCase();
+    if (k.contains('trailer')) {
       iconData = Icons.theater_comedy_rounded;
       iconColor = const Color(0xFF56BAF8);
-    } else if (kind.toLowerCase().contains("release")) {
+    } else if (k.contains('release')) {
       iconData = Icons.balance_rounded;
       iconColor = const Color(0xFFF9D359);
-    } else if (kind.toLowerCase().contains("ott")) {
+    } else if (k.contains('ott')) {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
 
-    return Icon(
-      iconData,
-      size: 70,
-      color: iconColor.withOpacity(0.8),
-    );
+    return Icon(iconData, size: 70, color: iconColor.withOpacity(0.85));
   }
 }
 
-// --------- Action icon in box ---------
+// --------- Compact secondary action icon ---------
 class _ActionIconBox extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
@@ -347,18 +348,19 @@ class _ActionIconBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(8),
+        color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(10),
         child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: SizedBox(
+          child: const SizedBox(
             width: 44,
             height: 44,
-            child: Icon(icon, color: Colors.white, size: 22),
+            child: Icon(Icons.adaptive.share, size: 0), // size overridden by icon param below
           ),
         ),
       ),
