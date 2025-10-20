@@ -2,7 +2,7 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -100,11 +100,10 @@ class _StoryCardState extends State<StoryCard> {
     return const _Emoji(emoji: '📖', size: 18);
   }
 
-  // Remove the kind prefix like "News •", "Release •", "Trailer •", "OTT •"
-  String _stripKindPrefix(String meta, String kind) {
-    final prefixes = ['news', 'release', 'trailer', 'ott'];
+  // Remove kind prefix like "News •", "Release •", "Trailer •", "OTT •" in meta
+  String _stripKindPrefix(String meta) {
     var out = meta;
-    for (final p in prefixes) {
+    for (final p in const ['news', 'release', 'trailer', 'ott']) {
       final re = RegExp(r'^\s*' + RegExp.escape(p) + r'\s*•\s*', caseSensitive: false);
       out = out.replaceFirst(re, '');
     }
@@ -119,7 +118,7 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
     final rawMeta = widget.story.metaLine;
-    final metaText = _stripKindPrefix(rawMeta, kind); // keep only time after 🕐
+    final metaText = _stripKindPrefix(rawMeta); // keep only time after 🕐
     final hasUrl = _linkUrl != null;
 
     final card = AnimatedContainer(
@@ -127,9 +126,7 @@ class _StoryCardState extends State<StoryCard> {
       curve: Curves.easeOut,
       transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF181E2A).withOpacity(0.92)
-            : scheme.surface.withOpacity(0.97),
+        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92) : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
@@ -172,9 +169,7 @@ class _StoryCardState extends State<StoryCard> {
                     height: mediaH.toDouble(),
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(22),
-                        ),
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
@@ -187,7 +182,7 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Info/Badge/Meta Section — badge left, then 🕐 + time (no "News")
+                  // Info/Badge/Meta — badge left, then 🕐 + time (no "News")
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
@@ -212,10 +207,7 @@ class _StoryCardState extends State<StoryCard> {
                                   metaText,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: Colors.grey[400],
-                                    fontSize: 13.5,
-                                  ),
+                                  style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
                                 ),
                               ),
                             ],
@@ -231,9 +223,7 @@ class _StoryCardState extends State<StoryCard> {
                               fontSize: 15,
                               height: 1.32,
                               fontWeight: FontWeight.w800,
-                              color: isDark
-                                  ? Colors.white.withOpacity(0.96)
-                                  : scheme.onSurface,
+                              color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
                             ),
                           ),
                           const Spacer(),
@@ -410,10 +400,10 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: SizedBox(
+          child: const SizedBox(
             width: 44,
             height: 44,
-            child: Center(child: icon),
+            child: Center(child: SizedBox()),
           ),
         ),
       ),
