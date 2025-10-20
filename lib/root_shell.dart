@@ -6,10 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'app/app_settings.dart';
-import 'core/api.dart';            // fetchStory() for deep-link fallback
+import 'core/api.dart' show fetchStory; // deep-link fallback
 import 'core/cache.dart';
 import 'core/models.dart';
-import 'core/utils.dart';         // fadeRoute()
+import 'core/utils.dart'; // fadeRoute()
 import 'features/home/home_screen.dart';
 import 'features/saved/saved_screen.dart';
 import 'features/story/story_details.dart';
@@ -72,11 +72,10 @@ class _RootShellState extends State<RootShell> {
     // 2) Fallback: fetch the story directly (cold start / first run).
     try {
       final s = await fetchStory(_pendingDeepLinkId!);
-      if (mounted) {
-        FeedCache.put(s);
-        await _openDetails(s);
-        return;
-      }
+      if (!mounted) return;
+      FeedCache.put(s);
+      await _openDetails(s);
+      return;
     } catch (_) {
       // Ignore; we’ll just show Home. Optional toast below for web.
     }
@@ -115,8 +114,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  bool _isCompact(BuildContext context) =>
-      MediaQuery.of(context).size.width < 900;
+  bool _isCompact(BuildContext context) => MediaQuery.of(context).size.width < 900;
 
   @override
   Widget build(BuildContext context) {
@@ -184,7 +182,7 @@ class _RootShellState extends State<RootShell> {
           child: IndexedStack(index: _index, children: _pages),
         ),
 
-        // Mobile bottom nav only; hide on tablets/desktop to match your mock.
+        // Mobile bottom nav; hide on tablets/desktop to match your local vs Netlify diff.
         bottomNavigationBar: compact
             ? SafeArea(
                 top: false,
@@ -275,7 +273,7 @@ class _BrandDrawerHeader extends StatelessWidget {
   }
 }
 
-/// Minimal “CP” logomark so the app feels branded even before we ship assets.
+/// Uses your branded asset for the logomark; falls back to a simple glyph if missing.
 class _LogoMark extends StatelessWidget {
   const _LogoMark({this.size = 40});
   final double size;
@@ -283,32 +281,37 @@ class _LogoMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          colors: [scheme.primary, scheme.tertiary],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-            color: scheme.primary.withOpacity(0.25),
-          ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        'CP',
-        style: GoogleFonts.inter(
-          fontSize: size * 0.42,
-          fontWeight: FontWeight.w900,
-          color: scheme.onPrimary,
-          letterSpacing: 0.5,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(size * 0.22),
+      child: Container(
+        width: size,
+        height: size,
+        color: scheme.surface,
+        child: Image.asset(
+          'assets/logo.png',
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) {
+            // Fallback: minimal CP mark if asset not found yet.
+            return Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [scheme.primary, scheme.tertiary],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                'CP',
+                style: GoogleFonts.inter(
+                  fontSize: size * 0.42,
+                  fontWeight: FontWeight.w900,
+                  color: scheme.onPrimary,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
