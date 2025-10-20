@@ -23,7 +23,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
       widget.controller ?? TextEditingController();
 
   bool _offline = false;
-  StreamSubscription<List<ConnectivityResult>>? _connSub;
+  StreamSubscription? _connSub;
 
   List<String> _recents = const [];
   Timer? _recentDebounce;
@@ -36,13 +36,14 @@ class _SearchBarInputState extends State<SearchBarInput> {
 
     _loadRecents();
 
-    _connSub = Connectivity().onConnectivityChanged.listen((results) {
-      final hasNetwork = results.any((r) => r != ConnectivityResult.none);
+    // Connectivity (robust to plugin API differences)
+    _connSub = Connectivity().onConnectivityChanged.listen((event) {
+      final hasNetwork = _hasNetworkFrom(event);
       if (mounted) setState(() => _offline = !hasNetwork);
     });
     () async {
-      final results = await Connectivity().checkConnectivity();
-      final hasNetwork = results.any((r) => r != ConnectivityResult.none);
+      final initial = await Connectivity().checkConnectivity();
+      final hasNetwork = _hasNetworkFrom(initial);
       if (mounted) setState(() => _offline = !hasNetwork);
     }();
   }
@@ -61,23 +62,31 @@ class _SearchBarInputState extends State<SearchBarInput> {
     super.dispose();
   }
 
+  bool _hasNetworkFrom(dynamic event) {
+    if (event is ConnectivityResult) return event != ConnectivityResult.none;
+    if (event is List<ConnectivityResult>) {
+      return event.any((r) => r != ConnectivityResult.none);
+    }
+    return true;
+  }
+
   Future<void> _loadRecents() async {
     try {
       final list = await RecentQueriesStore.instance.list();
       if (mounted) setState(() => _recents = list);
     } catch (_) {
-      // ignore silently; suggestions are optional
+      // suggestions are optional; ignore errors
     }
   }
 
   void _onChanged() {
-    // Hide suggestions when typing; show when empty & focused.
+    // Show recents when empty & focused; hide when typing
     if (_c.text.trim().isEmpty && _focus.hasFocus) {
       _showOverlay();
     } else {
       _hideOverlay();
     }
-    // No network calls here: HomeScreen already listens & debounces the controller.
+    // Home screen listens to the controller for filtering; no extra calls here.
   }
 
   void _onFocus() {
@@ -89,8 +98,12 @@ class _SearchBarInputState extends State<SearchBarInput> {
   }
 
   void _showOverlay() {
-    _overlay ??= _buildOverlay();
-    Overlay.of(context, debugRequiredFor: widget)?.insert(_overlay!);
+    if (_overlay != null) return;
+    _overlay = _buildOverlay();
+    final overlay = Overlay.of(context);
+    if (overlay != null && _overlay != null) {
+      overlay.insert(_overlay!);
+    }
   }
 
   void _hideOverlay() {
@@ -101,70 +114,69 @@ class _SearchBarInputState extends State<SearchBarInput> {
   OverlayEntry _buildOverlay() {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    // Cap the list to ~8 items for sanity
     final items = _recents.take(8).toList(growable: false);
 
     return OverlayEntry(
-      builder: (context) => Positioned.fill(
-        child: CompositedTransformFollower(
-          link: _link,
-          showWhenUnlinked: false,
-          offset: const Offset(0, 52), // just below the field
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: FractionallySizedBox(
-              widthFactor: 1.0,
-              child: Material(
-                elevation: 6,
-                color: cs.surface,
-                surfaceTintColor: cs.surfaceTint,
-                borderRadius: BorderRadius.circular(14),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 360),
-                  child: items.isEmpty
-                      ? _SuggestionsEmpty(onClearAll: () async {
-                          await RecentQueriesStore.instance.clear();
-                          if (mounted) setState(() => _recents = const []);
-                          _hideOverlay();
-                        })
-                      : ListView.separated(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          shrinkWrap: true,
-                          itemBuilder: (_, i) {
-                            final q = items[i];
-                            return ListTile(
-                              dense: true,
-                              leading: const Icon(Icons.history),
-                              title: Text(q, maxLines: 1, overflow: TextOverflow.ellipsis),
-                              trailing: IconButton(
-                                tooltip: 'Remove',
-                                icon: const Icon(Icons.close_rounded),
-                                onPressed: () async {
-                                  await RecentQueriesStore.instance.remove(q);
-                                  await _loadRecents();
-                                  // Rebuild overlay smoothly
-                                  _hideOverlay();
-                                  if (_focus.hasFocus && _c.text.trim().isEmpty) {
-                                    _showOverlay();
-                                  }
-                                },
-                              ),
-                              onTap: () {
-                                _c.text = q;
-                                _c.selection = TextSelection.collapsed(offset: _c.text.length);
-                                _hideOverlay();
-                              },
-                            );
-                          },
-                          separatorBuilder: (_, __) => Divider(
-                            height: 1,
-                            thickness: 0.5,
-                            color: cs.outlineVariant.withOpacity(0.5),
+      builder: (context) => CompositedTransformFollower(
+        link: _link,
+        showWhenUnlinked: false,
+        offset: const Offset(0, 56), // below the field
+        child: Material(
+          elevation: 8,
+          color: cs.surface,
+          surfaceTintColor: cs.surfaceTint,
+          borderRadius: BorderRadius.circular(14),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720, maxHeight: 360),
+            child: SizedBox(
+              width: MediaQuery.of(context).size.width, // expand; container clamps
+              child: items.isEmpty
+                  ? _SuggestionsEmpty(onClearAll: () async {
+                      await RecentQueriesStore.instance.clear();
+                      if (mounted) setState(() => _recents = const []);
+                      _hideOverlay();
+                    })
+                  : ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      shrinkWrap: true,
+                      itemBuilder: (_, i) {
+                        final q = items[i];
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.history),
+                          title: Text(
+                            q,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          itemCount: items.length,
-                        ),
-                ),
-              ),
+                          trailing: IconButton(
+                            tooltip: 'Remove',
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () async {
+                              await RecentQueriesStore.instance.remove(q);
+                              await _loadRecents();
+                              // Recreate overlay to reflect the list smoothly
+                              _hideOverlay();
+                              if (_focus.hasFocus && _c.text.trim().isEmpty) {
+                                _showOverlay();
+                              }
+                            },
+                          ),
+                          onTap: () {
+                            _c.text = q;
+                            _c.selection =
+                                TextSelection.collapsed(offset: _c.text.length);
+                            _hideOverlay();
+                          },
+                        );
+                      },
+                      separatorBuilder: (_, __) => Divider(
+                        height: 1,
+                        thickness: 0.5,
+                        color: cs.outlineVariant.withOpacity(0.5),
+                      ),
+                      itemCount: items.length,
+                    ),
             ),
           ),
         ),
@@ -182,35 +194,33 @@ class _SearchBarInputState extends State<SearchBarInput> {
       await _loadRecents();
     });
     _hideOverlay();
-    // HomeScreen is already listening to controller changes; nothing else to do.
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final hasText = _c.text.trim().isNotEmpty;
 
     return CompositedTransformTarget(
       link: _link,
       child: Container(
         decoration: BoxDecoration(
-          color: scheme.surface.withOpacity(0.92),
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: scheme.primary.withOpacity(0.08),
-              blurRadius: 12,
-              spreadRadius: 2,
-            ),
-          ],
+          color: isDark
+              ? const Color(0xFF1e293b).withOpacity(0.6)
+              : Colors.grey[200],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: Colors.white.withOpacity(0.08),
+            width: 1,
+          ),
         ),
         child: Row(
           children: [
             const SizedBox(width: 8),
             const Padding(
               padding: EdgeInsets.only(left: 4.0),
-              child: Icon(Icons.search),
+              child: Icon(Icons.search_rounded),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -222,7 +232,8 @@ class _SearchBarInputState extends State<SearchBarInput> {
                 decoration: const InputDecoration(
                   hintText: 'Search movies, shows, trailers…',
                   border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 0, vertical: 14),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 0, vertical: 14),
                 ),
               ),
             ),
@@ -231,7 +242,8 @@ class _SearchBarInputState extends State<SearchBarInput> {
                 message: 'Offline',
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Icon(Icons.cloud_off, color: scheme.onSurfaceVariant),
+                  child:
+                      Icon(Icons.cloud_off, color: scheme.onSurfaceVariant),
                 ),
               ),
             if (hasText)
@@ -240,14 +252,16 @@ class _SearchBarInputState extends State<SearchBarInput> {
                 icon: const Icon(Icons.close_rounded),
                 onPressed: () {
                   _c.clear();
-                  _showOverlay(); // show recents again
+                  if (_focus.hasFocus) {
+                    _showOverlay(); // show recents again
+                  }
                 },
               )
             else
               IconButton(
                 tooltip: 'Voice (coming soon)',
                 onPressed: () {},
-                icon: const Icon(Icons.mic_none_rounded),
+                icon: const Icon(Icons.mic_rounded),
               ),
           ],
         ),
@@ -269,7 +283,7 @@ class _SuggestionsEmpty extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
       child: Row(
         children: [
-          Icon(Icons.search, color: cs.onSurfaceVariant),
+          Icon(Icons.search_rounded, color: cs.onSurfaceVariant),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
