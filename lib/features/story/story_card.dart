@@ -90,13 +90,13 @@ class _StoryCardState extends State<StoryCard> {
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
   }
 
-  // Build the leading widget for CTA: ▶️ icon for watch, 📖 emoji for read
-  Widget _ctaLeading(bool isDark) {
+  // Leading for CTA: ▶ (Material icon) for watch, 📖 emoji for read
+  Widget _ctaLeading() {
     if (_isWatchCta) {
       return const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white);
     }
     return const _Emoji(emoji: '📖', size: 18);
-  }
+    }
 
   @override
   Widget build(BuildContext context) {
@@ -168,18 +168,15 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Info/Badge/Meta Section
+                  // Info/Meta (NEWS pill removed; show only 🕐 time)
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Badges row
                           Row(
                             children: [
-                              KindMetaBadge(kind),
-                              const SizedBox(width: 10),
                               // 🕐 exact emoji for time
                               Container(
                                 padding: const EdgeInsets.all(4),
@@ -226,7 +223,7 @@ class _StoryCardState extends State<StoryCard> {
                                   child: SizedBox(
                                     height: 46,
                                     child: ElevatedButton.icon(
-                                      icon: _ctaLeading(isDark),
+                                      icon: _ctaLeading(),
                                       onPressed: hasUrl ? () => _openLink(context) : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
@@ -286,42 +283,6 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-// Badge Widget for News/Release/Trailer/Other Types
-Widget KindMetaBadge(String kind) {
-  final lower = kind.toLowerCase();
-  Color bg;
-  String label = kind.toUpperCase();
-
-  if (lower == 'news') {
-    bg = const Color(0xFF723A3C);
-  } else if (lower == 'release') {
-    bg = const Color(0xFFF9D359);
-  } else if (lower == 'trailer') {
-    bg = const Color(0xFF56BAF8);
-  } else if (lower == 'ott') {
-    bg = const Color(0xFFC377F2);
-  } else {
-    bg = Colors.grey.shade800;
-  }
-
-  return Container(
-    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 13),
-    decoration: BoxDecoration(
-      color: bg.withOpacity(0.96),
-      borderRadius: BorderRadius.circular(6),
-    ),
-    child: Text(
-      label,
-      style: TextStyle(
-        color: lower == 'release' ? Colors.black : Colors.white,
-        fontWeight: FontWeight.w700,
-        fontSize: 13,
-        letterSpacing: 0.15,
-      ),
-    ),
-  );
-}
-
 // --------- Sample Card Icon (category-specific with fallback) ---------
 class _SampleIcon extends StatelessWidget {
   final String kind;
@@ -365,7 +326,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-// --------- Compact secondary action icon (now supports emoji widget) ---------
+// --------- Compact secondary action icon (supports emoji widget) ---------
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
