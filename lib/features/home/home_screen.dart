@@ -166,11 +166,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   tooltip: 'Menu',
                 ),
               ),
-              title: const _ModernBrandLogo(),
+              title: const _ModernBrandLogo(), // 🎬 in here
               actions: const [SizedBox(width: 48)],
             ),
 
-            // Search bar (shared component)
+            // Search bar (shared component – 🔍 and 🎤 are handled inside SearchBarInput)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
@@ -258,25 +258,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // “Trending Now” header (kept visible)
+            // “Trending Now” header (🔥 emoji)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
+                    // Keep the little badge container, but render the exact emoji 🔥
                     Container(
-                      padding: const EdgeInsets.all(2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
                           colors: [Color(0xFFdc2626), Color(0xFFef4444)],
                         ),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(
-                        Icons.local_fire_department_rounded,
-                        color: Colors.white,
-                        size: 20,
+                      child: const Text(
+                        '🔥',
+                        style: TextStyle(fontSize: 18, height: 1),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -317,7 +320,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-// Brand Logo Widget
+// Brand Logo Widget (🎬 emoji)
 class _ModernBrandLogo extends StatelessWidget {
   const _ModernBrandLogo();
 
@@ -344,10 +347,9 @@ class _ModernBrandLogo extends StatelessWidget {
               ),
             ],
           ),
-          child: const Icon(
-            Icons.movie_rounded,
-            color: Colors.white,
-            size: 20,
+          child: const Center(
+            // exact emoji as requested
+            child: Text('🎬', style: TextStyle(fontSize: 20, height: 1)),
           ),
         ),
         const SizedBox(width: 10),
