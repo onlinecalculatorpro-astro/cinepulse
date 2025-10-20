@@ -13,7 +13,7 @@ class SkeletonCard extends StatelessWidget {
       duration: const Duration(milliseconds: 1200),
       curve: Curves.easeInOut,
       builder: (context, t, _) {
-        // Subtle pulse between base and highlight
+        // Subtle pulse between base and highlight.
         final base = scheme.surfaceContainerHighest.withOpacity(0.28);
         final highlight = scheme.surfaceContainerHighest.withOpacity(0.55);
         final fill = Color.lerp(base, highlight, 0.5 + 0.5 * t)!;
@@ -70,7 +70,7 @@ class SkeletonCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
 
-                // Title lines (2–3 lines)
+                // Title lines (2)
                 Container(
                   height: 16,
                   decoration: BoxDecoration(
@@ -118,7 +118,7 @@ class SkeletonCard extends StatelessWidget {
     );
   }
 
-  Widget _circle(Color fill) {
+  static Widget _circle(Color fill) {
     return Container(
       width: 36,
       height: 36,
