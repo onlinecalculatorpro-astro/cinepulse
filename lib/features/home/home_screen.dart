@@ -1,4 +1,3 @@
-// lib/features/home/home_screen.dart
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
@@ -11,7 +10,7 @@ import '../../core/models.dart';
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton_card.dart';
-import 'widgets/search_bar.dart'; // ok to keep; not required by this file
+import 'widgets/search_bar.dart';
 import '../../features/story/story_card.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -47,11 +46,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-
     for (final f in _feeds.values) {
       unawaited(f.load(reset: true));
     }
-
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
       final hasNetwork = _hasNetworkFrom(event);
       if (!mounted) return;
@@ -63,7 +60,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (!mounted) return;
       setState(() => _offline = !hasNetwork);
     }();
-
     _search.addListener(_onSearchChanged);
   }
 
@@ -173,7 +169,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               actions: const [SizedBox(width: 48)],
             ),
 
-            // Search
+            // Search bar
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
@@ -187,7 +183,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Offline banner
+            // Offline banner if applicable
             if (_offline)
               const SliverToBoxAdapter(
                 child: Padding(
@@ -196,7 +192,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
 
-            // Chip tabs (sticky)
+            // Tabs (sticky)
             SliverPersistentHeader(
               pinned: true,
               delegate: _ModernTabsDelegate(
@@ -232,7 +228,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: [
                               BoxShadow(
-                                color: const Color(0xFFdc2626).withOpacity(0.3),
+                                color:
+                                    const Color(0xFFdc2626).withOpacity(0.3),
                                 blurRadius: 12,
                                 offset: const Offset(0, 4),
                               ),
@@ -260,11 +257,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Section header
+            // Trending Now header (more visually prominent)
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Container(
                       padding: const EdgeInsets.all(2),
@@ -296,7 +294,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Content (each tab → responsive grid)
+            // Main tabbed feed list, using responsive grid for cards
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -318,8 +316,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-/* ===================== Modern Brand Logo ===================== */
-
+// Brand Logo Widget [as before]
 class _ModernBrandLogo extends StatelessWidget {
   const _ModernBrandLogo();
 
@@ -372,14 +369,12 @@ class _ModernBrandLogo extends StatelessWidget {
   }
 }
 
-/* ===================== Modern Search Bar ===================== */
-
+// Modern Search Bar Widget [as before]
 class _ModernSearchBar extends StatelessWidget {
   const _ModernSearchBar({
     required this.controller,
     required this.onRefresh,
   });
-
   final TextEditingController controller;
   final VoidCallback onRefresh;
 
@@ -458,8 +453,7 @@ class _ModernSearchBar extends StatelessWidget {
   }
 }
 
-/* ===================== Modern Tabs Delegate ===================== */
-
+// Tabs Delegate [as before]
 class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   _ModernTabsDelegate({required this.child});
   final Widget child;
@@ -482,8 +476,7 @@ class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-/* ===================== Feed List (responsive grid) ===================== */
-
+// Responsive Feed List [as before]
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -505,12 +498,10 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
-  // Make cards taller on small screens so the whole body is visible,
-  // and slightly wider on desktop where there’s more horizontal space.
   double _aspectRatioFor(int cols, double maxWidth) {
-    if (cols >= 3) return 1.18; // desktop: 3 cols
-    if (cols == 2) return 1.08; // tablet: 2 cols
-    return 0.92; // phone: 1 col (taller cards)
+    if (cols >= 3) return 1.18;
+    if (cols == 2) return 1.08;
+    return 0.92;
   }
 
   @override
@@ -530,22 +521,20 @@ class _FeedListState extends State<_FeedList>
             } else if (w >= 800) {
               cols = 2;
             }
-
             final ratio = _aspectRatioFor(cols, w);
 
             const hPad = 16.0;
             const vPadTop = 0.0;
-            const vPadBottom = 96.0; // space for fixed bottom nav on mobile
+            const vPadBottom = 96.0; // space for fixed bottom nav
             final gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: cols,
               crossAxisSpacing: 16,
               mainAxisSpacing: 16,
-              // Dynamic ratio so thumbnail + body (badge/meta/title/CTA/icons) fit.
               childAspectRatio: ratio,
             );
 
             if (feed.isInitialLoading) {
-              final skeletonCount = cols * 3; // ~3 rows
+              final skeletonCount = cols * 3;
               return GridView.builder(
                 padding: const EdgeInsets.fromLTRB(hPad, 8, hPad, vPadBottom),
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -625,12 +614,10 @@ class _FeedListState extends State<_FeedList>
   }
 }
 
-/* ===================== Paging model ===================== */
-
+// Paging/feed model [unchanged]
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
   final String tab;
-
   final List<Story> _items = [];
   bool _initialLoading = false;
   bool _loadingMore = false;
@@ -667,7 +654,6 @@ class _PagedFeed extends ChangeNotifier {
         notifyListeners();
       }
     }
-
     try {
       final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
