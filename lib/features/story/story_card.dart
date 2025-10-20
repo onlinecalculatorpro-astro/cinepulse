@@ -6,13 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
-import '../../core/models.dart'; // Story + storyVideoUrl
+import '../../core/models.dart'; // Story + storyVideoUrl + metaLine/kindLabel
 import '../../core/utils.dart';
 import 'story_details.dart';
 import 'ott_badge.dart';
@@ -88,45 +87,6 @@ class StoryCard extends StatelessWidget {
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: story)));
   }
 
-  /* ------------------------------ Display bits ----------------------------- */
-
-  String _metaLine() {
-    // Context (in theatres/coming soon/ott/news)
-    final ctx = story.isTheatrical
-        ? (story.isUpcoming ? 'Coming soon' : 'In theatres')
-        : (story.kind.isNotEmpty ? _titleCase(story.kind) : '');
-
-    // Prefer release date; fallback to publish time
-    final d = story.releaseDate ?? story.publishedAt;
-    String when = '';
-    if (d != null) {
-      final now = DateTime.now().toUtc();
-      final diff = now.difference(d);
-      if (diff.inDays >= 0 && diff.inDays <= 10) {
-        if (diff.inDays == 0) {
-          when = 'Today';
-        } else if (diff.inDays == 1) {
-          when = 'Yesterday';
-        } else {
-          when = '${diff.inDays}d ago';
-        }
-      } else {
-        when = DateFormat('d MMM').format(d.toLocal());
-      }
-    }
-
-    // Source domain if present (e.g., youtube.com / variety.com)
-    final domain = (story.sourceDomain ?? '').trim();
-
-    final parts = <String>[];
-    if (domain.isNotEmpty) parts.add(domain);
-    if (ctx.isNotEmpty) parts.add(ctx);
-    if (when.isNotEmpty) parts.add(when);
-    return parts.join(' • ');
-  }
-
-  String _titleCase(String s) => s.isEmpty ? s : (s[0].toUpperCase() + s.substring(1));
-
   /* ---------------------------------- UI ----------------------------------- */
 
   @override
@@ -134,7 +94,9 @@ class StoryCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final width = MediaQuery.of(context).size.width;
     final isMobileColumn = width < 520;
-    final metaText = _metaLine();
+
+    // Use the new model helper → e.g. "News • 20 Oct 2025, 1:59 PM"
+    final metaText = story.metaLine;
     final hasUrl = _linkUrl != null;
 
     final child = InkWell(
