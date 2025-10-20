@@ -1,7 +1,7 @@
 // lib/root_shell.dart
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -84,9 +84,7 @@ class _RootShellState extends State<RootShell> {
 
     if (mounted && kIsWeb) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Opening… fetching story may take a moment')),
+        const SnackBar(content: Text('Opening… fetching story may take a moment')),
       );
     }
   }
@@ -130,9 +128,9 @@ class _RootShellState extends State<RootShell> {
     setState(() {
       _navIndex = i;
       _showSearchBar = false; // hide search when leaving Search/Home trigger
-      if (i == 0) _pageIndex = 0;        // Home
-      if (i == 2) _pageIndex = 2;        // Saved
-      if (i == 3) _pageIndex = 3;        // Alerts
+      if (i == 0) _pageIndex = 0; // Home
+      if (i == 2) _pageIndex = 2; // Saved
+      if (i == 3) _pageIndex = 3; // Alerts
     });
   }
 
@@ -245,20 +243,11 @@ class _RootShellState extends State<RootShell> {
           child: IndexedStack(
             index: _pageIndex,
             children: [
-              // Home — receives controls so it can:
-              // - open drawer (hamburger fix)
-              // - show header actions: Refresh + Discover
-              // - show/hide search bar based on bottom-nav Search
               HomeScreen(
                 showSearchBar: _showSearchBar,
                 onMenuPressed: _openDrawer,
                 onOpenDiscover: _openDiscover,
-                // HomeScreen should show the Refresh icon on the header and call this when tapped.
-                // It can internally refresh its feeds.
-                onHeaderRefresh: () {
-                  // no-op here; HomeScreen implements the actual refresh logic
-                  // We keep this callback for API symmetry / future wiring if needed.
-                },
+                onHeaderRefresh: () {},
               ),
               const _DiscoverPlaceholder(),
               const SavedScreen(),
@@ -267,38 +256,33 @@ class _RootShellState extends State<RootShell> {
           ),
         ),
 
-        // Bottom nav: Discover replaced by Search (🔍), Saved uses 🔖 emoji
+        // Bottom nav: Home=🏠, Search=🔍, Saved=🔖, Alerts=🔔
         bottomNavigationBar: showBottomNav
             ? SafeArea(
                 top: false,
                 child: NavigationBar(
                   selectedIndex: _navIndex,
-                  labelBehavior:
-                      NavigationDestinationLabelBehavior.alwaysShow,
+                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
                   onDestinationSelected: _onDestinationSelected,
                   destinations: const [
                     NavigationDestination(
-                      icon: Icon(Icons.home_outlined),
-                      selectedIcon: Icon(Icons.home),
+                      icon: Text('🏠', style: TextStyle(fontSize: 20, height: 1)),
+                      selectedIcon: Text('🏠', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Home',
                     ),
-                    // Search trigger (reveals search bar on Home)
                     NavigationDestination(
                       icon: Text('🔍', style: TextStyle(fontSize: 20, height: 1)),
-                      selectedIcon:
-                          Text('🔍', style: TextStyle(fontSize: 22, height: 1)),
+                      selectedIcon: Text('🔍', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Search',
                     ),
-                    // Saved
                     NavigationDestination(
                       icon: Text('🔖', style: TextStyle(fontSize: 20, height: 1)),
-                      selectedIcon:
-                          Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
+                      selectedIcon: Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Saved',
                     ),
                     NavigationDestination(
-                      icon: Icon(Icons.notifications_outlined),
-                      selectedIcon: Icon(Icons.notifications),
+                      icon: Text('🔔', style: TextStyle(fontSize: 20, height: 1)),
+                      selectedIcon: Text('🔔', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Alerts',
                     ),
                   ],
@@ -431,8 +415,7 @@ class _ThemePicker extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Theme',
-                style: GoogleFonts.inter(
-                    fontSize: 18, fontWeight: FontWeight.w700)),
+                style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             for (final entry in options.entries)
               RadioListTile<ThemeMode>(
