@@ -12,6 +12,7 @@ import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton_card.dart';
 import 'widgets/search_bar.dart';
 import '../../features/story/story_card.dart';
+import 'dart:ui' show ImageFilter;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -20,7 +21,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  // Tabs: All · Trailers · OTT · In Theatres · Coming Soon
   static const Map<String, String> _tabs = {
     'all': 'All',
     'trailers': 'Trailers',
@@ -41,19 +41,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   };
 
   bool _offline = false;
-  StreamSubscription? _connSub; // generic to work across plugin versions
+  StreamSubscription? _connSub;
   Timer? _debounce;
 
   @override
   void initState() {
     super.initState();
 
-    // Initial loads (with disk cache for fast-first paint).
     for (final f in _feeds.values) {
       unawaited(f.load(reset: true));
     }
 
-    // Online/offline banner wiring (supports both single & list events).
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
       final hasNetwork = _hasNetworkFrom(event);
       if (!mounted) return;
@@ -87,14 +85,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (event is List<ConnectivityResult>) {
       return event.any((r) => r != ConnectivityResult.none);
     }
-    // Fallback: assume online if unknown shape.
     return true;
   }
 
   void _onSearchChanged() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) setState(() {}); // local filter only
+      if (mounted) setState(() {});
     });
   }
 
@@ -103,7 +100,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     await _feeds[key]!.load(reset: true);
   }
 
-  // Long-press the refresh icon to force-refresh all tabs.
   Future<void> _refreshAll() async {
     for (final f in _feeds.values) {
       await f.load(reset: true);
@@ -116,132 +112,198 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final isPhone = MediaQuery.of(context).size.width < 600;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
-    return RefreshIndicator.adaptive(
-      key: _refreshKey,
-      onRefresh: _refresh,
-      // Allow pull-to-refresh from anywhere on the page (nice on mobile)
-      triggerMode: RefreshIndicatorTriggerMode.anywhere,
-      child: NestedScrollView(
-        headerSliverBuilder: (_, __) => [
-          // Brand + search in a sliver app bar
-          SliverAppBar(
-            pinned: true,
-            centerTitle: false,
-            toolbarHeight: isPhone ? 56 : 64,
-            expandedHeight: isPhone ? 112 : 140,
-            leading: Builder(
-              builder: (ctx) => IconButton(
-                icon: const Icon(Icons.menu),
-                onPressed: () => Scaffold.of(ctx).openDrawer(),
-                tooltip: 'Menu',
+    return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
+      body: RefreshIndicator.adaptive(
+        key: _refreshKey,
+        onRefresh: _refresh,
+        color: const Color(0xFFdc2626),
+        child: CustomScrollView(
+          slivers: [
+            // Modern App Bar with glassmorphism effect
+            SliverAppBar(
+              floating: true,
+              pinned: true,
+              elevation: 0,
+              backgroundColor: isDark 
+                  ? const Color(0xFF0f172a).withOpacity(0.95)
+                  : theme.colorScheme.surface.withOpacity(0.95),
+              surfaceTintColor: Colors.transparent,
+              toolbarHeight: 70,
+              flexibleSpace: ClipRRect(
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: isDark
+                            ? [
+                                const Color(0xFF0f172a).withOpacity(0.95),
+                                const Color(0xFF0f172a).withOpacity(0.8),
+                              ]
+                            : [
+                                theme.colorScheme.surface.withOpacity(0.95),
+                                theme.colorScheme.surface.withOpacity(0.8),
+                              ],
+                      ),
+                      border: const Border(
+                        bottom: BorderSide(
+                          color: Color(0x0Fffffff),
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              leading: Builder(
+                builder: (ctx) => IconButton(
+                  icon: const Icon(Icons.menu_rounded),
+                  onPressed: () => Scaffold.of(ctx).openDrawer(),
+                  tooltip: 'Menu',
+                ),
+              ),
+              title: const _ModernBrandLogo(),
+              actions: [
+                const SizedBox(width: 48),
+              ],
+            ),
+
+            // Search Bar
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                child: _ModernSearchBar(
+                  controller: _search,
+                  onRefresh: () {
+                    _refreshKey.currentState?.show();
+                    unawaited(_refresh());
+                  },
+                ),
               ),
             ),
-            title: const _BrandInline(),
-            flexibleSpace: const _HeaderGradient(),
-            bottom: PreferredSize(
-              preferredSize: Size.fromHeight(isPhone ? 60 : 70),
+
+            // Offline Banner
+            if (_offline)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: OfflineBanner(),
+                ),
+              ),
+
+            // Modern Tabs
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _ModernTabsDelegate(
+                child: Container(
+                  color: isDark 
+                      ? const Color(0xFF0a0e1a)
+                      : theme.colorScheme.surface,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? const Color(0xFF1e293b).withOpacity(0.4)
+                          : theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.05),
+                        width: 1,
+                      ),
+                    ),
+                    child: TabBar(
+                      controller: _tab,
+                      isScrollable: true,
+                      tabAlignment: TabAlignment.start,
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 16),
+                      dividerColor: Colors.transparent,
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      indicator: BoxDecoration(
+                        color: const Color(0xFFdc2626),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFdc2626).withOpacity(0.3),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      labelColor: Colors.white,
+                      labelStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      unselectedLabelColor: isDark
+                          ? const Color(0xFF94a3b8)
+                          : theme.colorScheme.onSurfaceVariant,
+                      unselectedLabelStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
+                      onTap: (_) => setState(() {}),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // Section Header with Trending Icon
+            SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                // Search + Refresh icon row
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
                 child: Row(
                   children: [
-                    Expanded(child: SearchBarInput(controller: _search)),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: 'Refresh',
-                      child: IconButton.filledTonal(
-                        onPressed: () {
-                          _refreshKey.currentState?.show(); // show spinner
-                          unawaited(_refresh());
-                        },
-                        onLongPress: _refreshAll, // power-user shortcut
-                        icon: const Icon(Icons.refresh_rounded),
+                    Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFdc2626), Color(0xFFef4444)],
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.local_fire_department_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Trending Now',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? const Color(0xFFf1f5f9) : theme.colorScheme.onSurface,
                       ),
                     ),
                   ],
                 ),
               ),
             ),
-          ),
 
-          if (_offline)
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: OfflineBanner(),
+            // Content
+            SliverFillRemaining(
+              child: TabBarView(
+                controller: _tab,
+                children: _tabs.keys.map((key) {
+                  final feed = _feeds[key]!;
+                  return _FeedList(
+                    key: PageStorageKey('feed-$key'),
+                    feed: feed,
+                    searchText: _search,
+                    offline: _offline,
+                  );
+                }).toList(),
               ),
             ),
-
-          // Sticky tabs bar
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _TabsHeaderDelegate(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(28),
-                  ),
-                  child: TabBar(
-                    controller: _tab,
-                    isScrollable: true,
-                    tabAlignment: TabAlignment.start,
-                    labelPadding: const EdgeInsets.symmetric(horizontal: 18),
-                    dividerColor: Colors.transparent,
-                    indicatorSize: TabBarIndicatorSize.tab,
-                    splashBorderRadius: BorderRadius.circular(28),
-                    indicator: BoxDecoration(
-                      color: scheme.primary,
-                      borderRadius: BorderRadius.circular(28),
-                    ),
-                    labelColor: scheme.onPrimary,
-                    unselectedLabelColor: scheme.onSurfaceVariant,
-                    tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
-                    onTap: (_) => setState(() {}),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-        // The tab views scroll smoothly with NestedScrollView
-        body: TabBarView(
-          controller: _tab,
-          children: _tabs.keys.map((key) {
-            final feed = _feeds[key]!;
-            return _FeedList(
-              key: PageStorageKey('feed-$key'), // keep scroll per tab
-              feed: feed,
-              searchText: _search,
-              offline: _offline,
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-}
-
-/* ===================== Header helpers ===================== */
-
-class _HeaderGradient extends StatelessWidget {
-  const _HeaderGradient();
-
-  @override
-  Widget build(BuildContext context) {
-    final s = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            s.primaryContainer.withOpacity(0.95),
-            s.surface.withOpacity(0.75),
           ],
         ),
       ),
@@ -249,42 +311,164 @@ class _HeaderGradient extends StatelessWidget {
   }
 }
 
-class _BrandInline extends StatelessWidget {
-  const _BrandInline();
+/* ===================== Modern Brand Logo ===================== */
+
+class _ModernBrandLogo extends StatelessWidget {
+  const _ModernBrandLogo();
 
   @override
   Widget build(BuildContext context) {
-    // Scale logo by screen width so it looks balanced
-    final w = MediaQuery.of(context).size.width;
-    final logoWidth = w < 320
-        ? 150.0 // small phones
-        : w < 800
-            ? 120.0 // phones / small tablets
-            : 180.0; // large tablets / desktop
-
-    // Force white so it pops on dark header, regardless of source color
-    return ColorFiltered(
-      colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
-      child: Image.asset(
-        'assets/logo.png', // <-- your high-contrast transparent PNG
-        width: logoWidth,
-        fit: BoxFit.contain,
-        filterQuality: FilterQuality.high,
-      ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFdc2626), Color(0xFFef4444)],
+            ),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFdc2626).withOpacity(0.3),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: const Icon(
+            Icons.movie_rounded,
+            color: Colors.white,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 10),
+        ShaderMask(
+          shaderCallback: (bounds) => const LinearGradient(
+            colors: [Color(0xFFdc2626), Color(0xFFef4444)],
+          ).createShader(bounds),
+          child: const Text(
+            'CinePulse',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+              letterSpacing: -0.5,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
 
-/* ===================== Tabs header ===================== */
+/* ===================== Modern Search Bar ===================== */
 
-class _TabsHeaderDelegate extends SliverPersistentHeaderDelegate {
-  _TabsHeaderDelegate({required this.child});
+class _ModernSearchBar extends StatelessWidget {
+  const _ModernSearchBar({
+    required this.controller,
+    required this.onRefresh,
+  });
+
+  final TextEditingController controller;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark
+                  ? const Color(0xFF1e293b).withOpacity(0.6)
+                  : Colors.grey[200],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.08),
+                width: 1,
+              ),
+            ),
+            child: TextField(
+              controller: controller,
+              style: TextStyle(
+                fontSize: 15,
+                color: isDark ? const Color(0xFFe5e7eb) : Colors.black87,
+              ),
+              decoration: InputDecoration(
+                hintText: 'Search movies, shows, trailers...',
+                hintStyle: TextStyle(
+                  color: isDark
+                      ? const Color(0xFF64748b)
+                      : Colors.grey[600],
+                  fontSize: 15,
+                ),
+                prefixIcon: Icon(
+                  Icons.search_rounded,
+                  color: isDark
+                      ? const Color(0xFF64748b)
+                      : Colors.grey[600],
+                  size: 22,
+                ),
+                suffixIcon: Icon(
+                  Icons.mic_rounded,
+                  color: isDark
+                      ? const Color(0xFF64748b)
+                      : Colors.grey[600],
+                  size: 22,
+                ),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Container(
+          decoration: BoxDecoration(
+            color: isDark
+                ? const Color(0xFF1e293b).withOpacity(0.6)
+                : Colors.grey[200],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.08),
+              width: 1,
+            ),
+          ),
+          child: IconButton(
+            onPressed: onRefresh,
+            icon: Icon(
+              Icons.refresh_rounded,
+              color: isDark
+                  ? const Color(0xFF94a3b8)
+                  : Colors.grey[700],
+            ),
+            tooltip: 'Refresh',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/* ===================== Modern Tabs Delegate ===================== */
+
+class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
+  _ModernTabsDelegate({required this.child});
   final Widget child;
 
   @override
-  double get minExtent => 56;
+  double get minExtent => 64;
   @override
-  double get maxExtent => 56;
+  double get maxExtent => 64;
 
   @override
   Widget build(
@@ -292,17 +476,14 @@ class _TabsHeaderDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: child,
-    );
+    return child;
   }
 
   @override
-  bool shouldRebuild(_TabsHeaderDelegate oldDelegate) => false;
+  bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-/* ===================== Feed list (keep-alive) ===================== */
+/* ===================== Feed List ===================== */
 
 class _FeedList extends StatefulWidget {
   const _FeedList({
@@ -323,7 +504,7 @@ class _FeedList extends StatefulWidget {
 class _FeedListState extends State<_FeedList>
     with AutomaticKeepAliveClientMixin<_FeedList> {
   @override
-  bool get wantKeepAlive => true; // preserve state across tab switches
+  bool get wantKeepAlive => true;
 
   @override
   Widget build(BuildContext context) {
@@ -335,7 +516,7 @@ class _FeedListState extends State<_FeedList>
       builder: (context, _) {
         if (feed.isInitialLoading) {
           return ListView.builder(
-            padding: const EdgeInsets.only(top: 8, bottom: 24),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             physics: const AlwaysScrollableScrollPhysics(),
             cacheExtent: 1200,
             itemCount: 6,
@@ -349,7 +530,6 @@ class _FeedListState extends State<_FeedList>
           );
         }
 
-        // Local search filter
         final q = widget.searchText.text.trim().toLowerCase();
         final filtered = (q.isEmpty)
             ? feed.items
@@ -362,12 +542,12 @@ class _FeedListState extends State<_FeedList>
         if (filtered.isEmpty) {
           return ListView(
             padding: const EdgeInsets.only(top: 32),
-            physics: const AlwaysScrollableScrollPhysics(), // still pull-to-refresh
+            physics: const AlwaysScrollableScrollPhysics(),
             children: [
               Center(
                 child: Text(
                   widget.offline
-                      ? 'You’re offline and no results match your search.'
+                      ? 'You're offline and no results match your search.'
                       : 'No matching items.',
                 ),
               ),
@@ -375,13 +555,12 @@ class _FeedListState extends State<_FeedList>
           );
         }
 
-        // Paging toggle (kept false until API supports before/after)
         const showLoadMore = false;
 
         return ListView.builder(
-          padding: const EdgeInsets.only(top: 8, bottom: 24),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
           physics: const AlwaysScrollableScrollPhysics(),
-          cacheExtent: 1400, // smoother scrolling
+          cacheExtent: 1400,
           itemCount: filtered.length + (showLoadMore ? 1 : 0),
           itemBuilder: (_, i) {
             if (showLoadMore && i == filtered.length) {
@@ -420,7 +599,7 @@ class _PagedFeed extends ChangeNotifier {
   bool _loadingMore = false;
   bool _hasError = false;
   String? _errorMessage;
-  bool _canLoadMore = false; // disabled until API supports paging
+  bool _canLoadMore = false;
 
   List<Story> get items => List.unmodifiable(_items);
   bool get isInitialLoading => _initialLoading;
@@ -440,11 +619,9 @@ class _PagedFeed extends ChangeNotifier {
       _sinceCursor = null;
       _items.clear();
 
-      // Fast paint from disk
       final cached = await FeedDiskCache.load(tab);
       if (cached.isNotEmpty) {
         _items.addAll(cached);
-        // Ensure newest-first even from cache.
         _sortNewestFirst(_items);
         for (final s in cached) FeedCache.put(s);
         _initialLoading = false;
@@ -457,7 +634,6 @@ class _PagedFeed extends ChangeNotifier {
     try {
       final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
-      // Merge by id to avoid duplicates
       final byId = {for (final s in _items) s.id: s};
       for (final s in list) {
         byId[s.id] = s;
@@ -467,10 +643,8 @@ class _PagedFeed extends ChangeNotifier {
         ..clear()
         ..addAll(byId.values);
 
-      // Keep UI newest → oldest.
       _sortNewestFirst(_items);
 
-      // Keep the oldest timestamp as cursor (for future paging support)
       final dates = _items.map((e) => e.publishedAt).whereType<DateTime>();
       _sinceCursor =
           dates.isEmpty ? null : dates.reduce((a, b) => a.isBefore(b) ? a : b);
@@ -498,15 +672,14 @@ class _PagedFeed extends ChangeNotifier {
     await load(reset: false);
   }
 
-  // ---- Helpers ----
   void _sortNewestFirst(List<Story> list) {
     list.sort((a, b) {
       final pa = a.publishedAt;
       final pb = b.publishedAt;
       if (pa == null && pb == null) return 0;
-      if (pa == null) return 1; // nulls last
+      if (pa == null) return 1;
       if (pb == null) return -1;
-      return pb.compareTo(pa); // newest first
+      return pb.compareTo(pa);
     });
   }
 }
