@@ -124,7 +124,7 @@ class _StoryCardState extends State<StoryCard> {
         child: InkWell(
           onTap: () => _openDetails(context),
           child: SizedBox(
-            height: 440,
+            height: 580,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
