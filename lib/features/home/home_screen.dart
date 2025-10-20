@@ -11,7 +11,7 @@ import '../../core/models.dart';
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton_card.dart';
-import 'widgets/search_bar.dart'; // (ok to keep; not required by this file)
+import 'widgets/search_bar.dart'; // ok to keep; not required by this file
 import '../../features/story/story_card.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -505,6 +505,14 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
+  // Make cards taller on small screens so the whole body is visible,
+  // and slightly wider on desktop where there’s more horizontal space.
+  double _aspectRatioFor(int cols, double maxWidth) {
+    if (cols >= 3) return 1.18; // desktop: 3 cols
+    if (cols == 2) return 1.08; // tablet: 2 cols
+    return 0.92; // phone: 1 col (taller cards)
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -523,6 +531,8 @@ class _FeedListState extends State<_FeedList>
               cols = 2;
             }
 
+            final ratio = _aspectRatioFor(cols, w);
+
             const hPad = 16.0;
             const vPadTop = 0.0;
             const vPadBottom = 96.0; // space for fixed bottom nav on mobile
@@ -530,15 +540,14 @@ class _FeedListState extends State<_FeedList>
               crossAxisCount: cols,
               crossAxisSpacing: 16,
               mainAxisSpacing: 16,
-              // Card: 16:9 image + body; ~1.65–1.85 looks right
-              childAspectRatio: 1.75,
+              // Dynamic ratio so thumbnail + body (badge/meta/title/CTA/icons) fit.
+              childAspectRatio: ratio,
             );
 
             if (feed.isInitialLoading) {
               final skeletonCount = cols * 3; // ~3 rows
               return GridView.builder(
-                padding:
-                    const EdgeInsets.fromLTRB(hPad, 8, hPad, vPadBottom),
+                padding: const EdgeInsets.fromLTRB(hPad, 8, hPad, vPadBottom),
                 physics: const AlwaysScrollableScrollPhysics(),
                 cacheExtent: 1200,
                 gridDelegate: gridDelegate,
@@ -549,8 +558,7 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
-                padding:
-                    const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
+                padding: const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
@@ -575,8 +583,7 @@ class _FeedListState extends State<_FeedList>
                   ? "You're offline and no results match your search."
                   : "No matching items.";
               return ListView(
-                padding:
-                    const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
+                padding: const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
@@ -587,7 +594,8 @@ class _FeedListState extends State<_FeedList>
             const showLoadMore = false;
 
             return GridView.builder(
-              padding: const EdgeInsets.fromLTRB(hPad, vPadTop, hPad, vPadBottom),
+              padding:
+                  const EdgeInsets.fromLTRB(hPad, vPadTop, hPad, vPadBottom),
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 1400,
               gridDelegate: gridDelegate,
