@@ -15,7 +15,18 @@ import 'widgets/search_bar.dart';
 import '../../features/story/story_card.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({
+    super.key,
+    this.showSearch = false,          // <- Search bar appears only when true
+    this.onTapDiscover,               // <- Header Discover button callback
+  });
+
+  /// When true, the search bar sliver is rendered.
+  final bool showSearch;
+
+  /// Called when the header's Discover icon is tapped (parent can switch tab).
+  final VoidCallback? onTapDiscover;
+
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -97,16 +108,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     await _feeds[key]!.load(reset: true);
   }
 
-  Future<void> _refreshAll() async {
-    for (final f in _feeds.values) {
-      await f.load(reset: true);
-    }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('All tabs refreshed')),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -162,27 +163,46 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               leading: Builder(
                 builder: (ctx) => IconButton(
                   icon: const Icon(Icons.menu_rounded),
-                  onPressed: () => Scaffold.of(ctx).openDrawer(),
+                  // Open the ROOT scaffold's drawer (fixes non-working hamburger)
+                  onPressed: () => ctx
+                      .findRootAncestorStateOfType<ScaffoldState>()
+                      ?.openDrawer(),
                   tooltip: 'Menu',
                 ),
               ),
-              title: const _ModernBrandLogo(), // 🎬 in here
-              actions: const [SizedBox(width: 48)],
-            ),
-
-            // Search bar (shared component – 🔍 and 🎤 are handled inside SearchBarInput)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                child: SearchBarInput(
-                  controller: _search,
-                  onRefresh: () {
+              title: const _ModernBrandLogo(), // 🎬
+              actions: [
+                // Discover in header (beside Refresh)
+                IconButton(
+                  tooltip: 'Discover',
+                  icon: const Icon(Icons.explore_outlined),
+                  onPressed: widget.onTapDiscover,
+                ),
+                // Refresh current tab (moved here from search bar)
+                IconButton(
+                  tooltip: 'Refresh',
+                  icon: const Icon(Icons.refresh_rounded),
+                  onPressed: () {
                     _refreshKey.currentState?.show();
                     unawaited(_refresh());
                   },
                 ),
-              ),
+                const SizedBox(width: 4),
+              ],
             ),
+
+            // Search bar (only when Search tab/screen is active)
+            if (widget.showSearch)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                  child: SearchBarInput(
+                    controller: _search,
+                    // No refresh here anymore; it lives in the header
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+              ),
 
             // Offline banner if applicable
             if (_offline)
@@ -258,29 +278,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // “Trending Now” header (🔥 emoji)
+            // “Trending Now” header (🔥)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // Keep the little badge container, but render the exact emoji 🔥
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
                           colors: [Color(0xFFdc2626), Color(0xFFef4444)],
                         ),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Text(
-                        '🔥',
-                        style: TextStyle(fontSize: 18, height: 1),
-                      ),
+                      child: const Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
                     ),
                     const SizedBox(width: 10),
                     Text(
@@ -320,7 +334,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 }
 
-// Brand Logo Widget (🎬 emoji)
+// Brand Logo Widget (🎬)
 class _ModernBrandLogo extends StatelessWidget {
   const _ModernBrandLogo();
 
@@ -348,7 +362,6 @@ class _ModernBrandLogo extends StatelessWidget {
             ],
           ),
           child: const Center(
-            // exact emoji as requested
             child: Text('🎬', style: TextStyle(fontSize: 20, height: 1)),
           ),
         ),
@@ -418,22 +431,18 @@ class _FeedListState extends State<_FeedList>
   bool get wantKeepAlive => true;
 
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
-    // Target max tile width: auto-decides columns across phone/tablet/web.
     double maxTileW;
     if (width < 520) {
       maxTileW = width; // 1 col phones
     } else if (width < 900) {
-      maxTileW = width / 2; // 2 cols tablets / small web
+      maxTileW = width / 2; // 2 cols
     } else if (width < 1400) {
-      maxTileW = width / 3; // 3 cols desktop
+      maxTileW = width / 3; // 3 cols
     } else {
-      maxTileW = width / 4; // 4 cols wide desktop
+      maxTileW = width / 4; // 4 cols
     }
-    // Clamp the tile width to keep card readability consistent.
     maxTileW = maxTileW.clamp(320.0, 460.0);
 
-    // Aspect ratio adapts to available width and text scale:
-    // smaller width or larger text -> taller cards (smaller ratio).
     double ratio;
     if (maxTileW <= 340) {
       ratio = 0.78;
@@ -444,7 +453,6 @@ class _FeedListState extends State<_FeedList>
     } else {
       ratio = 1.02;
     }
-    // Adjust for larger accessibility text sizes.
     ratio /= textScale.clamp(1.0, 1.6);
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
@@ -469,16 +477,14 @@ class _FeedListState extends State<_FeedList>
             final textScale = MediaQuery.textScaleFactorOf(context);
             final gridDelegate = _gridDelegateFor(w, textScale);
 
-            final horizontalPad = 16.0;
-            final topPad = 0.0;
+            const horizontalPad = 16.0;
+            const topPad = 0.0;
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 24.0 + bottomSafe;
 
             if (feed.isInitialLoading) {
-              // Show enough skeletons to fill 2–3 rows regardless of column count.
               return GridView.builder(
-                padding:
-                    EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
+                padding: const EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 cacheExtent: 1200,
                 gridDelegate: gridDelegate,
@@ -489,8 +495,7 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
-                padding:
-                    EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
+                padding: const EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
@@ -515,8 +520,7 @@ class _FeedListState extends State<_FeedList>
                   ? "You're offline and no results match your search."
                   : "No matching items.";
               return ListView(
-                padding:
-                    EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
+                padding: const EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
@@ -527,8 +531,7 @@ class _FeedListState extends State<_FeedList>
             const showLoadMore = false;
 
             return GridView.builder(
-              padding:
-                  EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
+              padding: const EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 1400,
               gridDelegate: gridDelegate,
