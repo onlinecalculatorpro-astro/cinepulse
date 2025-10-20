@@ -1,15 +1,15 @@
-# from repo root (/cinepulse)
-cp infra/source.yml infra/source.yml.bak.$(date +%s)
-
-cat > infra/source.yml <<'YML'
 # =============================================================================
 # CinePulse Sources Catalog — BOLLYWOOD + HINDI TV/OTT ONLY
 # =============================================================================
 
 meta:
   regions: ["IN"]
+  # NOTE: keep current Netlify base (typo preserved if your site uses it)
   share_base_url: "https://cinepusle.netlify.app/#/s"
 
+# ----------------------------------------------------------------------------- 
+# Throttle / courtesy
+# -----------------------------------------------------------------------------
 throttle:
   per_domain_min_seconds:
     default: 300
@@ -21,6 +21,9 @@ throttle:
     koimoi.com: 600
     tellyupdates.com: 600
 
+# ----------------------------------------------------------------------------- 
+# YOUTUBE (studios; optional OTT channels disabled until IDs verified)
+# -----------------------------------------------------------------------------
 youtube:
   defaults:
     enabled: true
@@ -29,6 +32,9 @@ youtube:
     published_after_hours: 72
     language: "en"
     region: "IN"
+    # (optional) title filters if your scheduler supports them:
+    # include_keywords: ["trailer","teaser","first look","announcement","promo"]
+    # ignore_keywords:  ["song","video song","lyric","lyrical","title track","jukebox","audio","remix"]
   channels:
     - name: "T-Series"
       enabled: true
@@ -54,44 +60,18 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-    # OTT platform channels (enable after verifying IDs)
-    - name: "JioCinema"
-      enabled: false
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-    - name: "Sony LIV"
-      enabled: false
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-    - name: "ZEE5"
-      enabled: false
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-    - name: "Netflix India"
-      enabled: false
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-    - name: "Prime Video India"
-      enabled: false
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-    - name: "Disney+ Hotstar"
-      enabled: false
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
 
+    # OTT platform channels (enable after verifying channel_id)
+    - name: "JioCinema"          ; enabled: false ; channel_id: "" ; industry: "bollywood" ; kind_hint: "ott" ; region: "IN"
+    - name: "Sony LIV"           ; enabled: false ; channel_id: "" ; industry: "bollywood" ; kind_hint: "ott" ; region: "IN"
+    - name: "ZEE5"               ; enabled: false ; channel_id: "" ; industry: "bollywood" ; kind_hint: "ott" ; region: "IN"
+    - name: "Netflix India"      ; enabled: false ; channel_id: "" ; industry: "bollywood" ; kind_hint: "ott" ; region: "IN"
+    - name: "Prime Video India"  ; enabled: false ; channel_id: "" ; industry: "bollywood" ; kind_hint: "ott" ; region: "IN"
+    - name: "Disney+ Hotstar"    ; enabled: false ; channel_id: "" ; industry: "bollywood" ; kind_hint: "ott" ; region: "IN"
+
+# ----------------------------------------------------------------------------- 
+# NEWS (RSS)
+# -----------------------------------------------------------------------------
 rss:
   defaults:
     enabled: true
@@ -102,11 +82,13 @@ rss:
       - "behind the scenes"
       - "interview"
       - "live stream"
+
   buckets:
-    # Hollywood bucket OFF
+    # Hollywood OFF
     news_hollywood:
       enabled: false
       feeds: []
+
     # Core Bollywood
     news_india:
       enabled: true
@@ -127,7 +109,8 @@ rss:
           enabled: true
           url: "https://www.koimoi.com/feed/"
           industry: "bollywood"
-    # Hindi TV + OTT focus (keyword filtered)
+
+    # Hindi TV + OTT (keyword-filtered)
     news_hindi_tv_ott:
       enabled: true
       feeds:
@@ -151,6 +134,9 @@ rss:
           industry: "bollywood"
           include_keywords: ["OTT","web series","series","season","episode","television","TV","Hotstar","JioCinema","Prime Video","Netflix","Sony LIV","ZEE5"]
 
+# ----------------------------------------------------------------------------- 
+# AWARDS (disabled for now)
+# -----------------------------------------------------------------------------
 awards:
   defaults:
     enabled: false
@@ -162,12 +148,18 @@ awards:
       tz: "Asia/Kolkata"
       date_utc: ""
 
+# ----------------------------------------------------------------------------- 
+# BOX OFFICE (disabled)
+# -----------------------------------------------------------------------------
 box_office:
   defaults:
     enabled: false
     kind_hint: bo
   sources: []
 
+# ----------------------------------------------------------------------------- 
+# TMDb
+# -----------------------------------------------------------------------------
 tmdb:
   api_key_env: "TMDB_API_KEY"
   regions: ["IN"]
@@ -181,6 +173,9 @@ tmdb:
     - "ZEE5"
     - "Sony LIV"
 
+# ----------------------------------------------------------------------------- 
+# Classification & Ranking
+# -----------------------------------------------------------------------------
 rules:
   trailer_keywords: ["trailer","teaser","first look","announcement","promo"]
   release_keywords: ["release","in theatres","coming soon","on netflix","on prime","on hotstar","on jiocinema","on zee5","on sonyliv"]
@@ -199,6 +194,9 @@ ranking_weights:
   has_poster_bonus: 0.6
   trend_bonus: 1.2
 
+# ----------------------------------------------------------------------------- 
+# Scheduler
+# -----------------------------------------------------------------------------
 scheduler:
   poll_interval_min: 15
   published_after_hours: 72
@@ -209,4 +207,3 @@ scheduler:
   per_run_limits:
     youtube_channels: 10
     rss_feeds: 12
-YML
