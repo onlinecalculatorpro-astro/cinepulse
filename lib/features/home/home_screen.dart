@@ -18,10 +18,10 @@ import '../story/story_card.dart';
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    this.showSearchBar = false,          // show only when Search tab active
-    this.onMenuPressed,                  // opens drawer (from RootShell)
-    this.onHeaderRefresh,                // optional external hook
-    this.onOpenDiscover,                 // header "Discover" button -> Search tab
+    this.showSearchBar = false, // show only when Search tab active
+    this.onMenuPressed,         // opens drawer (from RootShell)
+    this.onHeaderRefresh,       // optional external hook
+    this.onOpenDiscover,        // header "Discover" button -> Search tab
   });
 
   final bool showSearchBar;
@@ -107,16 +107,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     widget.onHeaderRefresh?.call();
   }
 
-  Future<void> _refreshAll() async {
-    for (final f in _feeds.values) {
-      await f.load(reset: true);
-    }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('All tabs refreshed')),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -194,8 +184,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                  child: const SearchBarInput(
-                    // no onRefresh here -> no refresh icon in the bar
+                  child: SearchBarInput(
+                    controller: _search,                 // wire to filter list
+                    onExitSearch: () {                   // 🚪 closes keyboard
+                      _search.clear();
+                      FocusScope.of(context).unfocus();
+                    },
                   ),
                 ),
               ),
