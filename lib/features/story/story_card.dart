@@ -1,6 +1,5 @@
 import 'dart:ui';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -73,7 +72,9 @@ class _StoryCardState extends State<StoryCard> {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+          content: Text(kIsWeb
+              ? 'Link copied to clipboard'
+              : 'Share sheet opened'),
         ),
       );
     } catch (_) {
@@ -87,7 +88,8 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   void _openDetails(BuildContext context) {
-    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
+    Navigator.of(context)
+        .push(fadeRoute(StoryDetailsScreen(story: widget.story)));
   }
 
   @override
@@ -95,109 +97,175 @@ class _StoryCardState extends State<StoryCard> {
     final scheme = Theme.of(context).colorScheme;
     final metaText = widget.story.metaLine;
     final hasUrl = _linkUrl != null;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
+      transform: _hover
+          ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0))
+          : null,
       decoration: BoxDecoration(
-        color: scheme.surface.withOpacity(0.70),
-        borderRadius: BorderRadius.circular(18),
+        color: isDark
+            ? const Color(0xFF181E2A).withOpacity(0.92)
+            : scheme.surface.withOpacity(0.97),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.04),
-          width: 1,
+          color: _hover
+              ? const Color(0x33dc2626)
+              : Colors.white.withOpacity(0.08),
+          width: 2,
         ),
-        boxShadow: _hover
-            ? [
-                BoxShadow(
-                  color: const Color(0xFFdc2626).withOpacity(0.18),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ]
-            : const [],
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.22),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _openDetails(context),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _Thumb(story: widget.story, onShare: () => _share(context)),
-                const SizedBox(height: 12),
-                Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    KindBadge(
-                      widget.story.kindLabel ?? widget.story.kind,
-                      compact: true,
-                    ),
-                    OttBadge.fromStory(widget.story, dense: true),
-                    Text(
-                      metaText,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  widget.story.title,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.inter(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSurface,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ---------------------- Icon/Thumbnail Area ----------------------
+              Container(
+                height: 170,
+                decoration: BoxDecoration(
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(22)),
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: isDark
+                        ? [
+                            const Color(0xFF101626),
+                            const Color(0xFF232941),
+                          ]
+                        : [
+                            const Color(0xFFE7EBF2),
+                            const Color(0xFFD1D5DC),
+                          ],
                   ),
                 ),
-                const SizedBox(height: 14),
-                Row(
+                child: Center(
+                  child: _SampleIcon(kind: widget.story.kind),
+                ),
+              ),
+
+              // -------------------- Info/Badge/MetaSection ---------------------
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? const Color(0xFF181E2A).withOpacity(0.94)
+                      : scheme.surface.withOpacity(0.98),
+                  borderRadius: const BorderRadius.vertical(
+                      bottom: Radius.circular(22)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    FilledButton.icon(
-                      onPressed: hasUrl ? () => _openLink(context) : null,
-                      icon: Icon(
-                        _isWatchCta ? Icons.play_arrow_rounded : Icons.open_in_new_rounded,
-                        size: 20,
-                      ),
-                      label: Text(_ctaLabel, style: GoogleFonts.inter(fontWeight: FontWeight.w600)),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFFdc2626),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                        textStyle: const TextStyle(fontSize: 15),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    // NEWS badge, meta, time
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 4, horizontal: 14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF723A3C).withOpacity(0.96),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            "NEWS",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Icon(Icons.circle, size: 7, color: Colors.grey[500]),
+                        const SizedBox(width: 6),
+                        Text(
+                          metaText,
+                          style: TextStyle(
+                            color: Colors.grey[400],
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ---------------------- Headline/title ----------------------
+                    Text(
+                      widget.story.title,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.inter(
+                        fontSize: 17.5,
+                        height: 1.35,
+                        fontWeight: FontWeight.w800,
+                        color: isDark
+                            ? Colors.white.withOpacity(0.96)
+                            : scheme.onSurface,
                       ),
                     ),
-                    const Spacer(),
-                    AnimatedBuilder(
-                      animation: SavedStore.instance,
-                      builder: (_, __) {
-                        final saved = SavedStore.instance.isSaved(widget.story.id);
-                        return _ActionIcon(
-                          tooltip: saved ? 'Remove from Saved' : 'Save',
-                          icon: saved ? Icons.bookmark : Icons.bookmark_add_outlined,
-                          onTap: () => SavedStore.instance.toggle(widget.story.id),
-                        );
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    _ActionIcon(
-                      tooltip: 'Share',
-                      icon: Icons.ios_share,
-                      onTap: () => _share(context),
+                    const SizedBox(height: 22),
+
+                    // --------------- CTA Row: Read + edit/share ----------------
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 44,
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.menu_book_rounded,
+                                  size: 22, color: Colors.white),
+                              onPressed:
+                                  hasUrl ? () => _openLink(context) : null,
+                              style: ElevatedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                backgroundColor: const Color(0xFFdc2626),
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                textStyle: const TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                              label: const Text("Read"),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        _ActionIconBox(
+                          icon: Icons.edit_rounded,
+                          tooltip: "Edit",
+                          onTap: () {
+                            // Place your edit logic here
+                          },
+                        ),
+                        const SizedBox(width: 8),
+                        _ActionIconBox(
+                          icon: Icons.ios_share_rounded,
+                          tooltip: "Share",
+                          onTap: () => _share(context),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -209,9 +277,9 @@ class _StoryCardState extends State<StoryCard> {
       child: kIsWeb
           ? card
           : ClipRRect(
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(22),
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+                filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
                 child: card,
               ),
             ),
@@ -219,169 +287,62 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-/* ------------------------------- Thumbnail ------------------------------- */
-class _Thumb extends StatelessWidget {
-  const _Thumb({required this.story, required this.onShare});
+// --------- Sample Card Icon ---------
+class _SampleIcon extends StatelessWidget {
+  final String kind;
 
-  final Story story;
-  final VoidCallback onShare;
-
-  IconData _placeholderFor(String k) {
-    final kind = k.toLowerCase();
-    if (kind.contains('trailer')) return Icons.play_circle_filled_rounded;
-    if (kind.contains('release') || kind.contains('theatre')) {
-      return Icons.local_movies_rounded;
-    }
-    if (kind.contains('ott') || kind.contains('stream')) {
-      return Icons.tv_rounded;
-    }
-    return Icons.article_rounded;
-  }
+  const _SampleIcon({required this.kind});
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final hasThumb = (story.thumbUrl != null && story.thumbUrl!.isNotEmpty);
+    IconData iconData = Icons.movie_rounded;
+    Color iconColor = const Color(0xFFECC943);
 
-    return Stack(
-      children: [
-        Hero(
-          tag: 'thumb-${story.id}',
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: AspectRatio(
-              aspectRatio: 16 / 9,
-              child: hasThumb
-                  ? CachedNetworkImage(
-                      imageUrl: story.thumbUrl!,
-                      fit: BoxFit.cover,
-                      memCacheWidth: 900,
-                      fadeInDuration: const Duration(milliseconds: 150),
-                      placeholder: (c, _) => Container(
-                        color: scheme.surfaceVariant.withOpacity(0.18),
-                      ),
-                      errorWidget: (c, _, __) => Container(
-                        color: scheme.surfaceVariant.withOpacity(0.18),
-                      ),
-                    )
-                  : Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            scheme.surfaceVariant.withOpacity(0.16),
-                            scheme.surfaceVariant.withOpacity(0.09),
-                          ],
-                        ),
-                      ),
-                      child: Center(
-                        child: Icon(
-                          _placeholderFor(story.kind),
-                          size: 48,
-                          color: scheme.onSurfaceVariant.withOpacity(0.7),
-                        ),
-                      ),
-                    ),
-            ),
-          ),
-        ),
-        // Bottom gradient scrim for depth
-        Positioned.fill(
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.28),
-                    Colors.transparent,
-                  ],
-                  stops: const [0.0, 0.5],
-                ),
-              ),
-            ),
-          ),
-        ),
-        // Quick actions (top-right)
-        Positioned(
-          right: 8,
-          top: 8,
-          child: _CircleIconButton(
-            tooltip: 'Share',
-            icon: Icons.ios_share,
-            onPressed: onShare,
-          ),
-        ),
-      ],
+    if (kind.toLowerCase().contains("trailer")) {
+      iconData = Icons.theater_comedy_rounded;
+      iconColor = const Color(0xFF56BAF8);
+    } else if (kind.toLowerCase().contains("release")) {
+      iconData = Icons.balance_rounded;
+      iconColor = const Color(0xFFF9D359);
+    } else if (kind.toLowerCase().contains("ott")) {
+      iconData = Icons.videocam_rounded;
+      iconColor = const Color(0xFFC377F2);
+    }
+
+    return Icon(
+      iconData,
+      size: 70,
+      color: iconColor.withOpacity(0.8),
     );
   }
 }
 
-/* --------------------------------- UI bits -------------------------------- */
-class _ActionIcon extends StatelessWidget {
-  const _ActionIcon({
+// --------- Action icon in box ---------
+class _ActionIconBox extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final String tooltip;
+
+  const _ActionIconBox({
     required this.icon,
     required this.onTap,
     required this.tooltip,
   });
 
-  final IconData icon;
-  final VoidCallback onTap;
-  final String tooltip;
-
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: tooltip,
-      child: InkResponse(
-        onTap: onTap,
-        radius: 24,
-        child: Container(
-          decoration: BoxDecoration(
-            color: scheme.surface.withOpacity(0.70),
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: Colors.white.withOpacity(0.06),
-              width: 1,
-            ),
-          ),
-          padding: const EdgeInsets.all(8),
-          child: Icon(icon, size: 20, color: scheme.onSurface),
-        ),
-      ),
-    );
-  }
-}
-
-class _CircleIconButton extends StatelessWidget {
-  const _CircleIconButton({
-    required this.icon,
-    required this.onPressed,
-    required this.tooltip,
-  });
-
-  final IconData icon;
-  final VoidCallback onPressed;
-  final String tooltip;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: scheme.surface.withOpacity(0.72),
-        shape: const CircleBorder(),
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(8),
         child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Icon(icon, size: 20, color: scheme.onSurface),
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(icon, color: Colors.white, size: 22),
           ),
         ),
       ),
