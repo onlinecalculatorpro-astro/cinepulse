@@ -96,6 +96,12 @@ class _RootShellState extends State<RootShell> {
     Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: s)));
   }
 
+  void _goTo(int i) {
+    if (_index == i) return;
+    setState(() => _index = i);
+    Navigator.of(context).maybePop(); // close drawer if open
+  }
+
   Future<void> _openThemePicker(BuildContext context) async {
     final current = AppSettings.instance.themeMode;
     Navigator.pop(context); // close drawer before sheet
@@ -109,8 +115,13 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
+  bool _isCompact(BuildContext context) =>
+      MediaQuery.of(context).size.width < 900;
+
   @override
   Widget build(BuildContext context) {
+    final compact = _isCompact(context);
+
     return WillPopScope(
       // Back button pops detail routes if any; otherwise allow system back.
       onWillPop: () async {
@@ -125,6 +136,28 @@ class _RootShellState extends State<RootShell> {
               padding: EdgeInsets.zero,
               children: [
                 const _BrandDrawerHeader(),
+                // Quick navigation (handy on wide screens where bottom nav is hidden)
+                ListTile(
+                  leading: const Icon(Icons.home_outlined),
+                  title: const Text('Home'),
+                  onTap: () => _goTo(0),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.explore_outlined),
+                  title: const Text('Discover'),
+                  onTap: () => _goTo(1),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.bookmark_outline),
+                  title: const Text('Saved'),
+                  onTap: () => _goTo(2),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.notifications_outlined),
+                  title: const Text('Alerts'),
+                  onTap: () => _goTo(3),
+                ),
+                const Divider(height: 24),
                 ListTile(
                   leading: const Icon(Icons.palette_outlined),
                   title: const Text('Theme'),
@@ -151,33 +184,39 @@ class _RootShellState extends State<RootShell> {
           child: IndexedStack(index: _index, children: _pages),
         ),
 
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
-          onDestinationSelected: (i) => setState(() => _index = i),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home),
-              label: 'Home',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.explore_outlined),
-              selectedIcon: Icon(Icons.explore),
-              label: 'Discover',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.bookmark_outline),
-              selectedIcon: Icon(Icons.bookmark),
-              label: 'Saved',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.notifications_outlined),
-              selectedIcon: Icon(Icons.notifications),
-              label: 'Alerts',
-            ),
-          ],
-        ),
+        // Mobile bottom nav only; hide on tablets/desktop to match your mock.
+        bottomNavigationBar: compact
+            ? SafeArea(
+                top: false,
+                child: NavigationBar(
+                  selectedIndex: _index,
+                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+                  onDestinationSelected: _goTo,
+                  destinations: const [
+                    NavigationDestination(
+                      icon: Icon(Icons.home_outlined),
+                      selectedIcon: Icon(Icons.home),
+                      label: 'Home',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.explore_outlined),
+                      selectedIcon: Icon(Icons.explore),
+                      label: 'Discover',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.bookmark_outline),
+                      selectedIcon: Icon(Icons.bookmark),
+                      label: 'Saved',
+                    ),
+                    NavigationDestination(
+                      icon: Icon(Icons.notifications_outlined),
+                      selectedIcon: Icon(Icons.notifications),
+                      label: 'Alerts',
+                    ),
+                  ],
+                ),
+              )
+            : null,
       ),
     );
   }
@@ -351,7 +390,7 @@ class _ResponsiveWidth extends StatelessWidget {
       if (w <= 720) return child; // phones: full-bleed
 
       // Tablets & web: center with a comfortable max width.
-      final maxW = w >= 1200 ? 980.0 : 900.0;
+      final maxW = w >= 1400 ? 1200.0 : (w >= 1200 ? 1080.0 : 980.0);
       return Center(
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxW),
