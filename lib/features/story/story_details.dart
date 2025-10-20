@@ -11,6 +11,7 @@ import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
 import '../../core/models.dart'; // Story + metaLine
 import '../../core/utils.dart'; // fadeRoute()
+import '../../widgets/kind_badge.dart'; // <-- reusable KindBadge
 import 'ott_badge.dart';
 
 class StoryDetailsScreen extends StatelessWidget {
@@ -167,7 +168,7 @@ class StoryDetailsScreen extends StatelessWidget {
                         spacing: 8,
                         runSpacing: 6,
                         children: [
-                          _KindBadge(story.kindLabel ?? story.kind),
+                          KindBadge(story.kindLabel ?? story.kind), // <-- replaced
                           OttBadge.fromStory(story, dense: true),
                           Text(
                             story.metaLine,
@@ -333,49 +334,6 @@ class _Facet extends StatelessWidget {
           ),
           Text(value, style: Theme.of(context).textTheme.labelMedium),
         ],
-      ),
-    );
-  }
-}
-
-/* -------------------------------- Badges --------------------------------- */
-
-class _KindBadge extends StatelessWidget {
-  const _KindBadge(this.text, {this.compact = false});
-  final String text;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    const bg = Color(0xFFdc2626);
-    const fg = Colors.white;
-
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: [
-          BoxShadow(
-            color: bg.withOpacity(0.24),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-        border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.06) : Colors.transparent,
-          width: 1,
-        ),
-      ),
-      child: Text(
-        (text.isEmpty ? 'NEWS' : text).toUpperCase(),
-        style: const TextStyle(
-          fontSize: 11.5,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-          color: fg,
-        ),
       ),
     );
   }
