@@ -48,7 +48,8 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
-  IconData get _ctaIcon => _isWatchCta ? Icons.play_arrow_rounded : Icons.menu_book_rounded;
+  IconData get _ctaIcon =>
+      _isWatchCta ? Icons.play_arrow_rounded : Icons.menu_book_rounded;
 
   Future<void> _openLink(BuildContext context) async {
     final url = _linkUrl;
@@ -59,8 +60,9 @@ class _StoryCardState extends State<StoryCard> {
       webOnlyWindowName: kIsWeb ? '_blank' : null,
     );
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Could not open link')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open link')),
+      );
     }
   }
 
@@ -74,7 +76,10 @@ class _StoryCardState extends State<StoryCard> {
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
+        SnackBar(
+          content: Text(
+              kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+        ),
       );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
@@ -87,7 +92,8 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   void _openDetails(BuildContext context) {
-    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
+    Navigator.of(context)
+        .push(fadeRoute(StoryDetailsScreen(story: widget.story)));
   }
 
   @override
@@ -102,9 +108,12 @@ class _StoryCardState extends State<StoryCard> {
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
+      transform:
+          _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92) : scheme.surface.withOpacity(0.97),
+        color: isDark
+            ? const Color(0xFF181E2A).withOpacity(0.92)
+            : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
@@ -128,10 +137,14 @@ class _StoryCardState extends State<StoryCard> {
               final w = box.maxWidth;
               final h = box.maxHeight;
 
-              // Hero/media height adapts to available tile size & width.
-              // Phone: taller media; Desktop: slightly shorter.
-              final targetAspect =
-                  w >= 1200 ? (16 / 7) : w >= 900 ? (16 / 9) : w >= 600 ? (3 / 2) : (4 / 3);
+              // Media height adapts to tile size & width.
+              final targetAspect = w >= 1200
+                  ? (16 / 7)
+                  : w >= 900
+                      ? (16 / 9)
+                      : w >= 600
+                          ? (3 / 2)
+                          : (4 / 3);
               final mediaH = (w / targetAspect)
                   .clamp(120.0, math.max(140.0, h.isFinite ? h * 0.45 : 220.0));
 
@@ -143,7 +156,9 @@ class _StoryCardState extends State<StoryCard> {
                     height: mediaH.toDouble(),
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(22),
+                        ),
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
@@ -152,14 +167,16 @@ class _StoryCardState extends State<StoryCard> {
                               : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
                         ),
                       ),
-                      child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                      child:
+                          Center(child: _SampleIcon(kind: widget.story.kind)),
                     ),
                   ),
 
                   // Info/Badge/Meta Section
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 18),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -174,7 +191,11 @@ class _StoryCardState extends State<StoryCard> {
                                   color: Colors.white.withOpacity(0.13),
                                   shape: BoxShape.circle,
                                 ),
-                                child: const Icon(Icons.access_time_rounded, size: 17, color: Color(0xFFA1A5B0)),
+                                child: const Icon(
+                                  Icons.access_time_rounded,
+                                  size: 17,
+                                  color: Color(0xFFA1A5B0),
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Flexible(
@@ -182,7 +203,10 @@ class _StoryCardState extends State<StoryCard> {
                                   metaText,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
+                                  style: TextStyle(
+                                    color: Colors.grey[400],
+                                    fontSize: 13.5,
+                                  ),
                                 ),
                               ),
                             ],
@@ -198,7 +222,9 @@ class _StoryCardState extends State<StoryCard> {
                               fontSize: 15,
                               height: 1.32,
                               fontWeight: FontWeight.w800,
-                              color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                              color: isDark
+                                  ? Colors.white.withOpacity(0.96)
+                                  : scheme.onSurface,
                             ),
                           ),
                           const Spacer(),
@@ -213,8 +239,13 @@ class _StoryCardState extends State<StoryCard> {
                                   child: SizedBox(
                                     height: 46,
                                     child: ElevatedButton.icon(
-                                      icon: Icon(_ctaIcon, size: 22, color: Colors.white),
-                                      onPressed: hasUrl ? () => _openLink(context) : null,
+                                      icon: Icon(
+                                        _ctaIcon,
+                                        size: 22,
+                                        color: Colors.white,
+                                      ),
+                                      onPressed:
+                                          hasUrl ? () => _openLink(context) : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
                                         backgroundColor: const Color(0xFFdc2626),
@@ -222,7 +253,10 @@ class _StoryCardState extends State<StoryCard> {
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(10),
                                         ),
-                                        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                                        textStyle: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 16,
+                                        ),
                                       ),
                                       label: Text(_ctaLabel),
                                     ),
@@ -352,15 +386,21 @@ class _ActionIconBox extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
+        color: isDark
+            ? Colors.white.withOpacity(0.08)
+            : Colors.black.withOpacity(0.06),
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: const SizedBox(
+          child: SizedBox(
             width: 44,
             height: 44,
-            child: Icon(Icons.adaptive.share, size: 0), // size overridden by icon param below
+            child: Icon(
+              icon,
+              size: 22,
+              color: isDark ? Colors.white : Colors.black87,
+            ),
           ),
         ),
       ),
