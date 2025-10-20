@@ -13,7 +13,7 @@ class SearchBarInput extends StatefulWidget {
     this.onChanged,
     this.onSubmitted,
     this.onMicTap,
-    this.onRefresh,
+    this.onRefresh, // if null, refresh button is hidden
     this.hintText = 'Search movies, shows, trailers…',
     this.enabled = true,
   });
@@ -29,7 +29,7 @@ class SearchBarInput extends StatefulWidget {
   /// Mic action (tap). Will be disabled when offline or `enabled=false`.
   final VoidCallback? onMicTap;
 
-  /// Refresh action (tap). Shown always; caller decides what to do.
+  /// Refresh action (tap). If null, refresh button is hidden.
   final VoidCallback? onRefresh;
 
   final String hintText;
@@ -58,7 +58,6 @@ class _SearchBarInputState extends State<SearchBarInput> {
     super.initState();
     _focus.addListener(_onFocus);
     _c.addListener(_handleControllerChange);
-
     _loadRecents();
 
     // Connectivity
@@ -112,7 +111,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
     } else {
       _hideOverlay();
     }
-    widget.onChanged?.call(_c.text);
+    // Do NOT call onChanged here; TextField.onChanged handles it.
   }
 
   void _onFocus() {
@@ -308,20 +307,21 @@ class _SearchBarInputState extends State<SearchBarInput> {
                 icon: const _Emoji(emoji: '🎤', size: 18),
               ),
 
-            // Refresh (always shown) – keeping Material refresh icon
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: IconButton(
-                tooltip: 'Refresh',
-                onPressed: widget.enabled ? widget.onRefresh : null,
-                icon: Icon(
-                  Icons.refresh_rounded,
-                  color: widget.enabled
-                      ? (isDark ? const Color(0xFF94a3b8) : Colors.grey[700])
-                      : cs.onSurfaceVariant,
+            // Refresh (ONLY if provided)
+            if (widget.onRefresh != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: IconButton(
+                  tooltip: 'Refresh',
+                  onPressed: widget.enabled ? widget.onRefresh : null,
+                  icon: Icon(
+                    Icons.refresh_rounded,
+                    color: widget.enabled
+                        ? (isDark ? const Color(0xFF94a3b8) : Colors.grey[700])
+                        : cs.onSurfaceVariant,
+                  ),
                 ),
               ),
-            ),
           ],
         ),
       ),
