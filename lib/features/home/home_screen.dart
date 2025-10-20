@@ -500,9 +500,9 @@ class _FeedListState extends State<_FeedList>
 
   // Lowered aspect ratios for much taller cards.
   double _aspectRatioFor(int cols, double maxWidth) {
-    if (cols >= 3) return 0.60;  // was 1.18, lower means "taller"
-    if (cols == 2) return 0.52;  // was 1.08
-    return 0.44;                  // was 0.92
+    if (cols >= 3) return 0.90;  // was 1.18, lower means "taller"
+    if (cols == 2) return 0.82;  // was 1.08
+    return 0.74;                  // was 0.92
   }
 
   @override
