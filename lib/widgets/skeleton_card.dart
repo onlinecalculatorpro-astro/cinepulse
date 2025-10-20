@@ -6,26 +6,23 @@ class SkeletonCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final cs = Theme.of(context).colorScheme;
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 1200),
       curve: Curves.easeInOut,
       builder: (context, t, _) {
-        // Subtle pulse between base and highlight.
-        final base = scheme.surfaceContainerHighest.withOpacity(0.28);
-        final highlight = scheme.surfaceContainerHighest.withOpacity(0.55);
+        // Subtle pulse between base and highlight
+        final base = cs.surfaceContainerHighest.withOpacity(0.28);
+        final highlight = cs.surfaceContainerHighest.withOpacity(0.55);
         final fill = Color.lerp(base, highlight, 0.5 + 0.5 * t)!;
 
         return Container(
           decoration: BoxDecoration(
-            color: scheme.surface.withOpacity(0.60),
+            color: cs.surface.withOpacity(0.60),
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.04),
-              width: 1,
-            ),
+            border: Border.all(color: Colors.white.withOpacity(0.04), width: 1),
           ),
           clipBehavior: Clip.antiAlias,
           child: Padding(
@@ -38,7 +35,7 @@ class SkeletonCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(14),
                   child: AspectRatio(
                     aspectRatio: 16 / 9,
-                    child: Container(color: fill),
+                    child: DecoratedBox(decoration: BoxDecoration(color: fill)),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -46,7 +43,7 @@ class SkeletonCard extends StatelessWidget {
                 // Kind badge + meta line
                 Row(
                   children: [
-                    // Badge pill
+                    // badge pill
                     Container(
                       height: 22,
                       width: 64,
@@ -56,7 +53,7 @@ class SkeletonCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // Meta text stub
+                    // meta text stub
                     Expanded(
                       child: Container(
                         height: 12,
@@ -79,12 +76,14 @@ class SkeletonCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Container(
-                  height: 16,
-                  width: MediaQuery.of(context).size.width * 0.6,
-                  decoration: BoxDecoration(
-                    color: fill,
-                    borderRadius: BorderRadius.circular(6),
+                FractionallySizedBox(
+                  widthFactor: 0.6,
+                  child: Container(
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: fill,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
                   ),
                 ),
 
@@ -103,10 +102,8 @@ class SkeletonCard extends StatelessWidget {
                       ),
                     ),
                     const Spacer(),
-                    // Save
                     _circle(fill),
                     const SizedBox(width: 8),
-                    // Share
                     _circle(fill),
                   ],
                 ),
@@ -122,10 +119,7 @@ class SkeletonCard extends StatelessWidget {
     return Container(
       width: 36,
       height: 36,
-      decoration: BoxDecoration(
-        color: fill,
-        shape: BoxShape.circle,
-      ),
+      decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
     );
   }
 }
