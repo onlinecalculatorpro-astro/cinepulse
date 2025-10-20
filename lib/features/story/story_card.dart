@@ -13,6 +13,7 @@ import '../../core/api.dart'; // deepLinkForStoryId
 import '../../core/cache.dart';
 import '../../core/models.dart'; // Story + storyVideoUrl + metaLine/kindLabel
 import '../../core/utils.dart';
+import '../../widgets/kind_badge.dart'; // <-- reusable badge
 import 'story_details.dart';
 import 'ott_badge.dart';
 
@@ -145,7 +146,10 @@ class _StoryCardState extends State<StoryCard> {
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    _KindBadge(widget.story.kindLabel ?? widget.story.kind),
+                    KindBadge(
+                      widget.story.kindLabel ?? widget.story.kind,
+                      compact: true,
+                    ),
                     // Optional OTT badge if streaming information exists
                     if (OttBadge.canBuildFrom(widget.story))
                       OttBadge.fromStory(widget.story, dense: true),
@@ -331,49 +335,6 @@ class _Thumb extends StatelessWidget {
   }
 }
 
-/* -------------------------------- Badges --------------------------------- */
-
-class _KindBadge extends StatelessWidget {
-  const _KindBadge(this.text, {this.compact = false});
-  final String text;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = const Color(0xFFdc2626);
-    final fg = Colors.white;
-
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: [
-          BoxShadow(
-            color: bg.withOpacity(0.24),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-        border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.06) : Colors.transparent,
-          width: 1,
-        ),
-      ),
-      child: Text(
-        (text.isEmpty ? 'NEWS' : text).toUpperCase(),
-        style: const TextStyle(
-          fontSize: 11.5,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-          color: fg,
-        ),
-      ),
-    );
-  }
-}
-
 /* --------------------------------- UI bits -------------------------------- */
 
 class _ActionIcon extends StatelessWidget {
@@ -434,9 +395,9 @@ class _CircleIconButton extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onPressed,
-          child: const Padding(
-            padding: EdgeInsets.all(8),
-            child: Icon(Icons.ios_share, size: 20),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(icon, size: 20, color: scheme.onSurface),
           ),
         ),
       ),
