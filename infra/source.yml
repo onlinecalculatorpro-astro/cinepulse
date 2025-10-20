@@ -1,17 +1,16 @@
+# from repo root (/cinepulse)
+cp infra/source.yml infra/source.yml.bak.$(date +%s)
+
+cat > infra/source.yml <<'YML'
 # =============================================================================
-# CinePulse Sources Catalog — BOLLYWOOD + HINDI TV/OTT SCOPE
+# CinePulse Sources Catalog — BOLLYWOOD + HINDI TV/OTT ONLY
 # =============================================================================
 
 meta:
-  regions: ["IN"]   # narrowed to India
-  # Deep-link base your app shares (hash route handled by RootShell)
+  regions: ["IN"]
   share_base_url: "https://cinepusle.netlify.app/#/s"
 
-# -----------------------------------------------------------------------------
-# Global throttling / courtesy (helps avoid hammering sources)
-# -----------------------------------------------------------------------------
 throttle:
-  # Minimum seconds between polls per host/domain (best-effort)
   per_domain_min_seconds:
     default: 300
     youtube.com: 300
@@ -22,111 +21,93 @@ throttle:
     koimoi.com: 600
     tellyupdates.com: 600
 
-# -----------------------------------------------------------------------------
-# YOUTUBE (official trailers, teasers, OTT promos) — Bollywood/Hindi only
-# -----------------------------------------------------------------------------
 youtube:
   defaults:
     enabled: true
-    kind_hint: trailer               # channel can override to "ott"
+    kind_hint: trailer
     max_items_per_poll: 20
     published_after_hours: 72
     language: "en"
     region: "IN"
-
   channels:
-    # --- Bollywood studios ----------------------------------------------------
     - name: "T-Series"
       enabled: true
       channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-
     - name: "YRF"
       enabled: true
       channel_id: "UCI5q9xeOp2-1bV7xEtkKgzA"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-
     - name: "Zee Studios"
       enabled: true
       channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-
     - name: "Dharma Productions"
       enabled: true
       channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-
-    # --- Hindi OTT platforms (enable after verifying channel_id) --------------
-    - name: "Netflix India"
-      enabled: false                  # TODO: verify channel_id before enabling
-      channel_id: ""                  # e.g., official India channel ID
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-
-    - name: "Prime Video India"
-      enabled: false                  # TODO: verify channel_id before enabling
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-
-    - name: "Disney+ Hotstar"
-      enabled: false                  # TODO: verify channel_id before enabling
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-
+    # OTT platform channels (enable after verifying IDs)
     - name: "JioCinema"
-      enabled: false                  # TODO: verify channel_id before enabling
+      enabled: false
       channel_id: ""
       industry: "bollywood"
       kind_hint: "ott"
       region: "IN"
-
-    - name: "ZEE5"
-      enabled: false                  # TODO: verify channel_id before enabling
-      channel_id: ""
-      industry: "bollywood"
-      kind_hint: "ott"
-      region: "IN"
-
     - name: "Sony LIV"
-      enabled: false                  # TODO: verify channel_id before enabling
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+    - name: "ZEE5"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+    - name: "Netflix India"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+    - name: "Prime Video India"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+    - name: "Disney+ Hotstar"
+      enabled: false
       channel_id: ""
       industry: "bollywood"
       kind_hint: "ott"
       region: "IN"
 
-    # All Hollywood/Tollywood channels are intentionally disabled/omitted.
-
-# -----------------------------------------------------------------------------
-# NEWS (RSS)
-# Buckets let you tune weights or tabs later (news/reviews/industry).
-# -----------------------------------------------------------------------------
 rss:
   defaults:
     enabled: true
     kind_hint: news
     max_items_per_poll: 20
-    include_keywords: []             # per-feed override supported
+    include_keywords: []
     ignore_keywords:
       - "behind the scenes"
       - "interview"
       - "live stream"
-
   buckets:
-
-    # Core Bollywood news
+    # Hollywood bucket OFF
+    news_hollywood:
+      enabled: false
+      feeds: []
+    # Core Bollywood
     news_india:
       enabled: true
       feeds:
@@ -146,92 +127,30 @@ rss:
           enabled: true
           url: "https://www.koimoi.com/feed/"
           industry: "bollywood"
-
-    # Focused Hindi TV Serials + OTT series/movies (keyword-filtered)
+    # Hindi TV + OTT focus (keyword filtered)
     news_hindi_tv_ott:
       enabled: true
       feeds:
-        # Reuse the same sources but restrict to OTT/TV topics via keywords
+        - name: "TellyUpdates"
+          enabled: true
+          url: "https://www.tellyupdates.com/feed/"
+          industry: "bollywood"
         - name: "Bollywood Hungama — OTT/TV"
           enabled: true
           url: "https://www.bollywoodhungama.com/rss/news.xml"
           industry: "bollywood"
-          include_keywords:
-            - "OTT"
-            - "web series"
-            - "series"
-            - "season"
-            - "episode"
-            - "television"
-            - "TV"
-            - "Hotstar"
-            - "JioCinema"
-            - "Prime Video"
-            - "Netflix"
-            - "Sony LIV"
-            - "ZEE5"
+          include_keywords: ["OTT","web series","series","season","episode","television","TV","Hotstar","JioCinema","Prime Video","Netflix","Sony LIV","ZEE5"]
         - name: "Pinkvilla — OTT/TV"
           enabled: true
           url: "https://www.pinkvilla.com/entertainment/feed"
           industry: "bollywood"
-          include_keywords:
-            - "OTT"
-            - "web series"
-            - "series"
-            - "season"
-            - "episode"
-            - "television"
-            - "TV"
-            - "Hotstar"
-            - "JioCinema"
-            - "Prime Video"
-            - "Netflix"
-            - "Sony LIV"
-            - "ZEE5"
+          include_keywords: ["OTT","web series","series","season","episode","television","TV","Hotstar","JioCinema","Prime Video","Netflix","Sony LIV","ZEE5"]
         - name: "Film Companion — OTT/TV"
           enabled: true
           url: "https://www.filmcompanion.in/feed"
           industry: "bollywood"
-          include_keywords:
-            - "OTT"
-            - "web series"
-            - "series"
-            - "season"
-            - "episode"
-            - "television"
-            - "TV"
-            - "Hotstar"
-            - "JioCinema"
-            - "Prime Video"
-            - "Netflix"
-            - "Sony LIV"
-            - "ZEE5"
+          include_keywords: ["OTT","web series","series","season","episode","television","TV","Hotstar","JioCinema","Prime Video","Netflix","Sony LIV","ZEE5"]
 
-        # Dedicated Hindi TV/serials portals (safe pick with standard WP feed)
-        - name: "TellyUpdates"
-          enabled: true
-          url: "https://www.tellyupdates.com/feed/"
-          industry: "bollywood"       # keep unified tag
-          include_keywords: []        # already TV-only
-
-        # Placeholders to enable after verifying RSS URLs:
-        - name: "TellyChakkar"
-          enabled: false              # TODO: add/verify RSS URL, then enable
-          url: ""
-          industry: "bollywood"
-        - name: "OTTplay"
-          enabled: false              # TODO: add/verify RSS URL, then enable
-          url: ""
-          industry: "bollywood"
-
-    # Reviews/editorial (keep off until you add a Reviews tab)
-    reviews_editorial:
-      enabled: false
-      feeds: []
-
-# -----------------------------------------------------------------------------
-# AWARDS (kept off for now)
-# -----------------------------------------------------------------------------
 awards:
   defaults:
     enabled: false
@@ -243,20 +162,14 @@ awards:
       tz: "Asia/Kolkata"
       date_utc: ""
 
-# -----------------------------------------------------------------------------
-# BOX OFFICE (scrape later; disabled for now)
-# -----------------------------------------------------------------------------
 box_office:
   defaults:
     enabled: false
     kind_hint: bo
   sources: []
 
-# -----------------------------------------------------------------------------
-# TMDb (free; attribution required) — India region only
-# -----------------------------------------------------------------------------
 tmdb:
-  api_key_env: "TMDB_API_KEY"   # read from environment
+  api_key_env: "TMDB_API_KEY"
   regions: ["IN"]
   enable_trending: true
   enable_upcoming: true
@@ -268,42 +181,11 @@ tmdb:
     - "ZEE5"
     - "Sony LIV"
 
-# -----------------------------------------------------------------------------
-# (Optional) IMDb — disabled (no free official API; scraping breaks ToS)
-# -----------------------------------------------------------------------------
-imdb:
-  enabled: false
-  mode: "scrape"
-  notes: "IMDb ratings not ingested due to lack of free official API."
-
-# -----------------------------------------------------------------------------
-# Classification & Ranking
-# -----------------------------------------------------------------------------
 rules:
-  trailer_keywords:
-    - "trailer"
-    - "teaser"
-    - "first look"
-    - "announcement"
-    - "promo"
-  release_keywords:
-    - "release"
-    - "in theatres"
-    - "coming soon"
-    - "on netflix"
-    - "on prime"
-    - "on hotstar"
-    - "on jiocinema"
-    - "on zee5"
-    - "on sonyliv"
-  award_keywords:
-    - "awards"
-    - "nominations"
-    - "winners"
-  ignore_keywords:
-    - "behind the scenes"
-    - "interview"
-    - "live stream"
+  trailer_keywords: ["trailer","teaser","first look","announcement","promo"]
+  release_keywords: ["release","in theatres","coming soon","on netflix","on prime","on hotstar","on jiocinema","on zee5","on sonyliv"]
+  award_keywords: ["awards","nominations","winners"]
+  ignore_keywords: ["behind the scenes","interview","live stream"]
 
 ranking_weights:
   recency_half_life_minutes: 360
@@ -317,18 +199,14 @@ ranking_weights:
   has_poster_bonus: 0.6
   trend_bonus: 1.2
 
-# -----------------------------------------------------------------------------
-# Scheduler defaults (env can override; docker-compose wires these)
-# -----------------------------------------------------------------------------
 scheduler:
   poll_interval_min: 15
   published_after_hours: 72
   use_sources_file: true
-  # Only Bollywood/Hindi buckets
   rss_buckets_enabled:
     - news_india
     - news_hindi_tv_ott
-  # Cap per-run to avoid floods while scoped
   per_run_limits:
     youtube_channels: 10
     rss_feeds: 12
+YML
