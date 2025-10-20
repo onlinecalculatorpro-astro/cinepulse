@@ -124,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         color: const Color(0xFFdc2626),
         child: CustomScrollView(
           slivers: [
-            // Modern App Bar with glassmorphism effect
+            // Glassy app bar
             SliverAppBar(
               floating: true,
               pinned: true,
@@ -170,12 +170,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
               title: const _ModernBrandLogo(),
-              actions: [
-                const SizedBox(width: 48),
-              ],
+              actions: const [SizedBox(width: 48)],
             ),
 
-            // Search Bar
+            // Search
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
@@ -189,7 +187,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Offline Banner
+            // Offline banner
             if (_offline)
               const SliverToBoxAdapter(
                 child: Padding(
@@ -198,66 +196,71 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               ),
 
-            // Modern Tabs
+            // Chip tabs (sticky)
             SliverPersistentHeader(
               pinned: true,
               delegate: _ModernTabsDelegate(
-                child: Container(
-                  color:
-                      isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                  child: Container(
-                    decoration: BoxDecoration(
+                child: Builder(
+                  builder: (context) {
+                    return Container(
                       color: isDark
-                          ? const Color(0xFF1e293b).withOpacity(0.4)
-                          : theme.colorScheme.surfaceContainerHighest
-                              .withOpacity(0.5),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(0.05),
-                        width: 1,
-                      ),
-                    ),
-                    child: TabBar(
-                      controller: _tab,
-                      isScrollable: true,
-                      tabAlignment: TabAlignment.start,
-                      labelPadding:
-                          const EdgeInsets.symmetric(horizontal: 16),
-                      dividerColor: Colors.transparent,
-                      indicatorSize: TabBarIndicatorSize.tab,
-                      indicator: BoxDecoration(
-                        color: const Color(0xFFdc2626),
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFFdc2626).withOpacity(0.3),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
+                          ? const Color(0xFF0a0e1a)
+                          : theme.colorScheme.surface,
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? const Color(0xFF1e293b).withOpacity(0.4)
+                              : theme.colorScheme.surfaceContainerHighest
+                                  .withOpacity(0.5),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.05),
+                            width: 1,
                           ),
-                        ],
+                        ),
+                        child: TabBar(
+                          controller: _tab,
+                          isScrollable: true,
+                          tabAlignment: TabAlignment.start,
+                          labelPadding:
+                              const EdgeInsets.symmetric(horizontal: 16),
+                          dividerColor: Colors.transparent,
+                          indicatorSize: TabBarIndicatorSize.tab,
+                          indicator: BoxDecoration(
+                            color: const Color(0xFFdc2626),
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFFdc2626).withOpacity(0.3),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          labelColor: Colors.white,
+                          labelStyle: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          unselectedLabelColor: isDark
+                              ? const Color(0xFF94a3b8)
+                              : theme.colorScheme.onSurfaceVariant,
+                          unselectedLabelStyle: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
+                          onTap: (_) => setState(() {}),
+                        ),
                       ),
-                      labelColor: Colors.white,
-                      labelStyle: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      unselectedLabelColor: isDark
-                          ? const Color(0xFF94a3b8)
-                          : theme.colorScheme.onSurfaceVariant,
-                      unselectedLabelStyle: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
-                      onTap: (_) => setState(() {}),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ),
 
-            // Section Header with Trending Icon
+            // Section header
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
@@ -293,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Content
+            // Content (each tab → responsive grid)
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -479,7 +482,7 @@ class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-/* ===================== Feed List ===================== */
+/* ===================== Feed List (responsive grid) ===================== */
 
 class _FeedList extends StatefulWidget {
   const _FeedList({
@@ -510,73 +513,103 @@ class _FeedListState extends State<_FeedList>
     return AnimatedBuilder(
       animation: feed,
       builder: (context, _) {
-        if (feed.isInitialLoading) {
-          return ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-            physics: const AlwaysScrollableScrollPhysics(),
-            cacheExtent: 1200,
-            itemCount: 6,
-            itemBuilder: (_, __) => const SkeletonCard(),
-          );
-        }
-        if (feed.hasError && feed.items.isEmpty) {
-          return ErrorView(
-            message: feed.errorMessage ?? 'Something went wrong.',
-            onRetry: () => feed.load(reset: true),
-          );
-        }
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final w = constraints.maxWidth;
+            int cols = 1;
+            if (w >= 1200) {
+              cols = 3;
+            } else if (w >= 800) {
+              cols = 2;
+            }
 
-        final q = widget.searchText.text.trim().toLowerCase();
-        final filtered = (q.isEmpty)
-            ? feed.items
-            : feed.items
-                .where((s) =>
-                    s.title.toLowerCase().contains(q) ||
-                    (s.summary ?? '').toLowerCase().contains(q))
-                .toList();
+            const hPad = 16.0;
+            const vPadTop = 0.0;
+            const vPadBottom = 96.0; // space for fixed bottom nav on mobile
+            final gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: cols,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
+              // Card: 16:9 image + body; ~1.65–1.85 looks right
+              childAspectRatio: 1.75,
+            );
 
-        if (filtered.isEmpty) {
-          return ListView(
-            padding: const EdgeInsets.only(top: 32),
-            physics: const AlwaysScrollableScrollPhysics(),
-            children: const [
-              Center(
-                child: Text(
-                  // Use double quotes to avoid escaping the apostrophe
-                  "You're offline and no results match your search.",
-                ),
-              ),
-            ],
-          );
-        }
-
-        const showLoadMore = false;
-
-        return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          physics: const AlwaysScrollableScrollPhysics(),
-          cacheExtent: 1400,
-          itemCount: filtered.length + (showLoadMore ? 1 : 0),
-          itemBuilder: (_, i) {
-            if (showLoadMore && i == filtered.length) {
-              return Padding(
+            if (feed.isInitialLoading) {
+              final skeletonCount = cols * 3; // ~3 rows
+              return GridView.builder(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Center(
-                  child: feed.isLoadingMore
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          child: CircularProgressIndicator(),
-                        )
-                      : OutlinedButton.icon(
-                          onPressed: feed.loadMore,
-                          icon: const Icon(Icons.expand_more_rounded),
-                          label: const Text('Load more'),
-                        ),
-                ),
+                    const EdgeInsets.fromLTRB(hPad, 8, hPad, vPadBottom),
+                physics: const AlwaysScrollableScrollPhysics(),
+                cacheExtent: 1200,
+                gridDelegate: gridDelegate,
+                itemCount: skeletonCount,
+                itemBuilder: (_, __) => const SkeletonCard(),
               );
             }
-            return StoryCard(story: filtered[i]);
+
+            if (feed.hasError && feed.items.isEmpty) {
+              return ListView(
+                padding:
+                    const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  ErrorView(
+                    message: feed.errorMessage ?? 'Something went wrong.',
+                    onRetry: () => feed.load(reset: true),
+                  ),
+                ],
+              );
+            }
+
+            final q = widget.searchText.text.trim().toLowerCase();
+            final filtered = (q.isEmpty)
+                ? feed.items
+                : feed.items
+                    .where((s) =>
+                        s.title.toLowerCase().contains(q) ||
+                        (s.summary ?? '').toLowerCase().contains(q))
+                    .toList();
+
+            if (filtered.isEmpty) {
+              final msg = widget.offline
+                  ? "You're offline and no results match your search."
+                  : "No matching items.";
+              return ListView(
+                padding:
+                    const EdgeInsets.fromLTRB(hPad, 32, hPad, vPadBottom),
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  Center(child: Text(msg)),
+                ],
+              );
+            }
+
+            const showLoadMore = false;
+
+            return GridView.builder(
+              padding: const EdgeInsets.fromLTRB(hPad, vPadTop, hPad, vPadBottom),
+              physics: const AlwaysScrollableScrollPhysics(),
+              cacheExtent: 1400,
+              gridDelegate: gridDelegate,
+              itemCount: filtered.length + (showLoadMore ? 1 : 0),
+              itemBuilder: (_, i) {
+                if (showLoadMore && i == filtered.length) {
+                  return Center(
+                    child: feed.isLoadingMore
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: CircularProgressIndicator(),
+                          )
+                        : OutlinedButton.icon(
+                            onPressed: feed.loadMore,
+                            icon: const Icon(Icons.expand_more_rounded),
+                            label: const Text('Load more'),
+                          ),
+                  );
+                }
+                return StoryCard(story: filtered[i]);
+              },
+            );
           },
         );
       },
