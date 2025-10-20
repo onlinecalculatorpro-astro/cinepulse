@@ -22,9 +22,10 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  final _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _scaffoldKey = GlobalKey<ScaffoldState>(); // hamburger control
 
-  int _index = 0; // 0=Home, 1=Search, 2=Saved, 3=Alerts
+  // Bottom nav: 0=Home, 1=Search, 2=Saved, 3=Alerts
+  int _index = 0;
 
   String? _pendingDeepLinkId;
   bool _deepLinkHandled = false;
@@ -93,10 +94,10 @@ class _RootShellState extends State<RootShell> {
     if (_index == i) return;
     setState(() => _index = i);
     _scaffoldKey.currentState?.closeDrawer();
-    Navigator.of(context).maybePop(); // close any sheets/routes
+    Navigator.of(context).maybePop(); // close any open sheets
   }
 
-  Future<void> _openThemePicker(BuildContext context) async {
+  void _openThemePickerSheet() async {
     final current = AppSettings.instance.themeMode;
     Navigator.pop(context); // close drawer before sheet
     final picked = await showModalBottomSheet<ThemeMode>(
@@ -111,16 +112,20 @@ class _RootShellState extends State<RootShell> {
 
   bool _isCompact(BuildContext context) => MediaQuery.of(context).size.width < 900;
 
-  // Build pages so we can pass "showSearch" to Home when on the Search tab.
+  // Pages: Home is reused for both Home (index 0) and Search (index 1).
   List<Widget> _buildPages() => [
         HomeScreen(
-          showSearch: _index == 1,      // Search bar only when Search tab active
-          onTapDiscover: () => _goTo(1),// Header “Discover” icon -> Search tab
+          showSearchBar: _index == 1, // search bar only when "Search" tab active
+          onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
+          // Header actions:
+          onHeaderRefresh: () {},           // HomeScreen performs the actual refresh internally
+          onOpenDiscover: () => _goTo(1),   // header "Discover" button -> open Search tab
         ),
-        // The “Search” tab shows the same Home screen but with the search bar shown.
         HomeScreen(
-          showSearch: true,
-          onTapDiscover: () => _goTo(1),
+          showSearchBar: true,               // dedicated "Search" screen = Home with search visible
+          onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
+          onHeaderRefresh: () {},
+          onOpenDiscover: () => _goTo(1),
         ),
         const SavedScreen(),
         const AlertsScreen(),
@@ -129,7 +134,6 @@ class _RootShellState extends State<RootShell> {
   @override
   Widget build(BuildContext context) {
     final compact = _isCompact(context);
-
     // Always show bottom nav on web; on devices only for compact layouts.
     final showBottomNav = kIsWeb || compact;
 
@@ -172,7 +176,7 @@ class _RootShellState extends State<RootShell> {
                   leading: const Icon(Icons.palette_outlined),
                   title: const Text('Theme'),
                   subtitle: const Text('System / Light / Dark'),
-                  onTap: () => _openThemePicker(context),
+                  onTap: _openThemePickerSheet,
                 ),
                 ListTile(
                   leading: const Icon(Icons.settings_outlined),
@@ -194,7 +198,7 @@ class _RootShellState extends State<RootShell> {
           child: IndexedStack(index: _index, children: _buildPages()),
         ),
 
-        // Bottom nav: replace Discover with Search
+        // Bottom nav: Discover -> Search; exact emoji for Search 🔍 and Saved 🔖.
         bottomNavigationBar: showBottomNav
             ? SafeArea(
                 top: false,
@@ -209,13 +213,13 @@ class _RootShellState extends State<RootShell> {
                       label: 'Home',
                     ),
                     NavigationDestination(
-                      icon: Icon(Icons.search_rounded),
-                      selectedIcon: Icon(Icons.manage_search_rounded),
+                      icon: Text('🔍', style: TextStyle(fontSize: 20, height: 1)),
+                      selectedIcon: Text('🔍', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Search',
                     ),
                     NavigationDestination(
-                      icon: Icon(Icons.bookmark_outline),
-                      selectedIcon: Icon(Icons.bookmark),
+                      icon: Text('🔖', style: TextStyle(fontSize: 20, height: 1)),
+                      selectedIcon: Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
                       label: 'Saved',
                     ),
                     NavigationDestination(
@@ -341,7 +345,7 @@ class _ThemePicker extends StatelessWidget {
     final options = <ThemeMode, (String, IconData)>{
       ThemeMode.system: ('System', Icons.auto_awesome),
       ThemeMode.light: ('Light', Icons.light_mode_outlined),
-      ThemeMode.dark: ('Dark', Icons.dark_mode_outlined),
+      ThemeMode dark: ('Dark', Icons.dark_mode_outlined),
     };
 
     return SafeArea(
