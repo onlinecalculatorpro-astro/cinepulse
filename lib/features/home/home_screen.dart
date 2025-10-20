@@ -116,7 +116,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
+      backgroundColor:
+          isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
       body: RefreshIndicator.adaptive(
         key: _refreshKey,
         onRefresh: _refresh,
@@ -128,7 +129,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               floating: true,
               pinned: true,
               elevation: 0,
-              backgroundColor: isDark 
+              backgroundColor: isDark
                   ? const Color(0xFF0f172a).withOpacity(0.95)
                   : theme.colorScheme.surface.withOpacity(0.95),
               surfaceTintColor: Colors.transparent,
@@ -202,15 +203,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               pinned: true,
               delegate: _ModernTabsDelegate(
                 child: Container(
-                  color: isDark 
-                      ? const Color(0xFF0a0e1a)
-                      : theme.colorScheme.surface,
+                  color:
+                      isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                   child: Container(
                     decoration: BoxDecoration(
                       color: isDark
                           ? const Color(0xFF1e293b).withOpacity(0.4)
-                          : theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
+                          : theme.colorScheme.surfaceContainerHighest
+                              .withOpacity(0.5),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
                         color: Colors.white.withOpacity(0.05),
@@ -221,7 +222,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       controller: _tab,
                       isScrollable: true,
                       tabAlignment: TabAlignment.start,
-                      labelPadding: const EdgeInsets.symmetric(horizontal: 16),
+                      labelPadding:
+                          const EdgeInsets.symmetric(horizontal: 16),
                       dividerColor: Colors.transparent,
                       indicatorSize: TabBarIndicatorSize.tab,
                       indicator: BoxDecoration(
@@ -281,7 +283,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w700,
-                        color: isDark ? const Color(0xFFf1f5f9) : theme.colorScheme.onSurface,
+                        color: isDark
+                            ? const Color(0xFFf1f5f9)
+                            : theme.colorScheme.onSurface,
                       ),
                     ),
                   ],
@@ -403,23 +407,17 @@ class _ModernSearchBar extends StatelessWidget {
               decoration: InputDecoration(
                 hintText: 'Search movies, shows, trailers...',
                 hintStyle: TextStyle(
-                  color: isDark
-                      ? const Color(0xFF64748b)
-                      : Colors.grey[600],
+                  color: isDark ? const Color(0xFF64748b) : Colors.grey[600],
                   fontSize: 15,
                 ),
                 prefixIcon: Icon(
                   Icons.search_rounded,
-                  color: isDark
-                      ? const Color(0xFF64748b)
-                      : Colors.grey[600],
+                  color: isDark ? const Color(0xFF64748b) : Colors.grey[600],
                   size: 22,
                 ),
                 suffixIcon: Icon(
                   Icons.mic_rounded,
-                  color: isDark
-                      ? const Color(0xFF64748b)
-                      : Colors.grey[600],
+                  color: isDark ? const Color(0xFF64748b) : Colors.grey[600],
                   size: 22,
                 ),
                 border: InputBorder.none,
@@ -447,9 +445,7 @@ class _ModernSearchBar extends StatelessWidget {
             onPressed: onRefresh,
             icon: Icon(
               Icons.refresh_rounded,
-              color: isDark
-                  ? const Color(0xFF94a3b8)
-                  : Colors.grey[700],
+              color: isDark ? const Color(0xFF94a3b8) : Colors.grey[700],
             ),
             tooltip: 'Refresh',
           ),
@@ -543,12 +539,11 @@ class _FeedListState extends State<_FeedList>
           return ListView(
             padding: const EdgeInsets.only(top: 32),
             physics: const AlwaysScrollableScrollPhysics(),
-            children: [
+            children: const [
               Center(
                 child: Text(
-                  widget.offline
-                      ? 'You're offline and no results match your search.'
-                      : 'No matching items.',
+                  // Use double quotes to avoid escaping the apostrophe
+                  "You're offline and no results match your search.",
                 ),
               ),
             ],
@@ -565,7 +560,8 @@ class _FeedListState extends State<_FeedList>
           itemBuilder: (_, i) {
             if (showLoadMore && i == filtered.length) {
               return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Center(
                   child: feed.isLoadingMore
                       ? const Padding(
