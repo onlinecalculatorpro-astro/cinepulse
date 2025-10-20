@@ -1,4 +1,3 @@
-// lib/widgets/skeleton_card.dart
 import 'package:flutter/material.dart';
 
 class SkeletonCard extends StatelessWidget {
@@ -13,14 +12,13 @@ class SkeletonCard extends StatelessWidget {
       duration: const Duration(milliseconds: 1200),
       curve: Curves.easeInOut,
       builder: (context, t, _) {
-        // Subtle pulse between base and highlight
-        final base = cs.surfaceContainerHighest.withOpacity(0.28);
-        final highlight = cs.surfaceContainerHighest.withOpacity(0.55);
+        final base = cs.surfaceContainerHighest.withOpacity(0.22);
+        final highlight = cs.surfaceContainerHighest.withOpacity(0.42);
         final fill = Color.lerp(base, highlight, 0.5 + 0.5 * t)!;
 
         return Container(
           decoration: BoxDecoration(
-            color: cs.surface.withOpacity(0.60),
+            color: cs.surface.withOpacity(0.65),
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: Colors.white.withOpacity(0.04), width: 1),
           ),
@@ -43,7 +41,6 @@ class SkeletonCard extends StatelessWidget {
                 // Kind badge + meta line
                 Row(
                   children: [
-                    // badge pill
                     Container(
                       height: 22,
                       width: 64,
@@ -53,7 +50,6 @@ class SkeletonCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // meta text stub
                     Expanded(
                       child: Container(
                         height: 12,
@@ -86,13 +82,11 @@ class SkeletonCard extends StatelessWidget {
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 12),
 
                 // Actions row: primary button + two circular icons
                 Row(
                   children: [
-                    // Primary CTA button
                     Container(
                       height: 36,
                       width: 110,
