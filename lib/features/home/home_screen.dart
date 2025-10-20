@@ -1,4 +1,4 @@
-#lib/features/home/home_screen.dart
+// lib/features/home/home_screen.dart
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
@@ -170,11 +170,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               actions: const [SizedBox(width: 48)],
             ),
 
-            // Search bar
+            // Search bar (shared component)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                child: _ModernSearchBar(
+                child: SearchBarInput(
                   controller: _search,
                   onRefresh: () {
                     _refreshKey.currentState?.show();
@@ -363,90 +363,6 @@ class _ModernBrandLogo extends StatelessWidget {
               color: Colors.white,
               letterSpacing: -0.5,
             ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// Modern Search Bar Widget
-class _ModernSearchBar extends StatelessWidget {
-  const _ModernSearchBar({
-    required this.controller,
-    required this.onRefresh,
-  });
-  final TextEditingController controller;
-  final VoidCallback onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF1e293b).withOpacity(0.6)
-                  : Colors.grey[200],
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.08),
-                width: 1,
-              ),
-            ),
-            child: TextField(
-              controller: controller,
-              style: TextStyle(
-                fontSize: 15,
-                color: isDark ? const Color(0xFFe5e7eb) : Colors.black87,
-              ),
-              decoration: InputDecoration(
-                hintText: 'Search movies, shows, trailers...',
-                hintStyle: TextStyle(
-                  color: isDark ? const Color(0xFF64748b) : Colors.grey[600],
-                  fontSize: 15,
-                ),
-                prefixIcon: Icon(
-                  Icons.search_rounded,
-                  color: isDark ? const Color(0xFF64748b) : Colors.grey[600],
-                  size: 22,
-                ),
-                suffixIcon: Icon(
-                  Icons.mic_rounded,
-                  color: isDark ? const Color(0xFF64748b) : Colors.grey[600],
-                  size: 22,
-                ),
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Container(
-          decoration: BoxDecoration(
-            color: isDark
-                ? const Color(0xFF1e293b).withOpacity(0.6)
-                : Colors.grey[200],
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.08),
-              width: 1,
-            ),
-          ),
-          child: IconButton(
-            onPressed: onRefresh,
-            icon: Icon(
-              Icons.refresh_rounded,
-              color: isDark ? const Color(0xFF94a3b8) : Colors.grey[700],
-            ),
-            tooltip: 'Refresh',
           ),
         ),
       ],
