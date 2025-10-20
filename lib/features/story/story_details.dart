@@ -7,10 +7,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // deepLinkForStoryId
+import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
-import '../../core/models.dart'; // Story + storyVideoUrl + metaLine
-import '../../core/utils.dart';
+import '../../core/models.dart'; // Story + metaLine
+import '../../core/utils.dart'; // fadeRoute()
 import 'ott_badge.dart';
 
 class StoryDetailsScreen extends StatelessWidget {
@@ -42,10 +42,9 @@ class StoryDetailsScreen extends StatelessWidget {
     return isYoutube || kind == 'trailer';
   }
 
-  String _ctaLabel() => _isWatchCta ? 'Watch' : 'Read';
+  String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
   String _shareText() {
-    // Prefer deep link (keeps users inside app). Fallback to the primary link.
     final deep = deepLinkForStoryId(story.id).toString();
     if (deep.isNotEmpty) return deep;
     final link = _primaryUrl?.toString();
@@ -90,8 +89,8 @@ class StoryDetailsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = Theme.of(context).colorScheme;
-    final onSurface = s.onSurface;
+    final cs = Theme.of(context).colorScheme;
+    final onSurface = cs.onSurface;
     final isPhone = MediaQuery.of(context).size.width < 600;
     final hasPrimary = _primaryUrl != null;
 
@@ -105,7 +104,9 @@ class StoryDetailsScreen extends StatelessWidget {
             ),
             pinned: true,
             centerTitle: false,
-            expandedHeight: isPhone ? 240 : 320,
+            expandedHeight: isPhone ? 260 : 340,
+            backgroundColor: cs.surface.withOpacity(0.95),
+            surfaceTintColor: Colors.transparent,
             title: Text(
               'CinePulse',
               style: GoogleFonts.inter(fontWeight: FontWeight.w800),
@@ -142,9 +143,9 @@ class StoryDetailsScreen extends StatelessWidget {
           SliverToBoxAdapter(
             child: Center(
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 900),
+                constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 96), // extra bottom for nav
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -160,16 +161,18 @@ class StoryDetailsScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
 
-                      // OTT badge + Meta line ("News • 20 Oct 2025, 1:59 PM")
+                      // Kind badge + OTT badge + Meta line ("News • 20 Oct 2025, 1:59 PM")
                       Wrap(
                         crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 8,
+                        runSpacing: 6,
                         children: [
+                          _KindBadge(story.kindLabel ?? story.kind),
                           OttBadge.fromStory(story, dense: true),
                           Text(
-                            story.metaLine, // <- from Story model
+                            story.metaLine,
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: s.onSurfaceVariant,
+                                  color: cs.onSurfaceVariant,
                                 ),
                           ),
                         ],
@@ -206,7 +209,7 @@ class StoryDetailsScreen extends StatelessWidget {
                         children: [
                           Semantics(
                             button: true,
-                            label: _ctaLabel(),
+                            label: _ctaLabel,
                             enabled: hasPrimary,
                             child: FilledButton.icon(
                               onPressed: hasPrimary ? () => _openPrimary(context) : null,
@@ -215,7 +218,7 @@ class StoryDetailsScreen extends StatelessWidget {
                                     ? Icons.play_arrow_rounded
                                     : Icons.open_in_new_rounded,
                               ),
-                              label: Text(_ctaLabel()),
+                              label: Text(_ctaLabel),
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -258,7 +261,7 @@ class _HeaderHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = Theme.of(context).colorScheme;
+    final cs = Theme.of(context).colorScheme;
     final imageUrl =
         (story.posterUrl?.isNotEmpty == true) ? story.posterUrl! : (story.thumbUrl ?? '');
 
@@ -269,14 +272,14 @@ class _HeaderHero extends StatelessWidget {
         children: [
           // Image or fallback color
           imageUrl.isEmpty
-              ? Container(color: s.surfaceContainerHighest)
+              ? Container(color: cs.surfaceContainerHighest)
               : CachedNetworkImage(
                   imageUrl: imageUrl,
                   fit: BoxFit.cover,
                   memCacheWidth: 1600,
                   fadeInDuration: const Duration(milliseconds: 180),
                   errorWidget: (_, __, ___) => Container(
-                    color: s.surfaceVariant.withOpacity(0.2),
+                    color: cs.surfaceVariant.withOpacity(0.2),
                     child: const Center(child: Icon(Icons.broken_image_outlined)),
                   ),
                 ),
@@ -288,8 +291,8 @@ class _HeaderHero extends StatelessWidget {
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
                   colors: [
-                    s.surface.withOpacity(0.70),
-                    s.surface.withOpacity(0.0),
+                    Colors.black.withOpacity(0.55),
+                    Colors.transparent,
                   ],
                   stops: const [0.0, 0.6],
                 ),
@@ -330,6 +333,49 @@ class _Facet extends StatelessWidget {
           ),
           Text(value, style: Theme.of(context).textTheme.labelMedium),
         ],
+      ),
+    );
+  }
+}
+
+/* -------------------------------- Badges --------------------------------- */
+
+class _KindBadge extends StatelessWidget {
+  const _KindBadge(this.text, {this.compact = false});
+  final String text;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const bg = Color(0xFFdc2626);
+    const fg = Colors.white;
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: [
+          BoxShadow(
+            color: bg.withOpacity(0.24),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(
+          color: isDark ? Colors.white.withOpacity(0.06) : Colors.transparent,
+          width: 1,
+        ),
+      ),
+      child: Text(
+        (text.isEmpty ? 'NEWS' : text).toUpperCase(),
+        style: const TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+          color: fg,
+        ),
       ),
     );
   }
