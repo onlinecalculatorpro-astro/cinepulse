@@ -48,8 +48,6 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
-  IconData get _ctaIcon =>
-      _isWatchCta ? Icons.play_arrow_rounded : Icons.menu_book_rounded;
 
   Future<void> _openLink(BuildContext context) async {
     final url = _linkUrl;
@@ -76,10 +74,7 @@ class _StoryCardState extends State<StoryCard> {
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
-        ),
+        SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
       );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
@@ -92,8 +87,15 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   void _openDetails(BuildContext context) {
-    Navigator.of(context)
-        .push(fadeRoute(StoryDetailsScreen(story: widget.story)));
+    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
+  }
+
+  // Build the leading widget for CTA: ▶️ icon for watch, 📖 emoji for read
+  Widget _ctaLeading(bool isDark) {
+    if (_isWatchCta) {
+      return const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white);
+    }
+    return const _Emoji(emoji: '📖', size: 18);
   }
 
   @override
@@ -108,12 +110,9 @@ class _StoryCardState extends State<StoryCard> {
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform:
-          _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
+      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF181E2A).withOpacity(0.92)
-            : scheme.surface.withOpacity(0.97),
+        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92) : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
@@ -156,9 +155,7 @@ class _StoryCardState extends State<StoryCard> {
                     height: mediaH.toDouble(),
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(22),
-                        ),
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
@@ -167,16 +164,14 @@ class _StoryCardState extends State<StoryCard> {
                               : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
                         ),
                       ),
-                      child:
-                          Center(child: _SampleIcon(kind: widget.story.kind)),
+                      child: Center(child: _SampleIcon(kind: widget.story.kind)),
                     ),
                   ),
 
                   // Info/Badge/Meta Section
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 18),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -185,17 +180,14 @@ class _StoryCardState extends State<StoryCard> {
                             children: [
                               KindMetaBadge(kind),
                               const SizedBox(width: 10),
+                              // 🕐 exact emoji for time
                               Container(
                                 padding: const EdgeInsets.all(4),
                                 decoration: BoxDecoration(
                                   color: Colors.white.withOpacity(0.13),
                                   shape: BoxShape.circle,
                                 ),
-                                child: const Icon(
-                                  Icons.access_time_rounded,
-                                  size: 17,
-                                  color: Color(0xFFA1A5B0),
-                                ),
+                                child: const _Emoji(emoji: '🕐', size: 14),
                               ),
                               const SizedBox(width: 8),
                               Flexible(
@@ -203,10 +195,7 @@ class _StoryCardState extends State<StoryCard> {
                                   metaText,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: Colors.grey[400],
-                                    fontSize: 13.5,
-                                  ),
+                                  style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
                                 ),
                               ),
                             ],
@@ -222,9 +211,7 @@ class _StoryCardState extends State<StoryCard> {
                               fontSize: 15,
                               height: 1.32,
                               fontWeight: FontWeight.w800,
-                              color: isDark
-                                  ? Colors.white.withOpacity(0.96)
-                                  : scheme.onSurface,
+                              color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
                             ),
                           ),
                           const Spacer(),
@@ -239,13 +226,8 @@ class _StoryCardState extends State<StoryCard> {
                                   child: SizedBox(
                                     height: 46,
                                     child: ElevatedButton.icon(
-                                      icon: Icon(
-                                        _ctaIcon,
-                                        size: 22,
-                                        color: Colors.white,
-                                      ),
-                                      onPressed:
-                                          hasUrl ? () => _openLink(context) : null,
+                                      icon: _ctaLeading(isDark),
+                                      onPressed: hasUrl ? () => _openLink(context) : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
                                         backgroundColor: const Color(0xFFdc2626),
@@ -253,10 +235,7 @@ class _StoryCardState extends State<StoryCard> {
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(10),
                                         ),
-                                        textStyle: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 16,
-                                        ),
+                                        textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
                                       ),
                                       label: Text(_ctaLabel),
                                     ),
@@ -264,16 +243,18 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
                               const SizedBox(width: 12),
+                              // 🔖 Save (placeholder action)
                               _ActionIconBox(
-                                icon: Icons.edit_rounded,
-                                tooltip: 'Edit',
-                                onTap: () {}, // reserved for future use
+                                tooltip: 'Save',
+                                onTap: () {}, // hook up to your save flow
+                                icon: const _Emoji(emoji: '🔖', size: 18),
                               ),
                               const SizedBox(width: 8),
+                              // 📤 Share
                               _ActionIconBox(
-                                icon: Icons.ios_share_rounded,
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
+                                icon: const _Emoji(emoji: '📤', size: 18),
                               ),
                             ],
                           ),
@@ -368,9 +349,25 @@ class _SampleIcon extends StatelessWidget {
   }
 }
 
-// --------- Compact secondary action icon ---------
+/* --------------------------------- Utils -------------------------------- */
+
+class _Emoji extends StatelessWidget {
+  const _Emoji({required this.emoji, this.size = 18});
+  final String emoji;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      emoji,
+      style: TextStyle(fontSize: size, height: 1),
+    );
+  }
+}
+
+// --------- Compact secondary action icon (now supports emoji widget) ---------
 class _ActionIconBox extends StatelessWidget {
-  final IconData icon;
+  final Widget icon;
   final VoidCallback onTap;
   final String tooltip;
 
@@ -386,9 +383,7 @@ class _ActionIconBox extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: isDark
-            ? Colors.white.withOpacity(0.08)
-            : Colors.black.withOpacity(0.06),
+        color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
@@ -396,11 +391,7 @@ class _ActionIconBox extends StatelessWidget {
           child: SizedBox(
             width: 44,
             height: 44,
-            child: Icon(
-              icon,
-              size: 22,
-              color: isDark ? Colors.white : Colors.black87,
-            ),
+            child: Center(child: icon),
           ),
         ),
       ),
