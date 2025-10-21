@@ -40,8 +40,7 @@ class _RootShellState extends State<RootShell> {
   void initState() {
     super.initState();
     _captureInitialDeepLink();
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _tryOpenPendingDeepLink());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tryOpenPendingDeepLink());
   }
 
   /// Parses links like `/#/s/<id>` or `/s/<id>` from the current URL.
@@ -147,8 +146,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  bool _isCompact(BuildContext context) =>
-      MediaQuery.of(context).size.width < 900;
+  bool _isCompact(BuildContext context) => MediaQuery.of(context).size.width < 900;
 
   @override
   Widget build(BuildContext context) {
@@ -260,32 +258,47 @@ class _RootShellState extends State<RootShell> {
         bottomNavigationBar: showBottomNav
             ? SafeArea(
                 top: false,
-                child: NavigationBar(
-                  selectedIndex: _navIndex,
-                  labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-                  onDestinationSelected: _onDestinationSelected,
-                  destinations: const [
-                    NavigationDestination(
-                      icon: Text('🏠', style: TextStyle(fontSize: 20, height: 1)),
-                      selectedIcon: Text('🏠', style: TextStyle(fontSize: 22, height: 1)),
-                      label: 'Home',
+                child: NavigationBarTheme(
+                  data: NavigationBarThemeData(
+                    // Match header thickness (AppBar toolbarHeight = 70)
+                    height: 70,
+                    labelTextStyle: MaterialStateProperty.resolveWith(
+                      (states) => TextStyle(
+                        fontSize: 12,
+                        fontWeight: states.contains(MaterialState.selected)
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                        letterSpacing: 0.1,
+                      ),
                     ),
-                    NavigationDestination(
-                      icon: Text('🔍', style: TextStyle(fontSize: 20, height: 1)),
-                      selectedIcon: Text('🔍', style: TextStyle(fontSize: 22, height: 1)),
-                      label: 'Search',
-                    ),
-                    NavigationDestination(
-                      icon: Text('🔖', style: TextStyle(fontSize: 20, height: 1)),
-                      selectedIcon: Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
-                      label: 'Saved',
-                    ),
-                    NavigationDestination(
-                      icon: Text('🔔', style: TextStyle(fontSize: 20, height: 1)),
-                      selectedIcon: Text('🔔', style: TextStyle(fontSize: 22, height: 1)),
-                      label: 'Alerts',
-                    ),
-                  ],
+                  ),
+                  child: NavigationBar(
+                    selectedIndex: _navIndex,
+                    labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+                    onDestinationSelected: _onDestinationSelected,
+                    destinations: const [
+                      NavigationDestination(
+                        icon: Text('🏠', style: TextStyle(fontSize: 20, height: 1)),
+                        selectedIcon: Text('🏠', style: TextStyle(fontSize: 22, height: 1)),
+                        label: 'Home',
+                      ),
+                      NavigationDestination(
+                        icon: Text('🔍', style: TextStyle(fontSize: 20, height: 1)),
+                        selectedIcon: Text('🔍', style: TextStyle(fontSize: 22, height: 1)),
+                        label: 'Search',
+                      ),
+                      NavigationDestination(
+                        icon: Text('🔖', style: TextStyle(fontSize: 20, height: 1)),
+                        selectedIcon: Text('🔖', style: TextStyle(fontSize: 22, height: 1)),
+                        label: 'Saved',
+                      ),
+                      NavigationDestination(
+                        icon: Text('🔔', style: TextStyle(fontSize: 20, height: 1)),
+                        selectedIcon: Text('🔔', style: TextStyle(fontSize: 22, height: 1)),
+                        label: 'Alerts',
+                      ),
+                    ],
+                  ),
                 ),
               )
             : null,
@@ -414,8 +427,7 @@ class _ThemePicker extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Theme',
-                style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
+            Text('Theme', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             for (final entry in options.entries)
               RadioListTile<ThemeMode>(
