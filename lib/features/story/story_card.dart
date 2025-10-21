@@ -160,7 +160,7 @@ class _StoryCardState extends State<StoryCard> {
               final w = box.maxWidth;
               final h = box.maxHeight;
 
-              // SHRINK media height so the text block gets more room.
+              // Media height (keep generous space for text)
               final targetAspect = w >= 1200
                   ? (16 / 7)
                   : w >= 900
@@ -169,7 +169,6 @@ class _StoryCardState extends State<StoryCard> {
                           ? (3 / 2)
                           : (4 / 3);
 
-              // Use a smaller fraction of the tile height than before.
               final mediaFraction =
                   h.isFinite ? (w >= 900 ? 0.34 : (w >= 600 ? 0.36 : 0.38)) : 0.34;
 
@@ -179,7 +178,7 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Media (image from feed, with gradient). Falls back to icon header.
+                  // Media (image from feed; **letterboxed** to avoid cropping)
                   SizedBox(
                     height: mediaH.toDouble(),
                     child: Hero(
@@ -189,52 +188,37 @@ class _StoryCardState extends State<StoryCard> {
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            if (imageUrl.isNotEmpty)
-                              CachedNetworkImage(
-                                imageUrl: imageUrl,
-                                fit: BoxFit.cover,
-                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1200),
-                                fadeInDuration: const Duration(milliseconds: 180),
-                                placeholder: (_, __) => Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: isDark
-                                          ? [const Color(0xFF101626), const Color(0xFF232941)]
-                                          : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
-                                    ),
-                                  ),
-                                  child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                            // Soft backdrop
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: isDark
+                                      ? [const Color(0xFF101626), const Color(0xFF232941)]
+                                      : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
                                 ),
-                                errorWidget: (_, __, ___) => Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: isDark
-                                          ? [const Color(0xFF101626), const Color(0xFF232941)]
-                                          : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
-                                    ),
-                                  ),
-                                  child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                              ),
+                            ),
+
+                            // Feed artwork (no crop)
+                            if (imageUrl.isNotEmpty)
+                              Center(
+                                child: CachedNetworkImage(
+                                  imageUrl: imageUrl,
+                                  fit: BoxFit.contain, // <-- letterbox, don't crop
+                                  memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1200),
+                                  filterQuality: FilterQuality.medium,
+                                  fadeInDuration: const Duration(milliseconds: 180),
+                                  placeholder: (_, __) =>
+                                      const SizedBox.shrink(), // backdrop already shown
+                                  errorWidget: (_, __, ___) => const SizedBox.shrink(),
                                 ),
                               )
                             else
-                              DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: isDark
-                                        ? [const Color(0xFF101626), const Color(0xFF232941)]
-                                        : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
-                                  ),
-                                ),
-                                child: Center(child: _SampleIcon(kind: widget.story.kind)),
-                              ),
+                              Center(child: _SampleIcon(kind: widget.story.kind)),
 
-                            // Dark-to-clear gradient for legibility at the bottom
+                            // Bottom gradient for legibility
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -259,7 +243,7 @@ class _StoryCardState extends State<StoryCard> {
                   // Info/Badge/Meta — badge left, then 🕐 + time
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14), // tighter
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -297,7 +281,7 @@ class _StoryCardState extends State<StoryCard> {
                               softWrap: true,
                               overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.inter(
-                                fontSize: 14.6, // slightly smaller to fit more
+                                fontSize: 14.6,
                                 height: 1.28,
                                 fontWeight: FontWeight.w800,
                                 color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
@@ -320,11 +304,9 @@ class _StoryCardState extends State<StoryCard> {
                                       onPressed: hasUrl
                                           ? () {
                                               if (_isWatchCta && _videoUrl != null) {
-                                                // Play inside app → open details with autoplay
-                                                _openDetails(autoplay: true);
+                                                _openDetails(autoplay: true); // inline player
                                               } else {
-                                                // No inline video → open source externally
-                                                _openExternalLink(context);
+                                                _openExternalLink(context); // external link
                                               }
                                             }
                                           : null,
