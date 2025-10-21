@@ -183,10 +183,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             if (widget.showSearchBar)
               SliverToBoxAdapter(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                   child: SearchBarInput(
-                    controller: _search,                 // wire to filter list
-                    onExitSearch: () {                   // 🚪 closes keyboard
+                    controller: _search,
+                    onExitSearch: () {
                       _search.clear();
                       FocusScope.of(context).unfocus();
                     },
@@ -198,7 +198,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             if (_offline)
               const SliverToBoxAdapter(
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: OfflineBanner(),
                 ),
               ),
@@ -211,7 +211,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   builder: (context) {
                     return Container(
                       color: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
                       child: Container(
                         decoration: BoxDecoration(
                           color: isDark
@@ -257,31 +257,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // “Trending Now” header (🔥)
+            // “Trending Now” header — tighter & no badge behind 🔥
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 10),
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFFdc2626), Color(0xFFef4444)],
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
-                    ),
-                    const SizedBox(width: 10),
+                  children: const [
+                    Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
+                    SizedBox(width: 8),
                     Text(
                       'Trending Now',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? const Color(0xFFf1f5f9) : theme.colorScheme.onSurface,
-                      ),
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
@@ -306,7 +292,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ],
         ),
       ),
-      // No FAB refresh — single refresh lives in the header.
       floatingActionButton: null,
     );
   }
@@ -329,7 +314,7 @@ class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-// Responsive Feed List (auto columns + adaptive aspect ratio)
+// Responsive Feed List (auto columns + *taller* tiles so long titles fit)
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -354,25 +339,26 @@ class _FeedListState extends State<_FeedList>
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     double maxTileW;
     if (width < 520) {
-      maxTileW = width; // 1 col
+      maxTileW = width;         // 1 col
     } else if (width < 900) {
-      maxTileW = width / 2; // 2 cols
+      maxTileW = width / 2;     // 2 cols
     } else if (width < 1400) {
-      maxTileW = width / 3; // 3 cols
+      maxTileW = width / 3;     // 3 cols
     } else {
-      maxTileW = width / 4; // 4 cols
+      maxTileW = width / 4;     // 4 cols
     }
     maxTileW = maxTileW.clamp(320.0, 460.0);
 
+    // Make tiles ~15–20% taller vs before so titles can fully show.
     double ratio;
     if (maxTileW <= 340) {
-      ratio = 0.78;
+      ratio = 0.72;
     } else if (maxTileW <= 380) {
-      ratio = 0.84;
+      ratio = 0.80;
     } else if (maxTileW <= 420) {
-      ratio = 0.92;
+      ratio = 0.88;
     } else {
-      ratio = 1.02;
+      ratio = 0.96;
     }
     ratio /= textScale.clamp(1.0, 1.6);
 
@@ -416,7 +402,7 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
@@ -441,7 +427,7 @@ class _FeedListState extends State<_FeedList>
                   ? "You're offline and no results match your search."
                   : "No matching items.";
               return ListView(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 32, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
