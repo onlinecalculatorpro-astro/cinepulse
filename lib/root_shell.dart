@@ -1,9 +1,14 @@
 // lib/root_shell.dart
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'app/app_settings.dart';
 import 'core/api.dart' show fetchStory; // deep-link fallback
@@ -164,33 +169,11 @@ class _RootShellState extends State<RootShell> {
       child: Scaffold(
         key: _scaffoldKey,
 
-        // Drawer: keep only non-bottom-nav items (no Home/Search/Saved/Alerts here)
-        drawer: Drawer(
-          child: SafeArea(
-            child: ListView(
-              padding: EdgeInsets.zero,
-              children: [
-                const _BrandDrawerHeader(),
-                const Divider(height: 24),
-                ListTile(
-                  leading: const Icon(Icons.palette_outlined),
-                  title: const Text('Theme'),
-                  subtitle: const Text('System / Light / Dark'),
-                  onTap: () => _openThemePicker(context),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.settings_outlined),
-                  title: const Text('Settings'),
-                  onTap: () => Navigator.pop(context),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('About'),
-                  onTap: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
+        // Drawer with the sections you approved
+        drawer: _CineDrawer(
+          onClose: () => Navigator.of(context).pop(),
+          onFiltersChanged: () => setState(() {}), // force rebuild; Home can re-read prefs
+          onThemeTap: () => _openThemePicker(context),
         ),
 
         // Keep tab states with an IndexedStack. Center on wide screens.
@@ -417,6 +400,332 @@ class _DiscoverPlaceholder extends StatelessWidget {
         'Discover (coming soon)',
         style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 22),
       ),
+    );
+  }
+}
+
+/* ----------------------------- The Drawer ----------------------------- */
+
+class _CineDrawer extends StatefulWidget {
+  const _CineDrawer({
+    required this.onClose,
+    required this.onFiltersChanged,
+    required this.onThemeTap,
+  });
+
+  final VoidCallback onClose;
+  final VoidCallback onFiltersChanged;
+  final VoidCallback onThemeTap;
+
+  @override
+  State<_CineDrawer> createState() => _CineDrawerState();
+}
+
+class _CineDrawerState extends State<_CineDrawer> {
+  // Pref keys
+  static const _kRegion = 'cp.region';        // 'india' | 'global'
+  static const _kLang   = 'cp.lang';          // 'english' | 'hindi' | 'mixed'
+  static const _kCats   = 'cp.categories';    // JSON list: ['all','trailers',...]
+
+  // Local state (defaults)
+  String _region = 'india';
+  String _lang = 'mixed';
+  final Set<String> _cats = {'all', 'trailers', 'ott', 'intheatres', 'comingsoon'};
+
+  late Future<void> _loader;
+
+  @override
+  void initState() {
+    super.initState();
+    _loader = _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    final sp = await SharedPreferences.getInstance();
+    _region = sp.getString(_kRegion) ?? _region;
+    _lang = sp.getString(_kLang) ?? _lang;
+
+    final raw = sp.getString(_kCats);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final list = (jsonDecode(raw) as List).map((e) => e.toString()).toList();
+        if (list.isNotEmpty) {
+          _cats
+            ..clear()
+            ..addAll(list);
+        }
+      } catch (_) {}
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _savePrefs() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kRegion, _region);
+    await sp.setString(_kLang, _lang);
+    await sp.setString(_kCats, jsonEncode(_cats.toList()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Filters updated')),
+    );
+    widget.onFiltersChanged();
+  }
+
+  Widget _sectionTitle(String text) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+      child: Text(
+        text,
+        style: GoogleFonts.inter(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+          color: cs.onSurface.withOpacity(0.72),
+        ),
+      ),
+    );
+  }
+
+  Widget _emoji(String e, {double size = 16}) => Text(
+        e,
+        style: TextStyle(
+          fontSize: size,
+          height: 1,
+          fontFamily: null,
+          fontFamilyFallback: const [
+            'Apple Color Emoji',
+            'Segoe UI Emoji',
+            'Noto Color Emoji',
+            'EmojiOne Color',
+          ],
+        ),
+      );
+
+  String get _shareLink {
+    if (kIsWeb) {
+      final origin = Uri.base.origin;
+      final path = Uri.base.path; // preserves / if deployed in subpath
+      return '$origin$path';
+    }
+    return 'https://cinepulse.netlify.app';
+    // Replace with your official website/store link when ready.
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Drawer(
+      child: SafeArea(
+        child: FutureBuilder<void>(
+          future: _loader,
+          builder: (context, _) {
+            return ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                const _BrandDrawerHeader(),
+
+                // ===== Content & filters =====
+                _sectionTitle('Content & filters'),
+
+                // Region
+                ListTile(
+                  leading: _emoji('🌐'),
+                  title: const Text('Region'),
+                  subtitle: Text(_region == 'india' ? 'India' : 'Global',
+                      style: TextStyle(color: cs.onSurfaceVariant)),
+                  trailing: DropdownButton<String>(
+                    value: _region,
+                    onChanged: (v) => setState(() => _region = v ?? _region),
+                    items: const [
+                      DropdownMenuItem(value: 'india', child: Text('India')),
+                      DropdownMenuItem(value: 'global', child: Text('Global')),
+                    ],
+                  ),
+                ),
+
+                // Language preference
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _emoji('🗣️'),
+                          const SizedBox(width: 16),
+                          const Text('Language preference'),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('English'),
+                            selected: _lang == 'english',
+                            onSelected: (_) => setState(() => _lang = 'english'),
+                          ),
+                          ChoiceChip(
+                            label: const Text('Hindi'),
+                            selected: _lang == 'hindi',
+                            onSelected: (_) => setState(() => _lang = 'hindi'),
+                          ),
+                          ChoiceChip(
+                            label: const Text('Mixed'),
+                            selected: _lang == 'mixed',
+                            onSelected: (_) => setState(() => _lang = 'mixed'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Categories multi-select
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _emoji('🗂️'),
+                          const SizedBox(width: 16),
+                          const Text('Categories'),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _catChip('all', 'All'),
+                          _catChip('trailers', 'Trailers'),
+                          _catChip('ott', 'OTT'),
+                          _catChip('intheatres', 'In Theatres'),
+                          _catChip('comingsoon', 'Coming Soon'),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _cats
+                                ..clear()
+                                ..addAll({'all', 'trailers', 'ott', 'intheatres', 'comingsoon'});
+                            });
+                          },
+                          icon: const Icon(Icons.select_all_rounded),
+                          label: const Text('Select all'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _savePrefs,
+                      icon: const Icon(Icons.done_all_rounded),
+                      label: const Text('Apply filters'),
+                    ),
+                  ),
+                ),
+
+                const Divider(height: 24),
+
+                // ===== Appearance =====
+                _sectionTitle('Appearance'),
+                ListTile(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text('Theme'),
+                  subtitle: const Text('System / Light / Dark'),
+                  onTap: widget.onThemeTap,
+                ),
+
+                const Divider(height: 24),
+
+                // ===== Share & support =====
+                _sectionTitle('Share & support'),
+                ListTile(
+                  leading: _emoji('📣'),
+                  title: const Text('Share CinePulse'),
+                  onTap: () async {
+                    final link = _shareLink;
+                    if (!kIsWeb) {
+                      await Share.share(link);
+                    } else {
+                      await Clipboard.setData(ClipboardData(text: link));
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Link copied to clipboard')),
+                        );
+                      }
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: _emoji('🛠️'),
+                  title: const Text('Report an issue'),
+                  onTap: () async {
+                    final uri = Uri.parse('mailto:feedback@cinepulse.app?subject=CinePulse%20Feedback');
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  },
+                ),
+
+                const Divider(height: 24),
+
+                // ===== About & legal =====
+                _sectionTitle('About & legal'),
+                ListTile(
+                  leading: const Icon(Icons.info_outline_rounded),
+                  title: const Text('About CinePulse'),
+                  subtitle: const Text('Version 0.1.0'),
+                  onTap: widget.onClose,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.privacy_tip_outlined),
+                  title: const Text('Privacy Policy'),
+                  onTap: () async {
+                    final uri = Uri.parse('https://example.com/privacy'); // TODO: replace
+                    await launchUrl(uri, mode: LaunchMode.platformDefault);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.gavel_outlined),
+                  title: const Text('Terms of Use'),
+                  onTap: () async {
+                    final uri = Uri.parse('https://example.com/terms'); // TODO: replace
+                    await launchUrl(uri, mode: LaunchMode.platformDefault);
+                  },
+                ),
+                const SizedBox(height: 18),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _catChip(String key, String label) {
+    return FilterChip(
+      label: Text(label),
+      selected: _cats.contains(key),
+      onSelected: (v) => setState(() {
+        if (v) {
+          _cats.add(key);
+        } else {
+          _cats.remove(key);
+        }
+      }),
     );
   }
 }
