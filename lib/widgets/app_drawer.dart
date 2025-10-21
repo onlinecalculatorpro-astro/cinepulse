@@ -7,12 +7,14 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AppDrawer extends StatefulWidget {
   const AppDrawer({
     super.key,
     required this.onClose,
-    this.onFiltersChanged,          // optional callback to refresh feeds
+    this.onFiltersChanged,          // callback to refresh feeds immediately
+    this.onThemeTap,                // open Theme picker in RootShell
     this.appShareUrl,               // e.g., https://cinepulse.netlify.app
     this.privacyUrl,                // e.g., https://.../privacy
     this.termsUrl,                  // e.g., https://.../terms
@@ -20,6 +22,7 @@ class AppDrawer extends StatefulWidget {
 
   final VoidCallback onClose;
   final VoidCallback? onFiltersChanged;
+  final VoidCallback? onThemeTap;
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -30,16 +33,12 @@ class AppDrawer extends StatefulWidget {
 
 class _AppDrawerState extends State<AppDrawer> {
   // Pref keys
-  static const _kRegion = 'cp.region';        // 'india' | 'global'
-  static const _kLang   = 'cp.lang';          // 'english' | 'hindi' | 'mixed'
-  static const _kCats   = 'cp.categories';    // JSON list: ['all','trailers',...]
+  static const _kLang = 'cp.lang';           // 'english' | 'hindi' | 'mixed'
+  static const _kCats = 'cp.categories';     // JSON list, e.g. ['entertainment']
 
-  // Local state (with sensible defaults)
-  String _region = 'india';
+  // Local state (defaults)
   String _lang = 'mixed';
-  final Set<String> _cats = {
-    'all', 'trailers', 'ott', 'intheatres', 'comingsoon'
-  };
+  final Set<String> _cats = {'entertainment'};
 
   late Future<void> _loader;
 
@@ -51,7 +50,6 @@ class _AppDrawerState extends State<AppDrawer> {
 
   Future<void> _loadPrefs() async {
     final sp = await SharedPreferences.getInstance();
-    _region = sp.getString(_kRegion) ?? _region;
     _lang = sp.getString(_kLang) ?? _lang;
 
     final raw = sp.getString(_kCats);
@@ -68,15 +66,10 @@ class _AppDrawerState extends State<AppDrawer> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _savePrefs() async {
+  Future<void> _persist() async {
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kRegion, _region);
     await sp.setString(_kLang, _lang);
     await sp.setString(_kCats, jsonEncode(_cats.toList()));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Filters updated')),
-    );
     widget.onFiltersChanged?.call();
   }
 
@@ -186,28 +179,10 @@ class _AppDrawerState extends State<AppDrawer> {
                   ),
                 ),
 
-                // ===== Content & Filters =====
+                // ===== Content & filters =====
                 _sectionTitle('Content & filters'),
 
-                // Region
-                ListTile(
-                  leading: _emoji('🌐'),
-                  title: const Text('Region'),
-                  subtitle: Text(
-                    _region == 'india' ? 'India' : 'Global',
-                    style: TextStyle(color: cs.onSurfaceVariant),
-                  ),
-                  trailing: DropdownButton<String>(
-                    value: _region,
-                    onChanged: (v) => setState(() => _region = v ?? _region),
-                    items: const [
-                      DropdownMenuItem(value: 'india', child: Text('India')),
-                      DropdownMenuItem(value: 'global', child: Text('Global')),
-                    ],
-                  ),
-                ),
-
-                // Language preference
+                // Language preference (app UI language)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   child: Column(
@@ -227,17 +202,26 @@ class _AppDrawerState extends State<AppDrawer> {
                           ChoiceChip(
                             label: const Text('English'),
                             selected: _lang == 'english',
-                            onSelected: (_) => setState(() => _lang = 'english'),
+                            onSelected: (_) {
+                              setState(() => _lang = 'english');
+                              _persist();
+                            },
                           ),
                           ChoiceChip(
                             label: const Text('Hindi'),
                             selected: _lang == 'hindi',
-                            onSelected: (_) => setState(() => _lang = 'hindi'),
+                            onSelected: (_) {
+                              setState(() => _lang = 'hindi');
+                              _persist();
+                            },
                           ),
                           ChoiceChip(
                             label: const Text('Mixed'),
                             selected: _lang == 'mixed',
-                            onSelected: (_) => setState(() => _lang = 'mixed'),
+                            onSelected: (_) {
+                              setState(() => _lang = 'mixed');
+                              _persist();
+                            },
                           ),
                         ],
                       ),
@@ -245,7 +229,7 @@ class _AppDrawerState extends State<AppDrawer> {
                   ),
                 ),
 
-                // Categories multi-select
+                // Categories (for now: only "Entertainment")
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   child: Column(
@@ -263,58 +247,22 @@ class _AppDrawerState extends State<AppDrawer> {
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          _catChip('all', 'All'),
-                          _catChip('trailers', 'Trailers'),
-                          _catChip('ott', 'OTT'),
-                          _catChip('intheatres', 'In Theatres'),
-                          _catChip('comingsoon', 'Coming Soon'),
+                          _catChip('entertainment', 'Entertainment'),
                         ],
-                      ),
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              _cats
-                                ..clear()
-                                ..addAll(
-                                  {'all','trailers','ott','intheatres','comingsoon'},
-                                );
-                            });
-                          },
-                          icon: const Icon(Icons.select_all_rounded),
-                          label: const Text('Select all'),
-                        ),
                       ),
                     ],
                   ),
                 ),
 
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _savePrefs,
-                      icon: const Icon(Icons.done_all_rounded),
-                      label: const Text('Apply filters'),
-                    ),
-                  ),
-                ),
-
                 const Divider(height: 24),
 
-                // ===== Appearance (kept simple, you already have this elsewhere) =====
+                // ===== Appearance =====
                 _sectionTitle('Appearance'),
                 ListTile(
-                  leading: const Icon(Icons.brightness_6_rounded),
+                  leading: const Icon(Icons.palette_outlined),
                   title: const Text('Theme'),
                   subtitle: const Text('System / Light / Dark'),
-                  onTap: () {
-                    // Keep your existing theme flow. If you want me to wire a bottom sheet here,
-                    // say the word and I’ll add it.
-                  },
+                  onTap: widget.onThemeTap,
                 ),
 
                 const Divider(height: 24),
@@ -341,8 +289,9 @@ class _AppDrawerState extends State<AppDrawer> {
                 ListTile(
                   leading: _emoji('🛠️'),
                   title: const Text('Report an issue'),
-                  onTap: () {
-                    // Replace with your GitHub Issues or mailto:
+                  onTap: () async {
+                    final uri = Uri.parse('mailto:feedback@cinepulse.app?subject=CinePulse%20Feedback');
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
                   },
                 ),
 
@@ -354,22 +303,26 @@ class _AppDrawerState extends State<AppDrawer> {
                   leading: const Icon(Icons.info_outline_rounded),
                   title: const Text('About CinePulse'),
                   subtitle: const Text('Version 0.1.0'),
-                  onTap: () {},
+                  onTap: widget.onClose,
                 ),
                 ListTile(
                   leading: const Icon(Icons.privacy_tip_outlined),
                   title: const Text('Privacy Policy'),
-                  onTap: () {
+                  onTap: () async {
                     final url = widget.privacyUrl ?? '';
-                    if (url.isNotEmpty) _openUrl(url);
+                    if (url.isNotEmpty) {
+                      await launchUrl(Uri.parse(url), mode: LaunchMode.platformDefault);
+                    }
                   },
                 ),
                 ListTile(
                   leading: const Icon(Icons.gavel_outlined),
                   title: const Text('Terms of Use'),
-                  onTap: () {
+                  onTap: () async {
                     final url = widget.termsUrl ?? '';
-                    if (url.isNotEmpty) _openUrl(url);
+                    if (url.isNotEmpty) {
+                      await launchUrl(Uri.parse(url), mode: LaunchMode.platformDefault);
+                    }
                   },
                 ),
                 const SizedBox(height: 18),
@@ -382,22 +335,20 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   Widget _catChip(String key, String label) {
+    final selected = _cats.contains(key);
     return FilterChip(
       label: Text(label),
-      selected: _cats.contains(key),
-      onSelected: (v) => setState(() {
-        if (v) {
-          _cats.add(key);
-        } else {
-          _cats.remove(key);
-        }
-      }),
+      selected: selected,
+      onSelected: (v) {
+        setState(() {
+          if (v) {
+            _cats.add(key);
+          } else {
+            _cats.remove(key);
+          }
+        });
+        _persist();
+      },
     );
-  }
-
-  Future<void> _openUrl(String url) async {
-    // Keep this minimal: on web we let the browser handle it
-    // (You already have url_launcher as a dep in the app).
-    // Import here would add another dep; we keep the drawer pure.
   }
 }
