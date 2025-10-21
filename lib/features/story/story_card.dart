@@ -118,7 +118,7 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
     final rawMeta = widget.story.metaLine;
-    final metaText = _stripKindPrefix(rawMeta); // keep only time after 🕐
+    final metaText = _stripKindPrefix(rawMeta);
     final hasUrl = _linkUrl != null;
 
     final card = AnimatedContainer(
@@ -150,7 +150,7 @@ class _StoryCardState extends State<StoryCard> {
               final w = box.maxWidth;
               final h = box.maxHeight;
 
-              // Media height adapts to tile size & width.
+              // SHRINK media height so the text block gets more room.
               final targetAspect = w >= 1200
                   ? (16 / 7)
                   : w >= 900
@@ -158,13 +158,18 @@ class _StoryCardState extends State<StoryCard> {
                       : w >= 600
                           ? (3 / 2)
                           : (4 / 3);
+
+              // Use a smaller fraction of the tile height than before.
+              final mediaFraction =
+                  h.isFinite ? (w >= 900 ? 0.34 : (w >= 600 ? 0.36 : 0.38)) : 0.34;
+
               final mediaH = (w / targetAspect)
-                  .clamp(120.0, math.max(140.0, h.isFinite ? h * 0.45 : 220.0));
+                  .clamp(100.0, math.max(120.0, h.isFinite ? h * mediaFraction : 200.0));
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Icon/Thumbnail Section (responsive height)
+                  // Icon/Thumbnail Section (reduced height)
                   SizedBox(
                     height: mediaH.toDouble(),
                     child: DecoratedBox(
@@ -182,10 +187,10 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Info/Badge/Meta — badge left, then 🕐 + time (no "News")
+                  // Info/Badge/Meta — badge left, then 🕐 + time
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14), // tighter
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -212,23 +217,27 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 14),
+                          const SizedBox(height: 10),
 
-                          // Title (2–3 lines depending on space)
-                          Text(
-                            widget.story.title,
-                            maxLines: h.isFinite && h < 360 ? 2 : 3,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.inter(
-                              fontSize: 15,
-                              height: 1.32,
-                              fontWeight: FontWeight.w800,
-                              color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                          // Title — allow up to 6 lines to minimize ellipsis.
+                          Flexible(
+                            fit: FlexFit.loose,
+                            child: Text(
+                              widget.story.title,
+                              maxLines: 6,
+                              softWrap: true,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.inter(
+                                fontSize: 14.6, // slightly smaller to fit more
+                                height: 1.28,
+                                fontWeight: FontWeight.w800,
+                                color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                              ),
                             ),
                           ),
                           const Spacer(),
 
-                          // CTA row: full-width primary + compact secondary actions
+                          // CTA row: slightly shorter buttons to free space.
                           Row(
                             children: [
                               Expanded(
@@ -236,7 +245,7 @@ class _StoryCardState extends State<StoryCard> {
                                   button: true,
                                   label: '${_ctaLabel} ${widget.story.title}',
                                   child: SizedBox(
-                                    height: 46,
+                                    height: 42, // was 46
                                     child: ElevatedButton.icon(
                                       icon: _ctaLeading(),
                                       onPressed: hasUrl ? () => _openLink(context) : null,
@@ -249,7 +258,7 @@ class _StoryCardState extends State<StoryCard> {
                                         ),
                                         textStyle: const TextStyle(
                                           fontWeight: FontWeight.w700,
-                                          fontSize: 16,
+                                          fontSize: 15,
                                         ),
                                       ),
                                       label: Text(_ctaLabel),
@@ -257,7 +266,7 @@ class _StoryCardState extends State<StoryCard> {
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 12),
+                              const SizedBox(width: 10),
                               _ActionIconBox(
                                 tooltip: 'Save',
                                 onTap: () {}, // hook up save flow
@@ -370,21 +379,19 @@ class _Emoji extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Use emoji-capable fallbacks so glyphs render on Web even if the
-    // app’s default font is Inter/GoogleFonts.
+    // Emoji-capable fallbacks so glyphs render on Web even with custom fonts.
     return Text(
       emoji,
       textAlign: TextAlign.center,
       style: TextStyle(
         fontSize: size,
         height: 1,
-        // Let the browser/OS pick a color emoji font
         fontFamily: null,
         fontFamilyFallback: const [
           'Apple Color Emoji',
           'Segoe UI Emoji',
           'Noto Color Emoji',
-          'EmojiOne Color'
+          'EmojiOne Color',
         ],
       ),
     );
@@ -415,9 +422,9 @@ class _ActionIconBox extends StatelessWidget {
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
           child: SizedBox(
-            width: 44,
-            height: 44,
-            child: Center(child: icon), // ← show the passed icon
+            width: 40,  // was 44
+            height: 40, // was 44
+            child: Center(child: icon),
           ),
         ),
       ),
