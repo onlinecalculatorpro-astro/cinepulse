@@ -370,9 +370,23 @@ class _Emoji extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Use emoji-capable fallbacks so glyphs render on Web even if the
+    // app’s default font is Inter/GoogleFonts.
     return Text(
       emoji,
-      style: TextStyle(fontSize: size, height: 1),
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: size,
+        height: 1,
+        // Let the browser/OS pick a color emoji font
+        fontFamily: null,
+        fontFamilyFallback: const [
+          'Apple Color Emoji',
+          'Segoe UI Emoji',
+          'Noto Color Emoji',
+          'EmojiOne Color'
+        ],
+      ),
     );
   }
 }
@@ -400,10 +414,10 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: const SizedBox(
+          child: SizedBox(
             width: 44,
             height: 44,
-            child: Center(child: SizedBox()),
+            child: Center(child: icon), // ← show the passed icon
           ),
         ),
       ),
