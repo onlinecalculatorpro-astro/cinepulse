@@ -33,12 +33,14 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
       u.host.contains('youtube.com') || u.host.contains('youtu.be');
 
   static String? _ytIdFrom(Uri u) {
+    // https://youtu.be/ID or https://www.youtube.com/watch?v=ID
     if (u.host.contains('youtu.be')) {
       return u.pathSegments.isNotEmpty ? u.pathSegments.last : null;
     }
     if (u.host.contains('youtube.com')) {
       final v = u.queryParameters['v'];
       if (v != null && v.isNotEmpty) return v;
+      // shorts or embed
       if (u.pathSegments.contains('shorts') || u.pathSegments.contains('embed')) {
         return u.pathSegments.isNotEmpty ? u.pathSegments.last : null;
       }
@@ -53,20 +55,26 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
       if (_isYouTube(uri)) {
         final id = _ytIdFrom(uri);
         if (id == null) throw 'Could not extract YouTube video id';
+
+        // ✅ v5.2.2: autoplay is on the *controller* factory, not in Params.
         _yt = YoutubePlayerController.fromVideoId(
           videoId: id,
+          autoPlay: widget.autoPlay,
           params: YoutubePlayerParams(
-            autoPlay: widget.autoPlay,
-            loop: widget.looping,
+            // Muting on web helps autoplay under browser policies.
+            mute: kIsWeb && widget.autoPlay,
             showFullscreenButton: true,
             playsInline: true,
             enableCaption: true,
-            mute: kIsWeb ? true : false, // autoplay policy on web
+            loop: widget.looping,
+            strictRelatedVideos: false,
           ),
         );
+        setState(() {});
         return;
       }
 
+      // Generic MP4/HLS (m3u8) and other direct streams
       _vp = VideoPlayerController.networkUrl(uri);
       await _vp!.initialize();
       _vp!.setLooping(widget.looping);
@@ -78,9 +86,9 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
         allowMuting: true,
         showControls: true,
       );
+      setState(() {});
     } catch (e) {
       _initError = e;
-    } finally {
       if (mounted) setState(() {});
     }
   }
@@ -113,8 +121,10 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
           border: Border.all(color: Colors.white.withOpacity(0.06)),
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text("Can’t play this video inside the app.\n($_initError)",
-              textAlign: TextAlign.center),
+          Text(
+            "Can’t play this video inside the app.\n($_initError)",
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 12),
           ElevatedButton(
             onPressed: () async {
@@ -129,9 +139,14 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
     }
 
     if (_yt != null) {
-      return const AspectRatio(
+      // ✅ v5.2.2: You must pass the controller to YoutubePlayer.
+      return AspectRatio(
         aspectRatio: 16 / 9,
-        child: YoutubePlayer(),
+        child: YoutubePlayer(
+          controller: _yt!,
+          aspectRatio: 16 / 9,
+          keepAlive: true,
+        ),
       );
     }
 
@@ -143,6 +158,7 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
       );
     }
 
+    // Loading state
     return const AspectRatio(
       aspectRatio: 16 / 9,
       child: Center(child: CircularProgressIndicator()),
