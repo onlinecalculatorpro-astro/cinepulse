@@ -54,7 +54,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   bool get _isWatchCta {
     // Prefer "Watch" when we have any playable video URL.
     if (_hasVideo) return true;
-    // Fallback heuristics (kept for parity with old behavior)
+    // Fallback heuristics to keep prior behavior.
     final host = _primaryUrl?.host.toLowerCase() ?? '';
     final kind = widget.story.kind.toLowerCase();
     final source = (widget.story.source ?? '').toLowerCase();
@@ -116,6 +116,14 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
         Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 350));
       }
     });
+  }
+
+  void _hidePlayer({String? toast}) {
+    if (!mounted) return;
+    setState(() => _showPlayer = false);
+    if (toast != null && toast.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(toast)));
+    }
   }
 
   /* --------------------------------- UI ------------------------------------ */
@@ -200,7 +208,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // Kind badge + OTT badge + Meta line ("News • 20 Oct 2025, 1:59 PM")
+                      // Kind badge + OTT badge + Meta line
                       Wrap(
                         crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 8,
@@ -228,6 +236,14 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                             child: SmartVideoPlayer(
                               url: _videoUrl!.toString(),
                               autoPlay: true,
+                              // These callbacks hide the player once the session ends/errors/closes.
+                              onEnded: () => _hidePlayer(),
+                              onClose: () => _hidePlayer(),
+                              onError: (msg) => _hidePlayer(
+                                toast: (msg?.isNotEmpty ?? false)
+                                    ? msg!
+                                    : 'Playback error',
+                              ),
                             ),
                           ),
                         ),
@@ -259,7 +275,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 20),
 
-                      // Single primary CTA + Share + Save
+                      // Primary CTA + Share + Save
                       Row(
                         children: [
                           Semantics(
