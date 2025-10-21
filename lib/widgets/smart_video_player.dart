@@ -12,12 +12,11 @@ import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 /// - YouTube links play with youtube_player_iframe
 /// - MP4/HLS (m3u8) play with video_player + Chewie
 /// - Non-playable/unknown links show a helpful fallback
-/// 
-/// New callbacks:
-/// - [onEnded]  : called when playback naturally finishes (MP4/HLS).
-///                (YouTube end detection varies across embeds; we always show a Close button)
-/// - [onClose]  : called when user taps Close
-/// - [onError]  : called when init/playback fails (with the error object)
+///
+/// Callbacks:
+/// - [onEnded] : fired when MP4/HLS finishes (YouTube end isn't reliable across embedders)
+/// - [onClose] : fired when user taps Close
+/// - [onError] : fired when init/playback fails (error object)
 class SmartVideoPlayer extends StatefulWidget {
   const SmartVideoPlayer({
     super.key,
@@ -43,11 +42,11 @@ class SmartVideoPlayer extends StatefulWidget {
 
 class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
   YoutubePlayerController? _yt;
-  StreamSubscription? _ytStateSub;
 
   VideoPlayerController? _vp;
   ChewieController? _chewie;
   VoidCallback? _vpListener;
+  bool _sentEnd = false;
 
   Object? _initError;
 
@@ -85,31 +84,14 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
           params: YoutubePlayerParams(
             // Muting helps autoplay on web due to browser policies
             mute: kIsWeb && widget.autoPlay,
-            showFullscreenButton: true,
             playsInline: true,
+            showControls: true,
+            showFullscreenButton: true,
             enableCaption: true,
             loop: widget.looping,
             strictRelatedVideos: false,
           ),
         );
-
-        // Best-effort: try to detect "ended" by observing current time near duration.
-        // The 5.x API doesn't expose a stable ended callback in all contexts,
-        // so we keep this conservative and always show a Close button.
-        _ytStateSub?.cancel();
-        _ytStateSub = _yt!.videoStateStream.listen((state) {
-          // Some builds expose a position/duration pair; when both present and at end, notify.
-          final pos = state.position;
-          final dur = state.duration;
-          if (pos != null && dur != null) {
-            final remaining = dur - pos;
-            if (remaining.inMilliseconds.abs() <= 500 && !widget.looping) {
-              widget.onEnded?.call();
-            }
-          }
-        }, onError: (e, __) {
-          widget.onError?.call(e);
-        });
 
         if (mounted) setState(() {});
         return;
@@ -122,12 +104,13 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
 
       // Detect natural end (non-looping)
       _vpListener = () {
+        if (_sentEnd || widget.looping || _vp == null) return;
         final v = _vp!.value;
-        if (!widget.looping &&
-            v.isInitialized &&
+        if (v.isInitialized &&
             !v.isPlaying &&
-            v.position >= v.duration &&
-            v.duration != Duration.zero) {
+            v.duration != Duration.zero &&
+            v.position >= v.duration) {
+          _sentEnd = true;
           widget.onEnded?.call();
         }
       };
@@ -151,12 +134,9 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
   }
 
   Future<void> _retry() async {
-    final uri = Uri.tryParse(widget.url);
-    if (uri == null) return;
-
     _disposePlayers();
-
     _initError = null;
+    _sentEnd = false;
     if (mounted) setState(() {});
     await _init();
   }
@@ -185,8 +165,6 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
   }
 
   void _disposePlayers() {
-    _ytStateSub?.cancel();
-    _ytStateSub = null;
     _yt?.close();
     _yt = null;
 
@@ -260,24 +238,20 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AspectRatio(
+          const AspectRatio(
             aspectRatio: 16 / 9,
-            child: YoutubePlayer(
-              controller: _yt!,
-              aspectRatio: 16 / 9,
-              keepAlive: true,
-            ),
+            child: _YouTubeSurface(),
           ),
           const SizedBox(height: 8),
-          // Some YouTube videos block/embed or don’t reliably surface "ended" on web.
-          // We always show controls including Close.
+          // YouTube "ended" isn’t reliable across browsers; always show Close.
           actions(showOpen: true),
         ],
       );
     }
 
     if (_chewie != null && _vp != null) {
-      final ar = _vp!.value.aspectRatio == 0 ? 16 / 9 : _vp!.value.aspectRatio;
+      final rawAr = _vp!.value.aspectRatio;
+      final ar = (rawAr.isFinite && rawAr > 0) ? rawAr : (16 / 9);
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -296,5 +270,23 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
       aspectRatio: 16 / 9,
       child: Center(child: CircularProgressIndicator()),
     );
+  }
+}
+
+/// Separate widget to avoid rebuilding the controller binding unnecessarily.
+class _YouTubeSurface extends StatelessWidget {
+  const _YouTubeSurface();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_SmartVideoPlayerState>();
+    final controller = state?._yt;
+    return controller == null
+        ? const SizedBox.shrink()
+        : YoutubePlayer(
+            controller: controller,
+            aspectRatio: 16 / 9,
+            keepAlive: true,
+          );
   }
 }
