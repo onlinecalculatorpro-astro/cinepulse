@@ -11,17 +11,31 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
+  # UI & icons
   cupertino_icons: ^1.0.6
+  google_fonts: ^6.3.2
+
+  # Networking & utils
   http: ^1.5.0
   intl: ^0.20.2
-  cached_network_image: ^3.4.1
-  url_launcher: ^6.3.2
-  google_fonts: ^6.3.2
-  carousel_slider: ^4.2.1
-  shimmer: ^3.0.0
   shared_preferences: ^2.5.3
   connectivity_plus: ^7.0.0
+  url_launcher: ^6.3.2
   share_plus: ^12.0.0
+
+  # Images & shimmer
+  cached_network_image: ^3.4.1
+  carousel_slider: ^4.2.1
+  shimmer: ^3.0.0
+
+  # --- Video playback (in-app) ---
+  # YouTube trailers (web + mobile)
+  youtube_player_iframe: ^5.1.2
+  # Generic MP4/HLS with controls
+  video_player: ^2.9.1
+  chewie: ^1.7.5
+  # -------------------------------
 
 dev_dependencies:
   flutter_test:
