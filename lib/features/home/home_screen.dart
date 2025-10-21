@@ -257,19 +257,36 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // “Trending Now” header — tighter & no badge behind 🔥
+            // “Trending Now” header — compact, baseline aligned, left-centered vertically
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-                child: Row(
-                  children: const [
-                    Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
-                    SizedBox(width: 8),
-                    Text(
-                      'Trending Now',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+                child: SizedBox(
+                  height: 36, // compact header height
+                  child: Align(
+                    alignment: Alignment.centerLeft, // left, but vertically centered
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: const [
+                        // tiny nudge so emoji sits perfectly on the text baseline
+                        Padding(
+                          padding: EdgeInsets.only(bottom: 1),
+                          child: Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Trending Now',
+                          style: TextStyle(
+                            fontSize: 20,
+                            height: 1.05,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
