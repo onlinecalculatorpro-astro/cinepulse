@@ -2,6 +2,7 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -125,6 +126,11 @@ class _StoryCardState extends State<StoryCard> {
     final metaText = _stripKindPrefix(rawMeta);
     final hasUrl = _linkUrl != null;
 
+    // Choose artwork from feed
+    final imageUrl = (widget.story.posterUrl?.isNotEmpty == true)
+        ? widget.story.posterUrl!
+        : (widget.story.thumbUrl ?? '');
+
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
@@ -173,21 +179,80 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Icon/Thumbnail Section (reduced height)
+                  // Media (image from feed, with gradient). Falls back to icon header.
                   SizedBox(
                     height: mediaH.toDouble(),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
+                    child: Hero(
+                      tag: 'thumb-${widget.story.id}',
+                      child: ClipRRect(
                         borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: isDark
-                              ? [const Color(0xFF101626), const Color(0xFF232941)]
-                              : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            if (imageUrl.isNotEmpty)
+                              CachedNetworkImage(
+                                imageUrl: imageUrl,
+                                fit: BoxFit.cover,
+                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1200),
+                                fadeInDuration: const Duration(milliseconds: 180),
+                                placeholder: (_, __) => Container(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: isDark
+                                          ? [const Color(0xFF101626), const Color(0xFF232941)]
+                                          : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
+                                    ),
+                                  ),
+                                  child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                                ),
+                                errorWidget: (_, __, ___) => Container(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: isDark
+                                          ? [const Color(0xFF101626), const Color(0xFF232941)]
+                                          : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
+                                    ),
+                                  ),
+                                  child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                                ),
+                              )
+                            else
+                              DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: isDark
+                                        ? [const Color(0xFF101626), const Color(0xFF232941)]
+                                        : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
+                                  ),
+                                ),
+                                child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                              ),
+
+                            // Dark-to-clear gradient for legibility at the bottom
+                            Positioned.fill(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.bottomCenter,
+                                    end: Alignment.topCenter,
+                                    colors: [
+                                      Colors.black.withOpacity(0.45),
+                                      Colors.transparent,
+                                    ],
+                                    stops: const [0.0, 0.7],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      child: Center(child: _SampleIcon(kind: widget.story.kind)),
                     ),
                   ),
 
