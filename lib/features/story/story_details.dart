@@ -1,6 +1,6 @@
 // lib/features/story/story_details.dart
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -11,19 +11,34 @@ import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
 import '../../core/models.dart'; // Story + metaLine
 import '../../core/utils.dart'; // fadeRoute()
-import '../../widgets/kind_badge.dart'; // <-- reusable KindBadge
+import '../../widgets/kind_badge.dart'; // reusable KindBadge
+import '../../widgets/smart_video_player.dart';
 import 'ott_badge.dart';
 
-class StoryDetailsScreen extends StatelessWidget {
-  const StoryDetailsScreen({super.key, required this.story});
+class StoryDetailsScreen extends StatefulWidget {
+  const StoryDetailsScreen({
+    super.key,
+    required this.story,
+    this.autoplay = false,
+  });
+
   final Story story;
+  final bool autoplay;
+
+  @override
+  State<StoryDetailsScreen> createState() => _StoryDetailsScreenState();
+}
+
+class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
+  final _playerKey = GlobalKey();
+  late bool _showPlayer;
 
   /* ------------------------------ URL helpers ------------------------------ */
 
-  Uri? get _videoUrl => storyVideoUrl(story);
+  Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _canonicalUrl {
-    final raw = (story.url ?? '').trim();
+    final raw = (widget.story.url ?? '').trim();
     if (raw.isEmpty) return null;
     final u = Uri.tryParse(raw);
     if (u == null) return null;
@@ -34,10 +49,15 @@ class StoryDetailsScreen extends StatelessWidget {
   /// Primary link preference: playable video if available, else article URL.
   Uri? get _primaryUrl => _videoUrl ?? _canonicalUrl;
 
+  bool get _hasVideo => _videoUrl != null;
+
   bool get _isWatchCta {
-    final host = _primaryUrl?.host?.toLowerCase() ?? '';
-    final kind = story.kind.toLowerCase();
-    final source = (story.source ?? '').toLowerCase();
+    // Prefer "Watch" when we have any playable video URL.
+    if (_hasVideo) return true;
+    // Fallback heuristics (kept for parity with old behavior)
+    final host = _primaryUrl?.host.toLowerCase() ?? '';
+    final kind = widget.story.kind.toLowerCase();
+    final source = (widget.story.source ?? '').toLowerCase();
     final isYoutube =
         host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
     return isYoutube || kind == 'trailer';
@@ -46,13 +66,13 @@ class StoryDetailsScreen extends StatelessWidget {
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
   String _shareText() {
-    final deep = deepLinkForStoryId(story.id).toString();
+    final deep = deepLinkForStoryId(widget.story.id).toString();
     if (deep.isNotEmpty) return deep;
     final link = _primaryUrl?.toString();
-    return (link != null && link.isNotEmpty) ? link : story.title;
+    return (link != null && link.isNotEmpty) ? link : widget.story.title;
   }
 
-  Future<void> _openPrimary(BuildContext context) async {
+  Future<void> _openExternalPrimary(BuildContext context) async {
     final url = _primaryUrl;
     if (url == null) return;
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
@@ -86,7 +106,25 @@ class StoryDetailsScreen extends StatelessWidget {
     }
   }
 
+  void _openPlayerInline() {
+    if (!_hasVideo) return;
+    setState(() => _showPlayer = true);
+    // Scroll the player into view after layout.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _playerKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 350));
+      }
+    });
+  }
+
   /* --------------------------------- UI ------------------------------------ */
+
+  @override
+  void initState() {
+    super.initState();
+    _showPlayer = widget.autoplay && _hasVideo;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -116,10 +154,10 @@ class StoryDetailsScreen extends StatelessWidget {
               AnimatedBuilder(
                 animation: SavedStore.instance,
                 builder: (_, __) {
-                  final saved = SavedStore.instance.isSaved(story.id);
+                  final saved = SavedStore.instance.isSaved(widget.story.id);
                   return IconButton(
                     tooltip: saved ? 'Remove from Saved' : 'Save bookmark',
-                    onPressed: () => SavedStore.instance.toggle(story.id),
+                    onPressed: () => SavedStore.instance.toggle(widget.story.id),
                     icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
                   );
                 },
@@ -136,7 +174,7 @@ class StoryDetailsScreen extends StatelessWidget {
               titlePadding:
                   const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
               stretchModes: const [StretchMode.zoomBackground, StretchMode.blurBackground],
-              background: _HeaderHero(story: story),
+              background: _HeaderHero(story: widget.story),
             ),
           ),
 
@@ -152,7 +190,7 @@ class StoryDetailsScreen extends StatelessWidget {
                     children: [
                       // Title
                       Text(
-                        story.title,
+                        widget.story.title,
                         style: GoogleFonts.inter(
                           fontSize: 22,
                           height: 1.22,
@@ -168,10 +206,10 @@ class StoryDetailsScreen extends StatelessWidget {
                         spacing: 8,
                         runSpacing: 6,
                         children: [
-                          KindBadge(story.kindLabel ?? story.kind), // <-- replaced
-                          OttBadge.fromStory(story, dense: true),
+                          KindBadge(widget.story.kindLabel ?? widget.story.kind),
+                          OttBadge.fromStory(widget.story, dense: true),
                           Text(
-                            story.metaLine,
+                            widget.story.metaLine,
                             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: cs.onSurfaceVariant,
                                 ),
@@ -181,24 +219,40 @@ class StoryDetailsScreen extends StatelessWidget {
 
                       const SizedBox(height: 16),
 
+                      // Inline player (only when requested or autoplayed)
+                      if (_hasVideo && _showPlayer) ...[
+                        KeyedSubtree(
+                          key: _playerKey,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(14),
+                            child: SmartVideoPlayer(
+                              url: _videoUrl!.toString(),
+                              autoPlay: true,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+
                       // Summary (single short paragraph)
-                      if ((story.summary ?? '').isNotEmpty)
+                      if ((widget.story.summary ?? '').isNotEmpty)
                         Text(
-                          story.summary!,
+                          widget.story.summary!,
                           style: GoogleFonts.inter(fontSize: 16, height: 1.4, color: onSurface),
                         ),
 
                       // Optional facets (languages/genres) if present
-                      if (story.languages.isNotEmpty || story.genres.isNotEmpty) ...[
+                      if (widget.story.languages.isNotEmpty ||
+                          widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
                           children: [
-                            if (story.languages.isNotEmpty)
-                              _Facet(label: 'Language', value: story.languages.join(', ')),
-                            if (story.genres.isNotEmpty)
-                              _Facet(label: 'Genre', value: story.genres.join(', ')),
+                            if (widget.story.languages.isNotEmpty)
+                              _Facet(label: 'Language', value: widget.story.languages.join(', ')),
+                            if (widget.story.genres.isNotEmpty)
+                              _Facet(label: 'Genre', value: widget.story.genres.join(', ')),
                           ],
                         ),
                       ],
@@ -213,7 +267,15 @@ class StoryDetailsScreen extends StatelessWidget {
                             label: _ctaLabel,
                             enabled: hasPrimary,
                             child: FilledButton.icon(
-                              onPressed: hasPrimary ? () => _openPrimary(context) : null,
+                              onPressed: hasPrimary
+                                  ? () {
+                                      if (_hasVideo) {
+                                        _openPlayerInline();
+                                      } else {
+                                        _openExternalPrimary(context);
+                                      }
+                                    }
+                                  : null,
                               icon: Icon(
                                 _isWatchCta
                                     ? Icons.play_arrow_rounded
@@ -232,10 +294,10 @@ class StoryDetailsScreen extends StatelessWidget {
                           AnimatedBuilder(
                             animation: SavedStore.instance,
                             builder: (_, __) {
-                              final saved = SavedStore.instance.isSaved(story.id);
+                              final saved = SavedStore.instance.isSaved(widget.story.id);
                               return IconButton.filledTonal(
                                 tooltip: saved ? 'Remove from Saved' : 'Save bookmark',
-                                onPressed: () => SavedStore.instance.toggle(story.id),
+                                onPressed: () => SavedStore.instance.toggle(widget.story.id),
                                 icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add),
                               );
                             },
