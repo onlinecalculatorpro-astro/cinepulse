@@ -7,10 +7,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
+import '../../core/api.dart';           // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
-import '../../core/models.dart'; // Story + metaLine
-import '../../widgets/kind_badge.dart'; // reusable KindBadge
+import '../../core/models.dart';
+import '../../widgets/kind_badge.dart';
 import '../../widgets/smart_video_player.dart';
 import 'ott_badge.dart';
 
@@ -18,7 +18,7 @@ class StoryDetailsScreen extends StatefulWidget {
   const StoryDetailsScreen({
     super.key,
     required this.story,
-    this.autoplay = false,
+    this.autoplay = false, // ignored by design: player shows only on Watch tap
   });
 
   final Story story;
@@ -29,8 +29,9 @@ class StoryDetailsScreen extends StatefulWidget {
 }
 
 class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
-  final _playerKey = GlobalKey();
-  late bool _showPlayer;
+  // Player state (mounted in the HERO/header, not in the body)
+  bool _showPlayer = false;
+  final _heroPlayerKey = GlobalKey();
 
   /* ------------------------------ URL helpers ------------------------------ */
 
@@ -45,20 +46,17 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return u;
   }
 
-  /// Primary link preference: playable video if available, else article URL.
+  /// Prefer inline playable video when present.
   Uri? get _primaryUrl => _videoUrl ?? _canonicalUrl;
 
   bool get _hasVideo => _videoUrl != null;
 
   bool get _isWatchCta {
-    // Prefer "Watch" when we have any playable video URL.
     if (_hasVideo) return true;
-    // Fallback heuristics to keep prior behavior.
     final host = _primaryUrl?.host.toLowerCase() ?? '';
     final kind = widget.story.kind.toLowerCase();
     final source = (widget.story.source ?? '').toLowerCase();
-    final isYoutube =
-        host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
+    final isYoutube = host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
     return isYoutube || kind == 'trailer';
   }
 
@@ -76,8 +74,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     if (url == null) return;
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Could not open link')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open link')),
+      );
     }
   }
 
@@ -91,9 +90,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
-          ),
+          SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
         );
       }
     } catch (_) {
@@ -105,14 +102,19 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     }
   }
 
-  void _openPlayerInline() {
+  void _openPlayerInHeader() {
     if (!_hasVideo) return;
     setState(() => _showPlayer = true);
-    // Scroll the player into view after layout.
+
+    // Ensure the header is visible after mounting the player
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = _playerKey.currentContext;
+      final ctx = _heroPlayerKey.currentContext;
       if (ctx != null) {
-        Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 350));
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 350),
+          alignment: 0.02, // near the top
+        );
       }
     });
   }
@@ -128,17 +130,16 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   /* --------------------------------- UI ------------------------------------ */
 
   @override
-  void initState() {
-    super.initState();
-    _showPlayer = widget.autoplay && _hasVideo;
-  }
-
-  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final onSurface = cs.onSurface;
-    final isPhone = MediaQuery.of(context).size.width < 600;
+    final screenW = MediaQuery.of(context).size.width;
+    final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
+
+    // When the player is visible, give the header more room (keep 16:9 nicely framed).
+    final expandedHeight =
+        _showPlayer ? (screenW * 9 / 16 + (isPhone ? 96 : 120)) : (isPhone ? 260 : 340);
 
     return Scaffold(
       body: CustomScrollView(
@@ -150,13 +151,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
             ),
             pinned: true,
             centerTitle: false,
-            expandedHeight: isPhone ? 260 : 340,
+            expandedHeight: expandedHeight,
             backgroundColor: cs.surface.withOpacity(0.95),
             surfaceTintColor: Colors.transparent,
-            title: Text(
-              'CinePulse',
-              style: GoogleFonts.inter(fontWeight: FontWeight.w800),
-            ),
+            title: Text('CinePulse', style: GoogleFonts.inter(fontWeight: FontWeight.w800)),
             actions: [
               AnimatedBuilder(
                 animation: SavedStore.instance,
@@ -178,10 +176,19 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
             ],
             flexibleSpace: FlexibleSpaceBar(
               collapseMode: CollapseMode.parallax,
-              titlePadding:
-                  const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
+              titlePadding: const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
               stretchModes: const [StretchMode.zoomBackground, StretchMode.blurBackground],
-              background: _HeaderHero(story: widget.story),
+              background: _HeaderHero(
+                key: _heroPlayerKey,
+                story: widget.story,
+                showPlayer: _showPlayer,
+                videoUrl: _videoUrl?.toString(),
+                onClosePlayer: () => _hidePlayer(),
+                onEndedPlayer: () => _hidePlayer(),
+                onErrorPlayer: (e) => _hidePlayer(
+                  toast: (e.toString().trim().isNotEmpty) ? e.toString() : 'Playback error',
+                ),
+              ),
             ),
           ),
 
@@ -217,37 +224,15 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           OttBadge.fromStory(widget.story, dense: true),
                           Text(
                             widget.story.metaLine,
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: cs.onSurfaceVariant,
-                                ),
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: cs.onSurfaceVariant),
                           ),
                         ],
                       ),
 
                       const SizedBox(height: 16),
-
-                      // Inline player (only when requested or autoplayed)
-                      if (_hasVideo && _showPlayer) ...[
-                        KeyedSubtree(
-                          key: _playerKey,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(14),
-                            child: SmartVideoPlayer(
-                              url: _videoUrl!.toString(),
-                              autoPlay: true,
-                              // Hide the player once the session ends / user closes / errors.
-                              onEnded: () => _hidePlayer(),
-                              onClose: () => _hidePlayer(),
-                              onError: (e) => _hidePlayer(
-                                toast: (e.toString().trim().isNotEmpty)
-                                    ? e.toString()
-                                    : 'Playback error',
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                      ],
 
                       // Summary (single short paragraph)
                       if ((widget.story.summary ?? '').isNotEmpty)
@@ -257,8 +242,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                         ),
 
                       // Optional facets (languages/genres) if present
-                      if (widget.story.languages.isNotEmpty ||
-                          widget.story.genres.isNotEmpty) ...[
+                      if (widget.story.languages.isNotEmpty || widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
                         Wrap(
                           spacing: 8,
@@ -285,17 +269,15 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                               onPressed: hasPrimary
                                   ? () {
                                       if (_hasVideo) {
-                                        _openPlayerInline();
+                                        _openPlayerInHeader();
                                       } else {
                                         _openExternalPrimary(context);
                                       }
                                     }
                                   : null,
-                              icon: Icon(
-                                _isWatchCta
-                                    ? Icons.play_arrow_rounded
-                                    : Icons.open_in_new_rounded,
-                              ),
+                              icon: Icon(_isWatchCta
+                                  ? Icons.play_arrow_rounded
+                                  : Icons.open_in_new_rounded),
                               label: Text(_ctaLabel),
                             ),
                           ),
@@ -334,8 +316,22 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 /* ------------------------------ Header Hero ------------------------------ */
 
 class _HeaderHero extends StatelessWidget {
-  const _HeaderHero({required this.story});
+  const _HeaderHero({
+    super.key,
+    required this.story,
+    required this.showPlayer,
+    required this.videoUrl,
+    required this.onClosePlayer,
+    required this.onEndedPlayer,
+    required this.onErrorPlayer,
+  });
+
   final Story story;
+  final bool showPlayer;
+  final String? videoUrl;
+  final VoidCallback onClosePlayer;
+  final VoidCallback onEndedPlayer;
+  final ValueChanged<Object> onErrorPlayer;
 
   @override
   Widget build(BuildContext context) {
@@ -348,7 +344,7 @@ class _HeaderHero extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Image or fallback color
+          // Background image (always present under the player)
           imageUrl.isEmpty
               ? Container(color: cs.surfaceContainerHighest)
               : CachedNetworkImage(
@@ -361,22 +357,41 @@ class _HeaderHero extends StatelessWidget {
                     child: const Center(child: Icon(Icons.broken_image_outlined)),
                   ),
                 ),
-          // Gradient for legibility
-          Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.55),
-                    Colors.transparent,
-                  ],
-                  stops: const [0.0, 0.6],
+
+          // When player is visible, center it and constrain width
+          if (showPlayer && (videoUrl?.isNotEmpty ?? false))
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 980),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: SmartVideoPlayer(
+                      url: videoUrl!,
+                      autoPlay: true,
+                      onEnded: onEndedPlayer,
+                      onClose: onClosePlayer,
+                      onError: onErrorPlayer,
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            // Gradient for legibility on top of the poster
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [Colors.black.withOpacity(0.55), Colors.transparent],
+                    stops: const [0.0, 0.6],
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
