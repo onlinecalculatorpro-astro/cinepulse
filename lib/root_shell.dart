@@ -163,57 +163,14 @@ class _RootShellState extends State<RootShell> {
       },
       child: Scaffold(
         key: _scaffoldKey,
+
+        // Drawer: keep only non-bottom-nav items (no Home/Search/Saved/Alerts here)
         drawer: Drawer(
           child: SafeArea(
             child: ListView(
               padding: EdgeInsets.zero,
               children: [
                 const _BrandDrawerHeader(),
-                // Quick navigation
-                ListTile(
-                  leading: const Icon(Icons.home_outlined),
-                  title: const Text('Home'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    setState(() {
-                      _pageIndex = 0;
-                      _navIndex = 0;
-                      _showSearchBar = false;
-                    });
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.explore_outlined),
-                  title: const Text('Discover'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _openDiscover();
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.bookmark_outline),
-                  title: const Text('Saved'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    setState(() {
-                      _pageIndex = 2;
-                      _navIndex = 2;
-                      _showSearchBar = false;
-                    });
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.notifications_outlined),
-                  title: const Text('Alerts'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    setState(() {
-                      _pageIndex = 3;
-                      _navIndex = 3;
-                      _showSearchBar = false;
-                    });
-                  },
-                ),
                 const Divider(height: 24),
                 ListTile(
                   leading: const Icon(Icons.palette_outlined),
