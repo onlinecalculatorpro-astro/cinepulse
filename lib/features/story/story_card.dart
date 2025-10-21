@@ -40,6 +40,8 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   bool get _isWatchCta {
+    // Prefer Watch when we have a video URL, else fall back to kind/source heuristics.
+    if (_videoUrl != null) return true;
     final host = _linkUrl?.host?.toLowerCase() ?? '';
     final byHost = host.contains('youtube.com') || host.contains('youtu.be');
     final byType = widget.story.kind.toLowerCase() == 'trailer';
@@ -49,7 +51,7 @@ class _StoryCardState extends State<StoryCard> {
 
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
-  Future<void> _openLink(BuildContext context) async {
+  Future<void> _openExternalLink(BuildContext context) async {
     final url = _linkUrl;
     if (url == null) return;
     final ok = await launchUrl(
@@ -88,8 +90,10 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  void _openDetails(BuildContext context) {
-    Navigator.of(context).push(fadeRoute(StoryDetailsScreen(story: widget.story)));
+  void _openDetails({bool autoplay = false}) {
+    Navigator.of(context).push(
+      fadeRoute(StoryDetailsScreen(story: widget.story, autoplay: autoplay)),
+    );
   }
 
   // Leading for CTA: ▶ for watch, 📖 for read
@@ -144,7 +148,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => _openDetails(context),
+          onTap: () => _openDetails(autoplay: _isWatchCta && _videoUrl != null),
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
@@ -237,7 +241,7 @@ class _StoryCardState extends State<StoryCard> {
                           ),
                           const Spacer(),
 
-                          // CTA row: slightly shorter buttons to free space.
+                          // CTA row
                           Row(
                             children: [
                               Expanded(
@@ -245,10 +249,20 @@ class _StoryCardState extends State<StoryCard> {
                                   button: true,
                                   label: '${_ctaLabel} ${widget.story.title}',
                                   child: SizedBox(
-                                    height: 42, // was 46
+                                    height: 42,
                                     child: ElevatedButton.icon(
                                       icon: _ctaLeading(),
-                                      onPressed: hasUrl ? () => _openLink(context) : null,
+                                      onPressed: hasUrl
+                                          ? () {
+                                              if (_isWatchCta && _videoUrl != null) {
+                                                // Play inside app → open details with autoplay
+                                                _openDetails(autoplay: true);
+                                              } else {
+                                                // No inline video → open source externally
+                                                _openExternalLink(context);
+                                              }
+                                            }
+                                          : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
                                         backgroundColor: const Color(0xFFdc2626),
@@ -267,12 +281,20 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
                               const SizedBox(width: 10),
-                              _ActionIconBox(
-                                tooltip: 'Save',
-                                onTap: () {}, // hook up save flow
-                                icon: const _Emoji(emoji: '🔖', size: 18),
+                              // Save
+                              AnimatedBuilder(
+                                animation: SavedStore.instance,
+                                builder: (_, __) {
+                                  final saved = SavedStore.instance.isSaved(widget.story.id);
+                                  return _ActionIconBox(
+                                    tooltip: saved ? 'Saved' : 'Save',
+                                    onTap: () => SavedStore.instance.toggle(widget.story.id),
+                                    icon: const _Emoji(emoji: '🔖', size: 18),
+                                  );
+                                },
                               ),
                               const SizedBox(width: 8),
+                              // Share
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
