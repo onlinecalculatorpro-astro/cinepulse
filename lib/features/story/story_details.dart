@@ -18,7 +18,7 @@ class StoryDetailsScreen extends StatefulWidget {
   const StoryDetailsScreen({
     super.key,
     required this.story,
-    this.autoplay = false, // ignored by design: player shows only on Watch tap
+    this.autoplay = false, // ignored: video only shows after Watch tap
   });
 
   final Story story;
@@ -56,7 +56,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final host = _primaryUrl?.host.toLowerCase() ?? '';
     final kind = widget.story.kind.toLowerCase();
     final source = (widget.story.source ?? '').toLowerCase();
-    final isYoutube = host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
+    final isYoutube =
+        host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
     return isYoutube || kind == 'trailer';
   }
 
@@ -74,9 +75,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     if (url == null) return;
     final ok = await launchUrl(url, mode: LaunchMode.externalApplication);
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open link')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Could not open link')));
     }
   }
 
@@ -137,9 +137,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // When the player is visible, give the header more room (keep 16:9 nicely framed).
-    final expandedHeight =
-        _showPlayer ? (screenW * 9 / 16 + (isPhone ? 96 : 120)) : (isPhone ? 260 : 340);
+    // **Fix**: ensure this is a double, not num (no compile error)
+    final double expandedHeight = _showPlayer
+        ? (screenW * 9.0 / 16.0 + (isPhone ? 96.0 : 120.0))
+        : (isPhone ? 260.0 : 340.0);
 
     return Scaffold(
       body: CustomScrollView(
@@ -176,7 +177,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
             ],
             flexibleSpace: FlexibleSpaceBar(
               collapseMode: CollapseMode.parallax,
-              titlePadding: const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
+              titlePadding:
+                  const EdgeInsetsDirectional.only(start: 56, bottom: 16, end: 16),
               stretchModes: const [StretchMode.zoomBackground, StretchMode.blurBackground],
               background: _HeaderHero(
                 key: _heroPlayerKey,
@@ -234,15 +236,16 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 16),
 
-                      // Summary (single short paragraph)
+                      // Summary
                       if ((widget.story.summary ?? '').isNotEmpty)
                         Text(
                           widget.story.summary!,
                           style: GoogleFonts.inter(fontSize: 16, height: 1.4, color: onSurface),
                         ),
 
-                      // Optional facets (languages/genres) if present
-                      if (widget.story.languages.isNotEmpty || widget.story.genres.isNotEmpty) ...[
+                      // Optional facets (languages/genres)
+                      if (widget.story.languages.isNotEmpty ||
+                          widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
                         Wrap(
                           spacing: 8,
@@ -275,9 +278,11 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                       }
                                     }
                                   : null,
-                              icon: Icon(_isWatchCta
-                                  ? Icons.play_arrow_rounded
-                                  : Icons.open_in_new_rounded),
+                              icon: Icon(
+                                _isWatchCta
+                                    ? Icons.play_arrow_rounded
+                                    : Icons.open_in_new_rounded,
+                              ),
                               label: Text(_ctaLabel),
                             ),
                           ),
@@ -344,7 +349,7 @@ class _HeaderHero extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Background image (always present under the player)
+          // Image underlay
           imageUrl.isEmpty
               ? Container(color: cs.surfaceContainerHighest)
               : CachedNetworkImage(
@@ -358,7 +363,7 @@ class _HeaderHero extends StatelessWidget {
                   ),
                 ),
 
-          // When player is visible, center it and constrain width
+          // Player in header (on demand)
           if (showPlayer && (videoUrl?.isNotEmpty ?? false))
             Center(
               child: ConstrainedBox(
@@ -379,7 +384,7 @@ class _HeaderHero extends StatelessWidget {
               ),
             )
           else
-            // Gradient for legibility on top of the poster
+            // Gradient overlay when not playing
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
