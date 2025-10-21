@@ -76,16 +76,13 @@ class _StoryCardState extends State<StoryCard> {
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
-        ),
+        SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
       );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Link copied to clipboard')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Link copied to clipboard')));
       }
     }
   }
@@ -96,12 +93,9 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  Widget _ctaLeading() {
-    if (_isWatchCta) {
-      return const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white);
-    }
-    return const _Emoji(emoji: '📖', size: 18);
-  }
+  Widget _ctaLeading() =>
+      _isWatchCta ? const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white)
+                  : const _Emoji(emoji: '📖', size: 18);
 
   String _stripKindPrefix(String meta) {
     var out = meta;
@@ -132,7 +126,8 @@ class _StoryCardState extends State<StoryCard> {
       curve: Curves.easeOut,
       transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92) : scheme.surface.withOpacity(0.97),
+        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92)
+                      : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
@@ -154,31 +149,16 @@ class _StoryCardState extends State<StoryCard> {
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
-              final h = box.maxHeight;
 
-              // Make media a bit taller so art feels prominent.
-              final targetAspect = w >= 1200
-                  ? (16 / 7)
-                  : w >= 900
-                      ? (16 / 9)
-                      : w >= 600
-                          ? (3 / 2)
-                          : (4 / 3);
-
-              final mediaFraction =
-                  h.isFinite ? (w >= 900 ? 0.40 : (w >= 600 ? 0.42 : 0.44)) : 0.40;
-
-              final mediaH = (w / targetAspect)
-                  .clamp(120.0, math.max(140.0, h.isFinite ? h * mediaFraction : 220.0));
+              // YouTube-style media area: strict 16:9
+              final mediaH = math.max(140.0, w / (16 / 9));
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Smart-fill media:
-                  //   - blurred/dimmed cover in the back (fills all space)
-                  //   - crisp poster/thumbnail centered on top (no crop)
+                  // === MEDIA (single image, center-cropped like YouTube) ===
                   SizedBox(
-                    height: mediaH.toDouble(),
+                    height: mediaH,
                     child: Hero(
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
@@ -186,60 +166,43 @@ class _StoryCardState extends State<StoryCard> {
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            if (imageUrl.isNotEmpty) ...[
-                              // Background: cover + blur + dim = no ugly empty bars
+                            // One image only. Center-crop so grid looks consistent.
+                            if (imageUrl.isNotEmpty)
                               CachedNetworkImage(
                                 imageUrl: imageUrl,
-                                fit: BoxFit.cover,
+                                fit: BoxFit.cover, // <-- center-crop
+                                alignment: Alignment.center,
                                 memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
-                                fadeInDuration: const Duration(milliseconds: 120),
-                              ),
-                              Positioned.fill(
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                                  child: Container(
-                                    color: Colors.black.withOpacity(isDark ? 0.35 : 0.28),
+                                fadeInDuration: const Duration(milliseconds: 160),
+                                errorWidget: (_, __, ___) => Container(
+                                  color: isDark
+                                      ? const Color(0xFF0F1625)
+                                      : scheme.surfaceVariant.withOpacity(0.3),
+                                  child: const Center(
+                                    child: Icon(Icons.broken_image_outlined),
                                   ),
                                 ),
+                              )
+                            else
+                              Container(
+                                color: isDark
+                                    ? const Color(0xFF0F1625)
+                                    : scheme.surfaceVariant.withOpacity(0.3),
+                                child: Center(child: _SampleIcon(kind: widget.story.kind)),
                               ),
-                              // Foreground: contain the real art (no crop) so portraits look right
-                              Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                                  child: CachedNetworkImage(
-                                    imageUrl: imageUrl,
-                                    fit: BoxFit.contain,
-                                    memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1200),
-                                    filterQuality: FilterQuality.medium,
-                                    fadeInDuration: const Duration(milliseconds: 180),
-                                  ),
-                                ),
-                              ),
-                            ] else ...[
-                              // Fallback gradient + icon
-                              DecoratedBox(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: isDark
-                                        ? [const Color(0xFF101626), const Color(0xFF232941)]
-                                        : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
-                                  ),
-                                ),
-                              ),
-                              Center(child: _SampleIcon(kind: widget.story.kind)),
-                            ],
 
-                            // Bottom gradient for legibility
+                            // Subtle bottom gradient for text contrast (like YouTube’s card shadow)
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
                                   gradient: LinearGradient(
                                     begin: Alignment.bottomCenter,
                                     end: Alignment.topCenter,
-                                    colors: [Colors.black.withOpacity(0.45), Colors.transparent],
-                                    stops: const [0.0, 0.7],
+                                    colors: [
+                                      Colors.black.withOpacity(0.35),
+                                      Colors.transparent,
+                                    ],
+                                    stops: const [0.0, 0.6],
                                   ),
                                 ),
                               ),
@@ -250,7 +213,7 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Info + meta + CTA
+                  // === META + CTA ===
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -285,12 +248,12 @@ class _StoryCardState extends State<StoryCard> {
                             fit: FlexFit.loose,
                             child: Text(
                               widget.story.title,
-                              maxLines: 6,
+                              maxLines: 3, // YouTube keeps it tight; feels punchier
                               softWrap: true,
                               overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.inter(
-                                fontSize: 14.6,
-                                height: 1.28,
+                                fontSize: 15,
+                                height: 1.26,
                                 fontWeight: FontWeight.w800,
                                 color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
                               ),
@@ -420,7 +383,6 @@ Widget KindMetaBadge(String kind) {
 /* ------------------------- Category/fallback icon ------------------------- */
 class _SampleIcon extends StatelessWidget {
   final String kind;
-
   const _SampleIcon({required this.kind});
 
   @override
@@ -439,7 +401,6 @@ class _SampleIcon extends StatelessWidget {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
-
     return Icon(iconData, size: 70, color: iconColor.withOpacity(0.85));
   }
 }
@@ -493,10 +454,10 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: const SizedBox(
+          child: SizedBox(
             width: 40,
             height: 40,
-            child: Center(child: SizedBox()),
+            child: Center(child: icon), // <- show the icon
           ),
         ),
       ),
