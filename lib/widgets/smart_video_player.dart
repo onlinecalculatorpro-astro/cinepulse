@@ -29,6 +29,8 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
   ChewieController? _chewie;
   Object? _initError;
 
+  String? _ytId;
+
   static bool _isYouTube(Uri u) =>
       u.host.contains('youtube.com') || u.host.contains('youtu.be');
 
@@ -40,7 +42,6 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
     if (u.host.contains('youtube.com')) {
       final v = u.queryParameters['v'];
       if (v != null && v.isNotEmpty) return v;
-      // shorts or embed
       if (u.pathSegments.contains('shorts') || u.pathSegments.contains('embed')) {
         return u.pathSegments.isNotEmpty ? u.pathSegments.last : null;
       }
@@ -55,14 +56,13 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
       if (_isYouTube(uri)) {
         final id = _ytIdFrom(uri);
         if (id == null) throw 'Could not extract YouTube video id';
+        _ytId = id;
 
-        // ✅ v5.2.2: autoplay is on the *controller* factory, not in Params.
         _yt = YoutubePlayerController.fromVideoId(
           videoId: id,
           autoPlay: widget.autoPlay,
           params: YoutubePlayerParams(
-            // Muting on web helps autoplay under browser policies.
-            mute: kIsWeb && widget.autoPlay,
+            mute: kIsWeb && widget.autoPlay, // helps autoplay on web
             showFullscreenButton: true,
             playsInline: true,
             enableCaption: true,
@@ -74,7 +74,7 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
         return;
       }
 
-      // Generic MP4/HLS (m3u8) and other direct streams
+      // Generic MP4/HLS (m3u8)
       _vp = VideoPlayerController.networkUrl(uri);
       await _vp!.initialize();
       _vp!.setLooping(widget.looping);
@@ -90,6 +90,31 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
     } catch (e) {
       _initError = e;
       if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _retry() async {
+    final uri = Uri.tryParse(widget.url);
+    if (uri == null) return;
+
+    // Dispose old controllers
+    _chewie?.dispose();
+    _vp?.dispose();
+    _yt?.close();
+    _chewie = null;
+    _vp = null;
+    _yt = null;
+    _initError = null;
+    setState(() {});
+
+    // Re-init
+    await _init();
+  }
+
+  Future<void> _openExternally() async {
+    final uri = Uri.tryParse(widget.url);
+    if (uri != null) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
@@ -110,7 +135,28 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final uri = Uri.tryParse(widget.url);
+
+    Widget _actions({bool showOpen = true}) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: Wrap(
+          spacing: 8,
+          children: [
+            TextButton.icon(
+              onPressed: _retry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+            if (showOpen)
+              TextButton.icon(
+                onPressed: _openExternally,
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('Open Externally'),
+              ),
+          ],
+        ),
+      );
+    }
 
     if (_initError != null) {
       return Container(
@@ -120,45 +166,53 @@ class _SmartVideoPlayerState extends State<SmartVideoPlayer> {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: Colors.white.withOpacity(0.06)),
         ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(
-            "Can’t play this video inside the app.\n($_initError)",
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: () async {
-              if (uri != null) {
-                await launchUrl(uri, mode: LaunchMode.externalApplication);
-              }
-            },
-            child: const Text('Open Externally'),
-          ),
-        ]),
-      );
-    }
-
-    if (_yt != null) {
-      // ✅ v5.2.2: You must pass the controller to YoutubePlayer.
-      return AspectRatio(
-        aspectRatio: 16 / 9,
-        child: YoutubePlayer(
-          controller: _yt!,
-          aspectRatio: 16 / 9,
-          keepAlive: true,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Can’t play this video inside the app.\n($_initError)",
+                textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            _actions(),
+          ],
         ),
       );
     }
 
-    if (_chewie != null) {
-      return AspectRatio(
-        aspectRatio:
-            _vp!.value.aspectRatio == 0 ? 16 / 9 : _vp!.value.aspectRatio,
-        child: Chewie(controller: _chewie!),
+    if (_yt != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: YoutubePlayer(
+              controller: _yt!,
+              aspectRatio: 16 / 9,
+              keepAlive: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Show actions always for YouTube: some videos block embedding intermittently.
+          _actions(showOpen: true),
+        ],
       );
     }
 
-    // Loading state
+    if (_chewie != null) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AspectRatio(
+            aspectRatio:
+                _vp!.value.aspectRatio == 0 ? 16 / 9 : _vp!.value.aspectRatio,
+            child: Chewie(controller: _chewie!),
+          ),
+          const SizedBox(height: 8),
+          _actions(showOpen: true),
+        ],
+      );
+    }
+
+    // Loading
     return const AspectRatio(
       aspectRatio: 16 / 9,
       child: Center(child: CircularProgressIndicator()),
