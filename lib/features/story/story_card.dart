@@ -41,7 +41,6 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   bool get _isWatchCta {
-    // Prefer Watch when we have a video URL, else fall back to kind/source heuristics.
     if (_videoUrl != null) return true;
     final host = _linkUrl?.host?.toLowerCase() ?? '';
     final byHost = host.contains('youtube.com') || host.contains('youtu.be');
@@ -97,7 +96,6 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Leading for CTA: ▶ for watch, 📖 for read
   Widget _ctaLeading() {
     if (_isWatchCta) {
       return const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white);
@@ -105,7 +103,6 @@ class _StoryCardState extends State<StoryCard> {
     return const _Emoji(emoji: '📖', size: 18);
   }
 
-  // Remove kind prefix like "News •", "Release •", "Trailer •", "OTT •" in meta
   String _stripKindPrefix(String meta) {
     var out = meta;
     for (final p in const ['news', 'release', 'trailer', 'ott']) {
@@ -126,7 +123,6 @@ class _StoryCardState extends State<StoryCard> {
     final metaText = _stripKindPrefix(rawMeta);
     final hasUrl = _linkUrl != null;
 
-    // Choose artwork from feed
     final imageUrl = (widget.story.posterUrl?.isNotEmpty == true)
         ? widget.story.posterUrl!
         : (widget.story.thumbUrl ?? '');
@@ -160,7 +156,7 @@ class _StoryCardState extends State<StoryCard> {
               final w = box.maxWidth;
               final h = box.maxHeight;
 
-              // Media height (keep generous space for text)
+              // Make media a bit taller so art feels prominent.
               final targetAspect = w >= 1200
                   ? (16 / 7)
                   : w >= 900
@@ -170,15 +166,17 @@ class _StoryCardState extends State<StoryCard> {
                           : (4 / 3);
 
               final mediaFraction =
-                  h.isFinite ? (w >= 900 ? 0.34 : (w >= 600 ? 0.36 : 0.38)) : 0.34;
+                  h.isFinite ? (w >= 900 ? 0.40 : (w >= 600 ? 0.42 : 0.44)) : 0.40;
 
               final mediaH = (w / targetAspect)
-                  .clamp(100.0, math.max(120.0, h.isFinite ? h * mediaFraction : 200.0));
+                  .clamp(120.0, math.max(140.0, h.isFinite ? h * mediaFraction : 220.0));
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Media (image from feed; **letterboxed** to avoid cropping)
+                  // Smart-fill media:
+                  //   - blurred/dimmed cover in the back (fills all space)
+                  //   - crisp poster/thumbnail centered on top (no crop)
                   SizedBox(
                     height: mediaH.toDouble(),
                     child: Hero(
@@ -188,35 +186,50 @@ class _StoryCardState extends State<StoryCard> {
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            // Soft backdrop
-                            DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: isDark
-                                      ? [const Color(0xFF101626), const Color(0xFF232941)]
-                                      : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
+                            if (imageUrl.isNotEmpty) ...[
+                              // Background: cover + blur + dim = no ugly empty bars
+                              CachedNetworkImage(
+                                imageUrl: imageUrl,
+                                fit: BoxFit.cover,
+                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
+                                fadeInDuration: const Duration(milliseconds: 120),
+                              ),
+                              Positioned.fill(
+                                child: BackdropFilter(
+                                  filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                                  child: Container(
+                                    color: Colors.black.withOpacity(isDark ? 0.35 : 0.28),
+                                  ),
                                 ),
                               ),
-                            ),
-
-                            // Feed artwork (no crop)
-                            if (imageUrl.isNotEmpty)
+                              // Foreground: contain the real art (no crop) so portraits look right
                               Center(
-                                child: CachedNetworkImage(
-                                  imageUrl: imageUrl,
-                                  fit: BoxFit.contain, // <-- letterbox, don't crop
-                                  memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1200),
-                                  filterQuality: FilterQuality.medium,
-                                  fadeInDuration: const Duration(milliseconds: 180),
-                                  placeholder: (_, __) =>
-                                      const SizedBox.shrink(), // backdrop already shown
-                                  errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                  child: CachedNetworkImage(
+                                    imageUrl: imageUrl,
+                                    fit: BoxFit.contain,
+                                    memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1200),
+                                    filterQuality: FilterQuality.medium,
+                                    fadeInDuration: const Duration(milliseconds: 180),
+                                  ),
                                 ),
-                              )
-                            else
+                              ),
+                            ] else ...[
+                              // Fallback gradient + icon
+                              DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: isDark
+                                        ? [const Color(0xFF101626), const Color(0xFF232941)]
+                                        : [const Color(0xFFE7EBF2), const Color(0xFFD1D5DC)],
+                                  ),
+                                ),
+                              ),
                               Center(child: _SampleIcon(kind: widget.story.kind)),
+                            ],
 
                             // Bottom gradient for legibility
                             Positioned.fill(
@@ -225,10 +238,7 @@ class _StoryCardState extends State<StoryCard> {
                                   gradient: LinearGradient(
                                     begin: Alignment.bottomCenter,
                                     end: Alignment.topCenter,
-                                    colors: [
-                                      Colors.black.withOpacity(0.45),
-                                      Colors.transparent,
-                                    ],
+                                    colors: [Colors.black.withOpacity(0.45), Colors.transparent],
                                     stops: const [0.0, 0.7],
                                   ),
                                 ),
@@ -240,7 +250,7 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Info/Badge/Meta — badge left, then 🕐 + time
+                  // Info + meta + CTA
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -271,8 +281,6 @@ class _StoryCardState extends State<StoryCard> {
                             ],
                           ),
                           const SizedBox(height: 10),
-
-                          // Title — allow up to 6 lines to minimize ellipsis.
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
@@ -289,8 +297,6 @@ class _StoryCardState extends State<StoryCard> {
                             ),
                           ),
                           const Spacer(),
-
-                          // CTA row
                           Row(
                             children: [
                               Expanded(
@@ -304,9 +310,9 @@ class _StoryCardState extends State<StoryCard> {
                                       onPressed: hasUrl
                                           ? () {
                                               if (_isWatchCta && _videoUrl != null) {
-                                                _openDetails(autoplay: true); // inline player
+                                                _openDetails(autoplay: true);
                                               } else {
-                                                _openExternalLink(context); // external link
+                                                _openExternalLink(context);
                                               }
                                             }
                                           : null,
@@ -328,7 +334,6 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
                               const SizedBox(width: 10),
-                              // Save
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
@@ -341,7 +346,6 @@ class _StoryCardState extends State<StoryCard> {
                                 },
                               ),
                               const SizedBox(width: 8),
-                              // Share
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
@@ -448,7 +452,6 @@ class _Emoji extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Emoji-capable fallbacks so glyphs render on Web even with custom fonts.
     return Text(
       emoji,
       textAlign: TextAlign.center,
@@ -490,10 +493,10 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: SizedBox(
-            width: 40,  // was 44
-            height: 40, // was 44
-            child: Center(child: icon),
+          child: const SizedBox(
+            width: 40,
+            height: 40,
+            child: Center(child: SizedBox()),
           ),
         ),
       ),
