@@ -10,7 +10,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
 import '../../core/models.dart'; // Story + metaLine
-import '../../core/utils.dart'; // fadeRoute()
 import '../../widgets/kind_badge.dart'; // reusable KindBadge
 import '../../widgets/smart_video_player.dart';
 import 'ott_badge.dart';
@@ -236,12 +235,12 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                             child: SmartVideoPlayer(
                               url: _videoUrl!.toString(),
                               autoPlay: true,
-                              // These callbacks hide the player once the session ends/errors/closes.
+                              // Hide the player once the session ends / user closes / errors.
                               onEnded: () => _hidePlayer(),
                               onClose: () => _hidePlayer(),
-                              onError: (msg) => _hidePlayer(
-                                toast: (msg?.isNotEmpty ?? false)
-                                    ? msg!
+                              onError: (e) => _hidePlayer(
+                                toast: (e.toString().trim().isNotEmpty)
+                                    ? e.toString()
                                     : 'Playback error',
                               ),
                             ),
