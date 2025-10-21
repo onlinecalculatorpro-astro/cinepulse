@@ -74,7 +74,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    profiles: ["db"]   # optional for free tier (enable when needed)
+    profiles: ["db"]   # optional for free tier (start only if needed)
 
   redis:
     image: redis:7-alpine
@@ -101,7 +101,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      # db is optional; uncomment next lines if API uses DB directly
+      # db is optional; uncomment if API needs DB:
       # db:
       #   condition: service_healthy
     environment:
@@ -176,7 +176,7 @@ services:
     cpus: "0.25"
     mem_limit: "128m"
 
-  # --- PUSH ingestion (recommended for free tier): WebSub for YouTube ---
+  # --- PUSH ingestion (preferred on free tier): WebSub for YouTube / RSS ---
   webhooks:
     <<: *hardened
     build:
@@ -186,7 +186,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *env_defaults
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}        # e.g. https://<your-free-host>
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}        # e.g. https://your-domain
       AUTO_SUBSCRIBE_ON_START: ${AUTO_SUBSCRIBE_ON_START:-1}
       USE_SOURCES_FILE: "1"
       SOURCES_FILE: /app/source.yml
@@ -227,7 +227,7 @@ services:
     cpus: "0.20"
     mem_limit: "96m"
 
-  # --- Optional polling scheduler (disabled by default; use profile "poller") ---
+  # --- Optional polling scheduler (disabled by default; launch with --profile poller) ---
   scheduler:
     <<: [*app_env, *hardened]
     build:
@@ -240,11 +240,11 @@ services:
         condition: service_healthy
     environment:
       <<: *env_defaults
-      POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-120}     # slow for free tier
+      POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-120}
       PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
       POLL_SPREAD_SEC: ${POLL_SPREAD_SEC:-2.0}
       POLL_JITTER_SEC: ${POLL_JITTER_SEC:-10}
-      ONE_SHOT: ${ONE_SHOT:-}                          # leave empty; enable only when needed
+      ONE_SHOT: ${ONE_SHOT:-}
       YT_MAX_ITEMS: ${YT_MAX_ITEMS:-20}
       RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-100}
       USE_SOURCES_FILE: "1"
@@ -273,9 +273,9 @@ services:
     logging: *default_logging
     cpus: "0.20"
     mem_limit: "96m"
-    profiles: ["poller"]   # <-- not started unless `--profile poller`
+    profiles: ["poller"]
 
-  # --- Renderer (optional on free tier) ---
+  # --- Renderer (optional) ---
   renderer:
     <<: *hardened
     build:
@@ -305,4 +305,4 @@ services:
     logging: *default_logging
     cpus: "0.20"
     mem_limit: "96m"
-    profiles: ["renderer"]   # optional
+    profiles: ["renderer"]
