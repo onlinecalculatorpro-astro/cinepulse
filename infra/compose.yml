@@ -1,12 +1,10 @@
-version: "3.9"
-
 x-env: &defaults
   ENV: "prod"
   TZ: "Asia/Kolkata"
   REDIS_URL: "redis://redis:6379/0"
   FEED_KEY: "feed:items"
   SEEN_KEY: "feed:seen"
-  SOURCES_FILE: "/app/infra/source.yml"   # keep your sources filename
+  SOURCES_FILE: "/app/infra/source.yml"
   TMDB_API_KEY: "${TMDB_API_KEY:-}"
 
 services:
@@ -29,7 +27,6 @@ services:
       context: ..
       dockerfile: Dockerfile
       target: api
-    image: cinepulse-api:latest
     restart: unless-stopped
     environment: *defaults
     depends_on:
@@ -48,7 +45,6 @@ services:
       context: ..
       dockerfile: Dockerfile
       target: worker
-    image: cinepulse-workers:latest
     restart: unless-stopped
     environment: *defaults
     depends_on:
@@ -66,7 +62,6 @@ services:
       context: ..
       dockerfile: Dockerfile
       target: scheduler
-    image: cinepulse-scheduler:latest
     restart: unless-stopped
     environment: *defaults
     depends_on:
@@ -84,7 +79,6 @@ services:
       context: ..
       dockerfile: Dockerfile
       target: webhooks
-    image: cinepulse-webhooks:latest
     restart: unless-stopped
     environment: *defaults
     depends_on:
