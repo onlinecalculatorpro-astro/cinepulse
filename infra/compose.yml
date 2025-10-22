@@ -6,14 +6,18 @@ x-env: &defaults
   REDIS_URL: "redis://redis:6379/0"
   FEED_KEY: "feed:items"
   SEEN_KEY: "feed:seen"
-  # point the app to YOUR catalog file name:
-  SOURCES_FILE: "/app/infra/source.yml"
+  SOURCES_FILE: "/app/infra/source.yml"   # keep your sources filename
   TMDB_API_KEY: "${TMDB_API_KEY:-}"
 
 services:
   redis:
     image: redis:7-alpine
-    command: ["redis-server","--save","","--appendonly","yes"]
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "yes"
     restart: unless-stopped
     volumes:
       - redis-data:/data
@@ -27,11 +31,9 @@ services:
       target: api
     image: cinepulse-api:latest
     restart: unless-stopped
-    environment:
-      <<: *defaults
+    environment: *defaults
     depends_on:
       - redis
-    # Bind to localhost so host Nginx can proxy (Option A CORS)
     ports:
       - "127.0.0.1:18000:8000"
     command: >
@@ -48,11 +50,13 @@ services:
       target: worker
     image: cinepulse-workers:latest
     restart: unless-stopped
-    environment:
-      <<: *defaults
+    environment: *defaults
     depends_on:
       - redis
-    command: ["python","-m","apps.workers.main"]
+    command:
+      - python
+      - -m
+      - apps.workers.main
     read_only: true
     tmpfs:
       - /tmp
@@ -64,11 +68,13 @@ services:
       target: scheduler
     image: cinepulse-scheduler:latest
     restart: unless-stopped
-    environment:
-      <<: *defaults
+    environment: *defaults
     depends_on:
       - redis
-    command: ["python","-m","apps.scheduler.main"]
+    command:
+      - python
+      - -m
+      - apps.scheduler.main
     read_only: true
     tmpfs:
       - /tmp
@@ -77,19 +83,24 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    # target: webhooks   # uncomment if you have that Dockerfile stage
+      target: webhooks
     image: cinepulse-webhooks:latest
     restart: unless-stopped
-    environment:
-      <<: *defaults
+    environment: *defaults
     depends_on:
       - redis
     ports:
       - "127.0.0.1:18001:8000"
-    command: ["uvicorn","apps.webhooks.main:app","--host","0.0.0.0","--port","8000"]
+    command:
+      - uvicorn
+      - apps.webhooks.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
     read_only: true
     tmpfs:
       - /tmp
 
 volumes:
-  redis-data:
+  redis-data: {}
