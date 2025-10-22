@@ -4,7 +4,7 @@ publish_to: "none"
 version: 0.1.0+1
 
 environment:
-  # Project runs on Flutter 3.35.6 / Dart 3.9
+  # Project runs on Flutter 3.35.x / Dart 3.9
   sdk: ">=3.9.0 <4.0.0"
   flutter: ">=3.27.0"
 
@@ -30,9 +30,7 @@ dependencies:
   shimmer: ^3.0.0
 
   # --- Video playback (in-app) ---
-  # YouTube trailers (web + mobile)
   youtube_player_iframe: ^5.1.2
-  # Generic MP4/HLS with controls
   video_player: ^2.9.1
   chewie: ^1.7.5
   # -------------------------------
@@ -43,20 +41,21 @@ dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.14.1
 
+# Ensure the latest Intl is used everywhere (helps avoid legacy text
+# segmentation fallbacks from older transitive versions on web).
+dependency_overrides:
+  intl: ^0.20.2
+
 flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
 
-# Launcher icon config — run when you want to regenerate:
-# dart run flutter_launcher_icons
+# Launcher icon config — regenerate with:
+#   dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: assets/logo.png
-
-  # Adaptive icon (Android 8+)
-  adaptive_icon_background: "#2563EB"  # CinePulse brand blue
+  adaptive_icon_background: "#2563EB"
   adaptive_icon_foreground: assets/logo.png
-  # Optional for Android 13+ (settings/shelves)
-  # adaptive_icon_monochrome: assets/logo_monochrome.png
