@@ -53,7 +53,7 @@ services:
       RQ_REDIS_URL: "${REDIS_URL}"
     depends_on:
       - redis
-    command:
+    command: sh -lc 'rq worker -u "$${REDIS_URL:-redis://redis:6379/0}" events'
       - sh
       - -lc
       - rq worker -u "$REDIS_URL" events
