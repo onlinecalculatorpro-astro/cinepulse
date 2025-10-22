@@ -1,308 +1,323 @@
-name: cinepulse
+# =============================================================================
+# CinePulse Sources Catalog — BOLLYWOOD + HINDI TV/OTT ONLY
+# =============================================================================
 
-# ---------- shared anchors ----------
-x-app-env: &app_env
-  env_file:
-    - ../.env
-  environment: &env_defaults
-    TZ: ${TZ:-UTC}
-    ENV: ${ENV:-prod}
-    LANG: ${LANG:-C.UTF-8}
-    PYTHONUNBUFFERED: "1"
-    DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/cinepulse}
-    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    TMDB_API_KEY: ${TMDB_API_KEY:-}
-    FEED_KEY: ${FEED_KEY:-feed:items}
-    SOURCES_FILE: /app/source.yml
-    # ---- API pagination + rate limits ----
-    BATCH_SIZE: ${BATCH_SIZE:-200}
-    RL_FEED_PER_MIN: ${RL_FEED_PER_MIN:-120}
-    RL_SEARCH_PER_MIN: ${RL_SEARCH_PER_MIN:-90}
-    RL_STORY_PER_MIN: ${RL_STORY_PER_MIN:-240}
-    # ---- summarization knobs ----
-    SUMMARY_TARGET_WORDS: ${SUMMARY_TARGET_WORDS:-85}
-    SUMMARY_MIN_WORDS: ${SUMMARY_MIN_WORDS:-60}
-    SUMMARY_MAX_WORDS: ${SUMMARY_MAX_WORDS:-110}
-    SUMMARY_PASSTHROUGH_MIN_CHARS: ${SUMMARY_PASSTHROUGH_MIN_CHARS:-220}
-    SUMMARY_PASSTHROUGH_MAX_CHARS: ${SUMMARY_PASSTHROUGH_MAX_CHARS:-1200}
-    SUMMARY_PASSTHROUGH_MIN_SENTENCES: ${SUMMARY_PASSTHROUGH_MIN_SENTENCES:-2}
-    FEED_ALLOWED_INDUSTRIES: ${FEED_ALLOWED_INDUSTRIES:-bollywood}
+meta:
+  regions:
+    - IN
+  # NOTE: keep current Netlify base (typo preserved if your site uses it)
+  share_base_url: "https://cinepusle.netlify.app/#/s"
 
-x-logging: &default_logging
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "5"
+# -----------------------------------------------------------------------------
+# Throttle / courtesy (seconds between hits per domain)
+# -----------------------------------------------------------------------------
+throttle:
+  per_domain_min_seconds:
+    default: 300
+    youtube.com: 300
+    googlevideo.com: 300
+    bollywoodhungama.com: 600
+    filmcompanion.in: 600
+    pinkvilla.com: 600
+    koimoi.com: 600
+    tellyupdates.com: 600
 
-x-hardened: &hardened
-  read_only: true
-  tmpfs:
-    - /tmp
-  security_opt:
-    - no-new-privileges:true
-  cap_drop:
-    - ALL
-  ulimits:
-    nofile:
-      soft: 4096
-      hard: 8192
+# -----------------------------------------------------------------------------
+# YOUTUBE (studios; OTT channels left disabled until IDs verified)
+# -----------------------------------------------------------------------------
+youtube:
+  defaults:
+    enabled: true
+    kind_hint: trailer
+    max_items_per_poll: 20
+    published_after_hours: 72
+    language: "en"
+    region: "IN"
+    include_keywords:
+      - trailer
+      - teaser
+      - first look
+      - announcement
+      - promo
+    ignore_keywords:
+      - song
+      - video song
+      - lyric
+      - lyrical
+      - title track
+      - jukebox
+      - audio
+      - remix
+  channels:
+    - name: "T-Series"
+      enabled: true
+      channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
 
-# ---------- networking / storage ----------
-networks:
-  app:
-    driver: bridge
+    - name: "YRF"
+      enabled: true
+      channel_id: "UCI5q9xeOp2-1bV7xEtkKgzA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
 
-volumes:
-  dbdata: {}
-  redisdata: {}
+    - name: "Zee Studios"
+      enabled: true
+      channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
 
-services:
-  db:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: cinepulse
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - dbdata:/var/lib/postgresql/data
-    networks:
-      - app
-    logging: *default_logging
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d cinepulse"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    profiles: ["db"]   # optional for free tier (start only if needed)
+    - name: "Dharma Productions"
+      enabled: true
+      channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redisdata:/data
-    networks:
-      - app
-    logging: *default_logging
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+    # OTT platform channels (enable after verifying channel_id)
+    - name: "JioCinema"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
 
-  api:
-    <<: [*app_env, *hardened]
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-      target: api
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      # db is optional; uncomment if API needs DB:
-      # db:
-      #   condition: service_healthy
-    environment:
-      <<: *env_defaults
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
-      MAX_SCAN: ${MAX_SCAN:-400}
-    volumes:
-      - ./source.yml:/app/source.yml:ro
-    networks:
-      - app
-    ports:
-      - "127.0.0.1:18000:8000"
-    command: >
-      gunicorn -k uvicorn.workers.UvicornWorker -w ${API_WORKERS:-1}
-      -b 0.0.0.0:8000 apps.api.app.main:app
-      --timeout 30 --keep-alive 5
-      --max-requests 800 --max-requests-jitter 80
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import json,sys,urllib.request
-          try:
-              r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)
-              j=json.loads(r.read().decode('utf-8'))
-              ok = (r.status==200) and (j.get('status')=='ok')
-              sys.exit(0 if ok else 1)
-          except Exception:
-              sys.exit(1)
-          PY
-      interval: 20s
-      timeout: 5s
-      retries: 5
-    logging: *default_logging
-    cpus: "0.25"
-    mem_limit: "128m"
+    - name: "Sony LIV"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
 
-  worker:
-    <<: [*app_env, *hardened]
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-      target: worker
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./source.yml:/app/source.yml:ro
-    networks:
-      - app
-    command: >
-      sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" events'
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import os,sys
-          from redis import from_url
-          try:
-              from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()
-              sys.exit(0)
-          except Exception:
-              sys.exit(1)
-          PY
-      interval: 25s
-      timeout: 5s
-      retries: 5
-    logging: *default_logging
-    cpus: "0.25"
-    mem_limit: "128m"
+    - name: "ZEE5"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
 
-  # --- PUSH ingestion (preferred on free tier): WebSub for YouTube / RSS ---
-  webhooks:
-    <<: *hardened
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-      target: webhooks
-    restart: unless-stopped
-    environment:
-      <<: *env_defaults
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}        # e.g. https://your-domain
-      AUTO_SUBSCRIBE_ON_START: ${AUTO_SUBSCRIBE_ON_START:-1}
-      USE_SOURCES_FILE: "1"
-      SOURCES_FILE: /app/source.yml
-      WEBHOOK_LEASE_SEC: ${WEBHOOK_LEASE_SEC:-86400}
-      YT_PULL_WINDOW_HOURS: ${YT_PULL_WINDOW_HOURS:-72}
-      RSS_PULL_WINDOW_HOURS: ${RSS_PULL_WINDOW_HOURS:-48}
-      WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:-}
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./source.yml:/app/source.yml:ro
-    networks:
-      - app
-    ports:
-      - "127.0.0.1:18200:8000"
-    command: >
-      gunicorn -k uvicorn.workers.UvicornWorker -w ${WEBHOOK_WORKERS:-1}
-      -b 0.0.0.0:8000 apps.webhooks.main:app
-      --timeout 30 --keep-alive 5
-      --max-requests 800 --max-requests-jitter 80
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import urllib.request,sys
-          try:
-              r=urllib.request.urlopen('http://localhost:8000/healthz',timeout=3)
-              sys.exit(0 if r.status==200 else 1)
-          except Exception:
-              sys.exit(1)
-          PY
-      interval: 25s
-      timeout: 5s
-      retries: 5
-    logging: *default_logging
-    cpus: "0.20"
-    mem_limit: "96m"
+    - name: "Netflix India"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
 
-  # --- Optional polling scheduler (disabled by default; launch with --profile poller) ---
-  scheduler:
-    <<: [*app_env, *hardened]
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-      target: scheduler
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    environment:
-      <<: *env_defaults
-      POLL_INTERVAL_MIN: ${POLL_INTERVAL_MIN:-120}
-      PUBLISHED_AFTER_HOURS: ${PUBLISHED_AFTER_HOURS:-72}
-      POLL_SPREAD_SEC: ${POLL_SPREAD_SEC:-2.0}
-      POLL_JITTER_SEC: ${POLL_JITTER_SEC:-10}
-      ONE_SHOT: ${ONE_SHOT:-}
-      YT_MAX_ITEMS: ${YT_MAX_ITEMS:-20}
-      RSS_MAX_ITEMS: ${RSS_MAX_ITEMS:-100}
-      USE_SOURCES_FILE: "1"
-      SOURCES_FILE: /app/source.yml
-    volumes:
-      - ./source.yml:/app/source.yml:ro
-    networks:
-      - app
-    command: python -m apps.scheduler.main
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import os,sys
-          from redis import from_url
-          try:
-              from_url(os.getenv('REDIS_URL','redis://redis:6379/0')).ping()
-              sys.exit(0)
-          except Exception:
-              sys.exit(1)
-          PY
-      interval: 30s
-      timeout: 5s
-      retries: 5
-    logging: *default_logging
-    cpus: "0.20"
-    mem_limit: "96m"
-    profiles: ["poller"]
+    - name: "Prime Video India"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
 
-  # --- Renderer (optional) ---
-  renderer:
-    <<: *hardened
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-      target: renderer
-    restart: unless-stopped
-    networks:
-      - app
-    ports:
-      - "127.0.0.1:18100:8000"
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          python - <<'PY'
-          import urllib.request,sys
-          try:
-              r=urllib.request.urlopen('http://localhost:8000/health',timeout=3)
-              sys.exit(0 if r.status==200 else 1)
-          except Exception:
-              sys.exit(1)
-          PY
-      interval: 25s
-      timeout: 5s
-      retries: 5
-    logging: *default_logging
-    cpus: "0.20"
-    mem_limit: "96m"
-    profiles: ["renderer"]
+    - name: "Disney+ Hotstar"
+      enabled: false
+      channel_id: ""
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+
+# -----------------------------------------------------------------------------
+# NEWS (RSS)
+# -----------------------------------------------------------------------------
+rss:
+  defaults:
+    enabled: true
+    kind_hint: news
+    max_items_per_poll: 20
+    include_keywords: []
+    ignore_keywords:
+      - behind the scenes
+      - interview
+      - live stream
+
+  buckets:
+    news_hollywood:
+      enabled: false
+      feeds: []
+
+    news_india:
+      enabled: true
+      feeds:
+        - name: "Bollywood Hungama"
+          enabled: true
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+
+        - name: "Film Companion"
+          enabled: true
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+
+        - name: "Pinkvilla (Entertainment)"
+          enabled: true
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+
+        - name: "Koimoi"
+          enabled: true
+          url: "https://www.koimoi.com/feed/"
+          industry: "bollywood"
+
+    news_hindi_tv_ott:
+      enabled: true
+      feeds:
+        - name: "TellyUpdates"
+          enabled: true
+          url: "https://www.tellyupdates.com/feed/"
+          industry: "bollywood"
+
+        - name: "Bollywood Hungama — OTT/TV"
+          enabled: true
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+          include_keywords:
+            - OTT
+            - web series
+            - series
+            - season
+            - episode
+            - television
+            - TV
+            - Hotstar
+            - JioCinema
+            - Prime Video
+            - Netflix
+            - Sony LIV
+            - ZEE5
+
+        - name: "Pinkvilla — OTT/TV"
+          enabled: true
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+          include_keywords:
+            - OTT
+            - web series
+            - series
+            - season
+            - episode
+            - television
+            - TV
+            - Hotstar
+            - JioCinema
+            - Prime Video
+            - Netflix
+            - Sony LIV
+            - ZEE5
+
+        - name: "Film Companion — OTT/TV"
+          enabled: true
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+          include_keywords:
+            - OTT
+            - web series
+            - series
+            - season
+            - episode
+            - television
+            - TV
+            - Hotstar
+            - JioCinema
+            - Prime Video
+            - Netflix
+            - Sony LIV
+            - ZEE5
+
+# -----------------------------------------------------------------------------
+# TMDb (used by scheduler's TMDb pulls)
+# -----------------------------------------------------------------------------
+tmdb:
+  api_key_env: "TMDB_API_KEY"
+  regions:
+    - IN
+  enable_trending: true
+  enable_upcoming: true
+  ott_providers:
+    - Netflix
+    - Amazon Prime Video
+    - Disney Plus Hotstar
+    - JioCinema
+    - ZEE5
+    - Sony LIV
+
+# -----------------------------------------------------------------------------
+# AWARDS (scheduler can walk calendar when enabled)
+# -----------------------------------------------------------------------------
+awards:
+  defaults:
+    enabled: false
+    kind_hint: award
+  sources: []
+  calendar:
+    - name: "Filmfare"
+      region: "IN"
+      tz: "Asia/Kolkata"
+      date_utc: ""
+
+# -----------------------------------------------------------------------------
+# BOX OFFICE (optional; disabled by default)
+# -----------------------------------------------------------------------------
+box_office:
+  defaults:
+    enabled: false
+    kind_hint: bo
+  sources: []
+
+# -----------------------------------------------------------------------------
+# Classification & Ranking
+# -----------------------------------------------------------------------------
+rules:
+  trailer_keywords:
+    - trailer
+    - teaser
+    - first look
+    - announcement
+    - promo
+  release_keywords:
+    - release
+    - in theatres
+    - coming soon
+    - on netflix
+    - on prime
+    - on hotstar
+    - on jiocinema
+    - on zee5
+    - on sonyliv
+  award_keywords:
+    - awards
+    - nominations
+    - winners
+  ignore_keywords:
+    - behind the scenes
+    - interview
+    - live stream
+
+ranking_weights:
+  recency_half_life_minutes: 360
+  source_weight:
+    youtube: 2.0
+    tmdb: 1.2
+    rss: 1.0
+    awards: 1.4
+    bo: 1.1
+  has_video_bonus: 1.5
+  has_poster_bonus: 0.6
+  trend_bonus: 1.2
+
+# -----------------------------------------------------------------------------
+# Scheduler (both polling + push-friendly defaults)
+# -----------------------------------------------------------------------------
+scheduler:
+  poll_interval_min: 120
+  published_after_hours: 72
+  use_sources_file: true
+  rss_buckets_enabled:
+    - news_india
+    - news_hindi_tv_ott
+  per_run_limits:
+    youtube_channels: 10
+    rss_feeds: 12
