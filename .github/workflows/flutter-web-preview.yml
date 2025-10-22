@@ -3,19 +3,21 @@ name: Web Preview (Flutter → Netlify)
 on:
   workflow_dispatch: {}
 
-# avoid overlapping manual runs on the same ref
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
     name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
-      # REQUIRED repo secrets:
-      #   API_BASE_URL          -> e.g. https://api.onlinecalculatorpro.org   (no trailing slash)
-      #   DEEP_LINK_BASE        -> e.g. https://cinepulse.netlify.app         (no trailing slash)
+      # REQUIRED repo secrets (no trailing slash):
+      #   API_BASE_URL       -> e.g. https://api.onlinecalculatorpro.org
+      #   DEEP_LINK_BASE     -> e.g. https://cinepulse.netlify.app
       API_BASE_URL: ${{ secrets.API_BASE_URL }}
       DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}
 
@@ -60,7 +62,7 @@ jobs:
           API_BASE_URL_NORM: ${{ secrets.API_BASE_URL }}
           DEEP_LINK_BASE_NORM: ${{ secrets.DEEP_LINK_BASE }}
         run: |
-          # normalize to avoid accidental trailing slashes
+          # normalize secrets to ensure no trailing slash
           api="${API_BASE_URL_NORM%/}"
           deep="${DEEP_LINK_BASE_NORM%/}"
 
@@ -92,12 +94,11 @@ jobs:
       NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
 
     steps:
-      - name: Download web artifact
+      - name: Download web artifact (into build/web)
         uses: actions/download-artifact@v4
         with:
           name: web-preview
-        # path default is ./, we want build/web for netlify-cli
-      - run: mkdir -p build && mv web-preview build/web
+          path: build/web
 
       - name: Add SPA redirect + cache headers
         run: |
