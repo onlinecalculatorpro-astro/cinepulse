@@ -170,7 +170,7 @@ def _link_thumb(entry: dict) -> Optional[str]:
         for it in mcont:
             if isinstance(it, dict):
                 u = it.get("url") or it.get("href")
-                if u and (it.get("type","").startswith("image/") or u.lower().endswith((".jpg",".jpeg",".png",".webp",".gif",".avif",".bmp"))):
+                if u and (it.get("type", "").startswith("image/") or u.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp"))):
                     return u
     # enclosure links
     for l in entry.get("links") or []:
@@ -179,7 +179,7 @@ def _link_thumb(entry: dict) -> Optional[str]:
     # simple custom fields
     for k in ("image", "picture", "logo", "thumbnail", "poster"):
         v = entry.get(k)
-        if isinstance(v, str) and v.startswith(("http://","https://")):
+        if isinstance(v, str) and v.startswith(("http://", "https://")):
             return v
         if isinstance(v, dict) and v.get("href"):
             return v["href"]
@@ -499,12 +499,44 @@ def _to_https(url: str | None) -> str | None:
     return url
 
 def _first_img_from_html(html_str: str | None, base: str) -> str | None:
+    """
+    Extract first usable image URL from an HTML snippet.
+    Handles:
+      - <img src="...">
+      - <img data-src|data-original|data-lazy-src|data-image="...">
+      - <img/src or <source> with srcset="url 640w, url2 1280w" (picks first URL)
+      - <meta property="og:image" content="..."> inside the snippet (rare but cheap)
+    """
     if not html_str:
         return None
-    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html_str, flags=re.I)
-    if not m:
-        return None
-    return _abs_url(html.unescape(m.group(1)), base)
+
+    s = html.unescape(html_str)
+
+    # 1) Standard src= on <img>
+    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', s, flags=re.I)
+    if m:
+        return _abs_url(m.group(1), base)
+
+    # 2) Common lazy-load attributes
+    for attr in ("data-src", "data-original", "data-lazy-src", "data-image"):
+        m = re.search(fr'<img[^>]+{attr}=["\']([^"\']+)["\']', s, flags=re.I)
+        if m:
+            return _abs_url(m.group(1), base)
+
+    # 3) srcset on <img> or <source>
+    m = re.search(r'(?:<img|<source)[^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I)
+    if m:
+        srcset = m.group(1)
+        first = srcset.split(",")[0].strip().split()[0]  # "URL 640w" -> "URL"
+        if first:
+            return _abs_url(first, base)
+
+    # 4) OG tag inside the snippet (some feeds inline it)
+    m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', s, flags=re.I)
+    if m:
+        return _abs_url(m.group(1), base)
+
+    return None
 
 def _youtube_thumb(link: str | None) -> str | None:
     if not link:
