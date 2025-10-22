@@ -25,7 +25,7 @@ services:
   api:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: infra/Dockerfile
       target: api
     restart: unless-stopped
     environment: *defaults
@@ -43,7 +43,7 @@ services:
   workers:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: infra/Dockerfile
       target: worker
     restart: unless-stopped
     environment: *defaults
@@ -60,7 +60,7 @@ services:
   scheduler:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: infra/Dockerfile
       target: scheduler
     restart: unless-stopped
     environment: *defaults
@@ -77,7 +77,7 @@ services:
   webhooks:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: infra/Dockerfile
       target: webhooks
     restart: unless-stopped
     environment: *defaults
