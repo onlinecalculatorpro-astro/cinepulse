@@ -1,3 +1,5 @@
+# docker compose (no version key)
+
 x-env: &defaults
   ENV: "prod"
   TZ: "Asia/Kolkata"
@@ -28,8 +30,8 @@ services:
       dockerfile: infra/Dockerfile
       target: api
     restart: unless-stopped
-    env_file: ../.env
     environment: *defaults
+    env_file: ../.env
     depends_on:
       - redis
     ports:
@@ -47,16 +49,12 @@ services:
       dockerfile: infra/Dockerfile
       target: worker
     restart: unless-stopped
+    environment: *defaults
     env_file: ../.env
-    environment:
-      <<: *defaults
-      RQ_REDIS_URL: "${REDIS_URL}"
     depends_on:
       - redis
-    command:
-      - sh
-      - -lc
-      - rq worker -u "$REDIS_URL" events
+    command: >
+      rq worker -u ${REDIS_URL} events
     read_only: true
     tmpfs:
       - /tmp
@@ -67,8 +65,8 @@ services:
       dockerfile: infra/Dockerfile
       target: scheduler
     restart: unless-stopped
-    env_file: ../.env
     environment: *defaults
+    env_file: ../.env
     depends_on:
       - redis
     command:
@@ -85,8 +83,8 @@ services:
       dockerfile: infra/Dockerfile
       target: webhooks
     restart: unless-stopped
-    env_file: ../.env
     environment: *defaults
+    env_file: ../.env
     depends_on:
       - redis
     ports:

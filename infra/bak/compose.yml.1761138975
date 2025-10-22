@@ -1,3 +1,4 @@
+# infra/compose.yml
 x-env: &defaults
   ENV: "prod"
   TZ: "Asia/Kolkata"
@@ -28,7 +29,6 @@ services:
       dockerfile: infra/Dockerfile
       target: api
     restart: unless-stopped
-    env_file: ../.env
     environment: *defaults
     depends_on:
       - redis
@@ -47,16 +47,14 @@ services:
       dockerfile: infra/Dockerfile
       target: worker
     restart: unless-stopped
-    env_file: ../.env
     environment:
       <<: *defaults
-      RQ_REDIS_URL: "${REDIS_URL}"
+      # rq will auto-use this; we also include a default to silence warnings
+      RQ_REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
     depends_on:
       - redis
-    command:
-      - sh
-      - -lc
-      - rq worker -u "$REDIS_URL" events
+    # keep it simple; no var expansion here
+    command: rq worker events
     read_only: true
     tmpfs:
       - /tmp
@@ -67,8 +65,8 @@ services:
       dockerfile: infra/Dockerfile
       target: scheduler
     restart: unless-stopped
-    env_file: ../.env
     environment: *defaults
+    env_file: ../.env
     depends_on:
       - redis
     command:
@@ -85,7 +83,6 @@ services:
       dockerfile: infra/Dockerfile
       target: webhooks
     restart: unless-stopped
-    env_file: ../.env
     environment: *defaults
     depends_on:
       - redis

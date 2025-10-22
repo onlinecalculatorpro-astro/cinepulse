@@ -1,3 +1,4 @@
+
 # ---------- base ----------
 FROM python:3.11-slim AS base
 
@@ -24,22 +25,22 @@ USER appuser
 # ---------- API ----------
 FROM base AS api
 EXPOSE 8000
-CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000
 
 # ---------- Worker ----------
 FROM base AS worker
-CMD ["python", "-m", "apps.workers.main"]
+CMD python -m apps.workers.cli
 
 # ---------- Scheduler ----------
 FROM base AS scheduler
-CMD ["python", "-m", "apps.scheduler.main"]
+CMD python -m apps.scheduler.main
 
 # ---------- Webhooks ----------
 FROM base AS webhooks
 EXPOSE 8000
-CMD ["uvicorn", "apps.webhooks.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD uvicorn apps.webhooks.main:app --host 0.0.0.0 --port 8000
 
 # ---------- Renderer (optional) ----------
 FROM base AS renderer
 EXPOSE 8000
-CMD ["uvicorn", "apps.renderer.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD uvicorn apps.renderer.app.main:app --host 0.0.0.0 --port 8000

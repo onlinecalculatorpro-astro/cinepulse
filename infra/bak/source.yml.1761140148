@@ -1,3 +1,4 @@
+
 # =============================================================================
 # CinePulse Sources Catalog — BOLLYWOOD + HINDI TV/OTT ONLY
 # =============================================================================
@@ -8,18 +9,18 @@ meta:
   share_base_url: "https://cinepusle.netlify.app/#/s"
 
 # ----------------------------------------------------------------------------- 
-# Throttle / courtesy — set to 0 so one cycle can poll ALL sources
+# Throttle / courtesy
 # -----------------------------------------------------------------------------
 throttle:
   per_domain_min_seconds:
-    default: 0
-    youtube.com: 0
-    googlevideo.com: 0
-    bollywoodhungama.com: 0
-    filmcompanion.in: 0
-    pinkvilla.com: 0
-    koimoi.com: 0
-    tellyupdates.com: 0
+    default: 300
+    youtube.com: 300
+    googlevideo.com: 300
+    bollywoodhungama.com: 600
+    filmcompanion.in: 600
+    pinkvilla.com: 600
+    koimoi.com: 600
+    tellyupdates.com: 600
 
 # ----------------------------------------------------------------------------- 
 # YOUTUBE
@@ -32,6 +33,21 @@ youtube:
     published_after_hours: 72
     language: "en"
     region: "IN"
+    include_keywords:
+      - trailer
+      - teaser
+      - first look
+      - announcement
+      - promo
+    ignore_keywords:
+      - song
+      - video song
+      - lyric
+      - lyrical
+      - title track
+      - jukebox
+      - audio
+      - remix
   channels:
     - name: "T-Series"
       enabled: true
@@ -41,7 +57,7 @@ youtube:
       region: "IN"
     - name: "YRF"
       enabled: true
-      channel_id: "UCI5q9xeOp2-1bV7xEtKgzA"
+      channel_id: "UCI5q9xeOp2-1bV7xEtkKgzA"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
@@ -66,7 +82,7 @@ rss:
     enabled: true
     kind_hint: news
     max_items_per_poll: 20
-    include_keywords:
+    include_keywords: []
     ignore_keywords:
       - behind the scenes
       - interview
@@ -75,7 +91,7 @@ rss:
   buckets:
     news_hollywood:
       enabled: false
-      feeds:
+      feeds: []
 
     news_india:
       enabled: true
@@ -177,46 +193,8 @@ tmdb:
     - Sony LIV
 
 # ----------------------------------------------------------------------------- 
-# Ranking & Scheduler
+# Scheduler
 # -----------------------------------------------------------------------------
-rules:
-  trailer_keywords:
-    - trailer
-    - teaser
-    - first look
-    - announcement
-    - promo
-  release_keywords:
-    - release
-    - in theatres
-    - coming soon
-    - on netflix
-    - on prime
-    - on hotstar
-    - on jiocinema
-    - on zee5
-    - on sonyliv
-  award_keywords:
-    - awards
-    - nominations
-    - winners
-  ignore_keywords:
-    - behind the scenes
-    - interview
-    - live stream
-
-ranking_weights:
-  recency_half_life_minutes: 360
-  source_weight:
-    youtube: 2.0
-    tmdb: 1.2
-    rss: 1.0
-    awards: 1.4
-    bo: 1.1
-  has_video_bonus: 1.5
-  has_poster_bonus: 0.6
-  trend_bonus: 1.2
-
 scheduler:
   poll_interval_min: 15
   published_after_hours: 72
