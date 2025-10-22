@@ -49,10 +49,8 @@ services:
     environment: *defaults
     depends_on:
       - redis
-    command:
-      - python
-      - -m
-      - apps.workers.main
+    command: >
+      rq worker -u ${REDIS_URL} events
     read_only: true
     tmpfs:
       - /tmp
