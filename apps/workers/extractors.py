@@ -2,41 +2,47 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
-import socket
-import ssl
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional, Tuple, Dict, Any
+from typing import Iterable, Optional, Tuple, List, Dict, Any
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
 
-# ---------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------
+__all__ = [
+    "build_rss_payload",          # -> (payload: dict, thumb_hint: Optional[str], candidates: List[str])
+    "choose_best_image",          # pick best from candidate URLs (largest srcset etc.)
+    "abs_url",
+    "to_https",
+]
 
-DEBUG_IMAGES = os.getenv("DEBUG_IMAGES", "0") not in ("0", "", "false", "False")
+# ============================== Config ===============================
 
-# Controlled, *optional* page fetch for OG images (default OFF).
+EXTRACT_DEBUG = os.getenv("EXTRACT_DEBUG", "0") not in ("0", "", "false", "False")
+
+# Optional network fetch to page for OG/Twitter/JSON-LD discovery
 OG_FETCH = os.getenv("OG_FETCH", "0") not in ("0", "", "false", "False")
 OG_ALLOWED_DOMAINS = {
-    d.strip().lower() for d in os.getenv("OG_ALLOWED_DOMAINS", "").split(",") if d.strip()
+    d.strip().lower()
+    for d in os.getenv("OG_ALLOWED_DOMAINS", "bollywoodhungama.com,koimoi.com,pinkvilla.com,filmfare.com").split(",")
+    if d.strip()
 }
-OG_TIMEOUT = float(os.getenv("OG_TIMEOUT_SEC", "4.0"))
-OG_MAX_BYTES = int(os.getenv("OG_MAX_BYTES", str(600_000)))  # 600 KB cap
+OG_TIMEOUT = float(os.getenv("OG_TIMEOUT", "3.5"))
+USER_AGENT = os.getenv(
+    "FETCH_UA",
+    "Mozilla/5.0 (compatible; CinePulseBot/1.0; +https://example.com/bot)"
+)
 
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp")
+# svg is excluded for thumbnails
 
-# ---------------------------------------------------------------------
-# Small utils
-# ---------------------------------------------------------------------
+# ============================== Helpers ==============================
 
-def _log(reason: str, data: Dict[str, Any] | None = None) -> None:
-    if DEBUG_IMAGES:
-        print(f"[extract] {reason} | {data or {}}")
+def dlog(msg: str, *kv: Any) -> None:
+    if EXTRACT_DEBUG:
+        details = " | ".join(repr(k) for k in kv) if kv else ""
+        print(f"[extract] {msg}{(' ' + details) if details else ''}")
 
-def _abs_url(url: Optional[str], base: str) -> Optional[str]:
+def abs_url(url: Optional[str], base: str) -> Optional[str]:
     if not url:
         return None
     u = urlparse(url)
@@ -44,7 +50,7 @@ def _abs_url(url: Optional[str], base: str) -> Optional[str]:
         return urljoin(base, url)
     return url
 
-def _to_https(url: Optional[str]) -> Optional[str]:
+def to_https(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
     if url.startswith("//"):
@@ -53,13 +59,15 @@ def _to_https(url: Optional[str]) -> Optional[str]:
         return "https://" + url[7:]
     return url
 
-def _domain(url: str) -> str:
-    try:
-        return urlparse(url).netloc.replace("www.", "")
-    except Exception:
-        return "rss"
+def _norm(url: Optional[str], base: str) -> Optional[str]:
+    return to_https(abs_url(url, base))
+
+def _looks_image(url: str) -> bool:
+    u = url.lower().split("?", 1)[0]
+    return u.endswith(IMG_EXTS)
 
 def _pick_from_srcset(srcset: str) -> Optional[str]:
+    # Choose largest width candidate
     best_url, best_w = None, -1
     for part in srcset.split(","):
         tokens = part.strip().split()
@@ -76,167 +84,199 @@ def _pick_from_srcset(srcset: str) -> Optional[str]:
             best_url, best_w = u, w
     return best_url
 
-def _first_img_from_html(html_str: Optional[str], base: str) -> Optional[str]:
+def _first_img_from_html(html_str: Optional[str], base: str) -> List[str]:
     """
-    Robustly pull the first usable image URL from an HTML snippet.
-    Handles: <img src>, lazy-load attrs, srcset on <img>/<source>, inline OG tag.
+    Collect image URLs embedded in HTML:
+    - <img src=...> and lazy attrs (data-src, data-original, data-lazy-src, data-image)
+    - srcset on <img>/<source> (largest)
+    - <meta property="og:image"> in snippet
+    - <link rel="image_src">
+    - JSON-LD image
+    Returns list of normalized URLs (may be empty).
     """
     if not html_str:
-        return None
-
+        return []
     s = html.unescape(html_str)
 
-    # 1) Standard src=
-    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', s, flags=re.I)
-    if m:
-        u = _abs_url(m.group(1), base)
-        _log("img.src", {"url": u, "base": base})
-        return u
+    out: List[str] = []
 
-    # 2) Lazy-load attributes
+    # <img src="...">
+    for m in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', s, flags=re.I):
+        out.append(m.group(1))
+
+    # lazy-load attributes
     for attr in ("data-src", "data-original", "data-lazy-src", "data-image"):
-        m = re.search(fr'<img[^>]+{attr}=["\']([^"\']+)["\']', s, flags=re.I)
-        if m:
-            u = _abs_url(m.group(1), base)
-            _log(f"img.{attr}", {"url": u, "base": base})
-            return u
+        for m in re.finditer(fr'<img[^>]+{attr}=["\']([^"\']+)["\']', s, flags=re.I):
+            out.append(m.group(1))
 
-    # 3) srcset on <img> or <source>
-    m = re.search(r'(?:<img|<source)[^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I)
-    if m:
+    # <img>/<source> srcset
+    for m in re.finditer(r'(?:<img|<source)[^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I):
         pick = _pick_from_srcset(m.group(1))
         if pick:
-            u = _abs_url(pick, base)
-            _log("srcset", {"url": u, "base": base})
-            return u
+            out.append(pick)
 
-    # 4) Inline OG tag (rare in feed snippets, but cheap)
-    m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', s, flags=re.I)
-    if m:
-        u = _abs_url(m.group(1), base)
-        _log("og:image(snippet)", {"url": u, "base": base})
-        return u
+    # <meta property="og:image" content="...">
+    for m in re.finditer(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', s, flags=re.I):
+        out.append(m.group(1))
 
-    return None
+    # <meta name="twitter:image" content="...">
+    for m in re.finditer(r'<meta[^>]+name=["\']twitter:image(?::src)?["\'][^>]+content=["\']([^"\']+)["\']', s, flags=re.I):
+        out.append(m.group(1))
 
-# ---------------------------------------------------------------------
-# Optional Open Graph fetch (allowlisted domains only)
-# ---------------------------------------------------------------------
+    # <link rel="image_src" href="...">
+    for m in re.finditer(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', s, flags=re.I):
+        out.append(m.group(1))
 
-def _http_get(url: str, timeout: float) -> Optional[bytes]:
-    """
-    Tiny GET with urllib (no extra deps), with basic safeguards.
-    """
-    try:
-        req = Request(url, headers={"User-Agent": "CinePulseBot/1.0 (+https://example)"})
-        ctx = ssl.create_default_context()
-        with urlopen(req, timeout=timeout, context=ctx) as resp:
-            if int(resp.getcode() or 200) >= 400:
-                return None
-            buf = resp.read(OG_MAX_BYTES + 1)
-            return buf[:OG_MAX_BYTES]
-    except (socket.timeout, Exception):
-        return None
+    # JSON-LD blocks with "image": "..."/["..."]
+    for m in re.finditer(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', s, flags=re.I | re.S):
+        try:
+            data = json.loads(m.group(1).strip())
+        except Exception:
+            continue
+        # handle object or list
+        objs = data if isinstance(data, list) else [data]
+        for obj in objs:
+            img = obj.get("image")
+            if isinstance(img, str):
+                out.append(img)
+            elif isinstance(img, list):
+                for it in img:
+                    if isinstance(it, str):
+                        out.append(it)
+                    elif isinstance(it, dict) and it.get("url"):
+                        out.append(it["url"])
+            elif isinstance(img, dict) and img.get("url"):
+                out.append(img["url"])
 
-def _extract_og_image(html_bytes: Optional[bytes], base: str) -> Optional[str]:
-    if not html_bytes:
-        return None
-    # work on text safely
-    try:
-        s = html_bytes.decode("utf-8", errors="ignore")
-    except Exception:
-        return None
+    # Normalize + filter
+    normed: List[str] = []
+    seen = set()
+    for u in out:
+        u2 = _norm(u, base)
+        if not u2:
+            continue
+        if not _looks_image(u2):
+            # accept if content-type is unknown but URL hints image via path pieces
+            # many sites output /og_image/… without ext; allow these if clearly image-like
+            if not re.search(r"(og|thumb|image|poster|photo)", u2, re.I):
+                continue
+        if u2 not in seen:
+            seen.add(u2)
+            normed.append(u2)
+    return normed
 
-    # og:image and twitter:image (secure_url too)
-    rx = re.compile(
-        r'<meta[^>]+(?:property|name)=["\'](?:og:image|og:image:secure_url|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']',
-        re.I,
-    )
-    m = rx.search(s)
-    if m:
-        u = _abs_url(m.group(1), base)
-        _log("og:image(page)", {"url": u, "base": base})
-        return u
-    return None
+def _enclosures_from_entry(entry: Dict[str, Any]) -> List[str]:
+    urls: List[str] = []
+    # feedparser puts both entry.enclosures and links rel=enclosure
+    for enc in entry.get("enclosures") or []:
+        u = enc.get("href") or enc.get("url")
+        typ = (enc.get("type") or "").lower()
+        if u and (typ.startswith("image/") or u.lower().split("?", 1)[0].endswith(IMG_EXTS)):
+            urls.append(u)
+    for l in entry.get("links") or []:
+        if isinstance(l, dict) and l.get("rel") == "enclosure":
+            u = l.get("href")
+            typ = (l.get("type") or "").lower()
+            if u and (typ.startswith("image/") or u.lower().split("?", 1)[0].endswith(IMG_EXTS)):
+                urls.append(u)
+    return urls
 
-def maybe_fetch_og_image(article_url: str) -> Optional[str]:
-    if not OG_FETCH or not article_url:
-        return None
-    dom = _domain(article_url)
-    if OG_ALLOWED_DOMAINS and dom not in OG_ALLOWED_DOMAINS:
-        _log("og_fetch_skipped_not_allowlisted", {"domain": dom})
-        return None
-    page = _http_get(article_url, OG_TIMEOUT)
-    if not page:
-        _log("og_fetch_failed", {"url": article_url})
-        return None
-    return _extract_og_image(page, article_url)
-
-# ---------------------------------------------------------------------
-# RSS entry → adapter event
-# ---------------------------------------------------------------------
-
-def _link_thumb(entry: dict) -> Optional[str]:
-    # feedparser media fields
+def _media_fields_from_entry(entry: Dict[str, Any]) -> List[str]:
+    urls: List[str] = []
     thumbs = entry.get("media_thumbnail") or entry.get("media:thumbnail")
-    if isinstance(thumbs, list) and thumbs:
-        url = thumbs[0].get("url") if isinstance(thumbs[0], dict) else None
-        if url:
-            return url
-
-    # media_content often holds images too
+    if isinstance(thumbs, list):
+        for t in thumbs:
+            if isinstance(t, dict) and t.get("url"):
+                urls.append(t["url"])
     mcont = entry.get("media_content") or entry.get("media:content")
     if isinstance(mcont, list):
         for it in mcont:
-            if isinstance(it, dict):
-                u = it.get("url") or it.get("href")
-                if u and (it.get("type", "").lower().startswith("image/") or str(u).lower().endswith(IMG_EXTS)):
-                    return u
-
-    # enclosure links
-    for l in entry.get("links") or []:
-        if isinstance(l, dict) and l.get("rel") == "enclosure" and (l.get("type", "") or "").lower().startswith("image/"):
-            return l.get("href")
-
+            if not isinstance(it, dict):
+                continue
+            u = it.get("url") or it.get("href")
+            typ = (it.get("type") or "").lower()
+            if u and (typ.startswith("image/") or u.lower().split("?", 1)[0].endswith(IMG_EXTS)):
+                urls.append(u)
     # simple custom fields
     for k in ("image", "picture", "logo", "thumbnail", "poster"):
         v = entry.get(k)
-        if isinstance(v, str) and v.startswith(("http://", "https://")):
-            return v
-        if isinstance(v, dict) and v.get("href"):
-            return v["href"]
-    return None
+        if isinstance(v, str):
+            urls.append(v)
+        elif isinstance(v, dict) and v.get("href"):
+            urls.append(v["href"])
+    return urls
 
-def _to_rfc3339(value) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    v = str(value).strip()
-    return v if v else None
+def _maybe_fetch_og(url: str) -> List[str]:
+    if not OG_FETCH:
+        return []
+    host = urlparse(url).netloc.lower().replace("www.", "")
+    if OG_ALLOWED_DOMAINS and not any(host.endswith(d) for d in OG_ALLOWED_DOMAINS):
+        return []
+    try:
+        try:
+            import requests  # type: ignore
+            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=OG_TIMEOUT)
+            if resp.status_code >= 400:
+                return []
+            html_text = resp.text
+        except Exception:
+            # urllib fallback
+            from urllib.request import Request, urlopen
+            req = Request(url, headers={"User-Agent": USER_AGENT})
+            with urlopen(req, timeout=OG_TIMEOUT) as r:  # nosec - controlled by allowlist
+                html_text = r.read().decode("utf-8", "ignore")
+    except Exception:
+        return []
 
-def rss_entry_to_event(entry: dict, feed_url: str, kind_hint: str = "news") -> Optional[dict]:
+    base = url
+    found = _first_img_from_html(html_text, base)
+    dlog("OG_FETCH", url, found[:3])
+    return found
+
+def _score_image_url(u: str) -> int:
     """
-    Convert a feedparser `entry` to your AdapterEventDict for normalization.
-    - Builds a strong thumb hint from media/enclosure/HTML.
-    - Optionally fetches OG image from the article page (allowlisted).
+    Heuristic score: prefer larger-looking URLs (via srcset choice already),
+    and deprioritize tiny/thumb/amp placeholders.
     """
-    title = entry.get("title", "") or ""
+    score = 0
+    # higher score for larger hints (1200, 1600, 2048 etc.)
+    for n in (4096, 3840, 2560, 2048, 1600, 1200, 1080, 1024, 800, 640):
+        if re.search(fr"[^0-9]{n}[^0-9]", u):
+            score += n // 100
+            break
+    # bumps for og/image keywords
+    if re.search(r"(og|open[-_]?graph|hero|feature|large|full|original)", u, re.I):
+        score += 50
+    if re.search(r"(thumb|thumbnail|small|mini|amp)", u, re.I):
+        score -= 40
+    return score
+
+def choose_best_image(candidates: Iterable[str]) -> Optional[str]:
+    best = None
+    best_score = -1 << 30
+    for u in candidates:
+        sc = _score_image_url(u)
+        if sc > best_score:
+            best, best_score = u, sc
+    return best
+
+# ============================ Main entry =============================
+
+def build_rss_payload(entry: Dict[str, Any], feed_url: str) -> Tuple[Dict[str, Any], Optional[str], List[str]]:
+    """
+    Build a comprehensive payload from a feed entry.
+    Returns: (payload_dict, thumb_hint, image_candidates)
+    The payload matches what your normalize() expects, plus extra fields that
+    you can ignore or log:
+      - content_html / description_html / summary (raw)
+      - enclosures (pass-through)
+      - inline_images (from HTML blocks)
+      - og_image (if OG_FETCH enabled and page probe used)
+      - image_candidates (union of all sources; not required downstream)
+    """
+    # URL and HTML fields
     link = entry.get("link") or entry.get("id") or ""
-    if not link:
-        return None
-
-    source_domain = _domain(entry.get("source", {}).get("href") or feed_url)
-    pub_norm = _to_rfc3339(
-        entry.get("published_parsed")
-        or entry.get("updated_parsed")
-        or entry.get("published")
-        or entry.get("updated")
-    )
-
-    # Prefer full content HTML if present, else summary/description
+    summary_html = entry.get("summary_detail", {}).get("value") or entry.get("summary") or entry.get("description") or ""
     content_html = ""
     content = entry.get("content")
     if isinstance(content, list) and content:
@@ -244,55 +284,67 @@ def rss_entry_to_event(entry: dict, feed_url: str, kind_hint: str = "news") -> O
         if isinstance(first, dict):
             content_html = first.get("value") or ""
 
-    description_html = (
-        entry.get("summary_detail", {}).get("value")
-        or entry.get("summary")
-        or entry.get("description")
-        or ""
-    )
-
-    # Strong thumbnail hint
+    # Collect candidates from various sources
+    cands: List[str] = []
     base = link or feed_url
-    thumb = _link_thumb(entry)
 
-    if not thumb:
-        # Try pulling from HTML blocks
-        for key in ("content_html", "summary_detail", "summary", "description", "description_html"):
-            s = (
-                content_html if key == "content_html"
-                else entry.get("summary_detail", {}).get("value") if key == "summary_detail"
-                else description_html if key in ("summary", "description", "description_html")
-                else None
-            )
-            u = _first_img_from_html(s, base)
-            if u:
-                thumb = u
-                break
+    # media_* blocks and custom fields
+    for u in _media_fields_from_entry(entry):
+        u2 = _norm(u, base)
+        if u2:
+            cands.append(u2)
 
-    # (Optional) OG fetch from article page
-    if not thumb:
-        og = maybe_fetch_og_image(link)
-        if og:
-            thumb = og
+    # enclosures and rel=enclosure links
+    for u in _enclosures_from_entry(entry):
+        u2 = _norm(u, base)
+        if u2:
+            cands.append(u2)
 
-    # Normalize protocol and absoluteness for the hint
-    thumb = _to_https(_abs_url(thumb, base)) if thumb else None
+    # from HTML blocks
+    inline_imgs: List[str] = []
+    for html_block in (content_html, summary_html):
+        inline_imgs += _first_img_from_html(html_block, base)
+    for u in inline_imgs:
+        u2 = _norm(u, base)
+        if u2:
+            cands.append(u2)
 
-    ev = {
-        "source": f"rss:{source_domain}",
-        "source_event_id": "",  # fill in caller with hash if desired
-        "title": title,
-        "kind": kind_hint,
-        "published_at": pub_norm,
-        "thumb_url": thumb,
-        "payload": {
-            "url": link,
-            "feed": feed_url,
-            "content_html": content_html,
-            "description_html": description_html,
-            "summary": entry.get("summary") or "",
-            "enclosures": entry.get("enclosures") or [],
-        },
+    # normalize, unique, and filter to images
+    uniq: List[str] = []
+    seen = set()
+    for u in cands:
+        if not u:
+            continue
+        if u.lower().split("?", 1)[0].endswith(IMG_EXTS) or re.search(r"(og|thumb|image|poster|photo)", u, re.I):
+            if u not in seen:
+                uniq.append(u); seen.add(u)
+
+    # Optional OG fetch if still empty
+    og_image: Optional[str] = None
+    if not uniq and OG_FETCH and link:
+        page_imgs = _maybe_fetch_og(to_https(link) or link)
+        for u in page_imgs:
+            u2 = _norm(u, base)
+            if u2 and (u2 not in seen):
+                uniq.append(u2); seen.add(u2)
+        if page_imgs:
+            og_image = page_imgs[0]
+
+    # Thumb hint = best candidate
+    thumb_hint = choose_best_image(uniq) if uniq else None
+
+    payload: Dict[str, Any] = {
+        "url": to_https(abs_url(link, feed_url)) or link,
+        "feed": feed_url,
+        "content_html": content_html or "",
+        "description_html": summary_html or "",
+        "summary": entry.get("summary") or "",
+        "enclosures": entry.get("enclosures") or [],
+        # extras (not required by downstream, useful for audits)
+        "inline_images": inline_imgs or None,
+        "og_image": og_image,
+        "image_candidates": uniq or None,
     }
-    _log("rss_entry_to_event", {"title": title, "thumb": thumb, "domain": source_domain})
-    return ev
+
+    dlog("built_payload", {"url": payload["url"], "thumb_hint": thumb_hint, "candidates": (uniq[:3] if uniq else [])})
+    return payload, thumb_hint, uniq
