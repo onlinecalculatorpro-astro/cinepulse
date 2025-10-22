@@ -9,7 +9,7 @@ import re
 import time as _time
 from datetime import datetime, timezone
 from typing import Optional, Union, TypedDict, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 import feedparser
 from redis import Redis
@@ -54,7 +54,7 @@ class AdapterEventDict(TypedDict, total=False):
 # Core cues
 TRAILER_RE = re.compile(r"\b(trailer|teaser)\b", re.I)
 
-# OTT: keep broad list; we just need detection for classification
+# OTT: broad list for detection
 _OTT_PROVIDERS = [
     "Netflix", "Prime Video", "Amazon Prime Video", "Disney\\+ Hotstar", "Hotstar",
     "JioCinema", "ZEE5", "Zee5", "SonyLIV", "Sony LIV", "Hulu", "Max",
@@ -158,17 +158,28 @@ def _extract_video_id(entry: dict) -> Optional[str]:
     return None
 
 def _link_thumb(entry: dict) -> Optional[str]:
+    # feedparser media fields
     thumbs = entry.get("media_thumbnail") or entry.get("media:thumbnail")
     if isinstance(thumbs, list) and thumbs:
         url = thumbs[0].get("url") if isinstance(thumbs[0], dict) else None
         if url:
             return url
+    # media_content often holds images too
+    mcont = entry.get("media_content") or entry.get("media:content")
+    if isinstance(mcont, list):
+        for it in mcont:
+            if isinstance(it, dict):
+                u = it.get("url") or it.get("href")
+                if u and (it.get("type","").startswith("image/") or u.lower().endswith((".jpg",".jpeg",".png",".webp",".gif",".avif",".bmp"))):
+                    return u
+    # enclosure links
     for l in entry.get("links") or []:
         if isinstance(l, dict) and l.get("rel") == "enclosure" and l.get("type", "").startswith("image/"):
             return l.get("href")
-    for k in ("image", "picture", "logo"):
+    # simple custom fields
+    for k in ("image", "picture", "logo", "thumbnail", "poster"):
         v = entry.get(k)
-        if isinstance(v, str) and v.startswith("http"):
+        if isinstance(v, str) and v.startswith(("http://","https://")):
             return v
         if isinstance(v, dict) and v.get("href"):
             return v["href"]
@@ -467,12 +478,76 @@ def _industry_tags(source: str, source_domain: Optional[str], title: str, body_t
 
     return [t for t in INDUSTRY_ORDER if t in cand]
 
+# ------------------- Image/link normalization helpers -----------------
+
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp")
+_YT_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
+
+def _abs_url(url: str | None, base: str) -> str | None:
+    if not url:
+        return None
+    u = urlparse(url)
+    if not u.scheme:
+        return urljoin(base, url)
+    return url
+
+def _to_https(url: str | None) -> str | None:
+    if not url:
+        return None
+    if url.startswith("http://"):
+        return "https://" + url[7:]
+    return url
+
+def _first_img_from_html(html_str: str | None, base: str) -> str | None:
+    if not html_str:
+        return None
+    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html_str, flags=re.I)
+    if not m:
+        return None
+    return _abs_url(html.unescape(m.group(1)), base)
+
+def _youtube_thumb(link: str | None) -> str | None:
+    if not link:
+        return None
+    m = _YT_ID.search(link)
+    if not m:
+        return None
+    vid = m.group(1)
+    return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+
+def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]) -> Optional[str]:
+    cand: list[str] = []
+    if thumb_hint:
+        cand.append(thumb_hint)
+
+    # RSS: enclosures
+    for enc in (payload.get("enclosures") or []):
+        url = enc.get("href") or enc.get("url")
+        typ = (enc.get("type") or "").lower()
+        if url and (typ.startswith("image/") or url.lower().endswith(IMG_EXTS)):
+            cand.append(url)
+
+    # HTML blocks
+    for key in ("content_html", "description_html", "summary"):
+        u = _first_img_from_html(payload.get(key), base)
+        if u:
+            cand.append(u)
+
+    # Normalize and return first viable
+    for u in cand:
+        u = _abs_url(u, base)
+        u = _to_https(u)
+        if u:
+            return u
+    return None
+
 # ===================== Normalizer (writes to feed) ====================
 
 def normalize_event(event: AdapterEventDict) -> dict:
     """
     Converts adapter events into the canonical feed shape and appends to the
     Redis LIST (newest-first). Dedupes on <source>:<source_event_id>.
+    Ensures: link != null and image fields (image/thumbnail/poster/media) are populated when possible.
     """
     conn = _redis()
 
@@ -486,33 +561,35 @@ def normalize_event(event: AdapterEventDict) -> dict:
     kind, rd_iso, provider_from_title, is_theatrical, is_upcoming = _classify(title, fallback=base_fallback)
 
     published_at = _to_rfc3339(event.get("published_at"))
-    thumb_url = event.get("thumb_url")
-    if source == "youtube" and not thumb_url and src_id:
-        thumb_url = f"https://i.ytimg.com/vi/{src_id}/hqdefault.jpg"
-
-    # Build text inputs for summary + canonical URL/domain
     payload = event.get("payload") or {}
-    url = None
-    source_domain = None
-    raw_text = ""
-    ott_platform: Optional[str] = None
 
+    # Build canonical link + domain + raw text
     if source == "youtube":
-        url = payload.get("watch_url") or (f"https://www.youtube.com/watch?v={src_id}" if src_id else None)
+        link = payload.get("watch_url") or (f"https://www.youtube.com/watch?v={src_id}" if src_id else None)
         source_domain = "youtube.com"
         desc = payload.get("description") or ""
         raw_text = _strip_html(desc)
-        provider_detected = _detect_ott_provider(f"{title}\n{desc}")
-        ott_platform = provider_from_title or provider_detected
+        ott_platform = provider_from_title or _detect_ott_provider(f"{title}\n{desc}")
+        # thumbnail fallback for YT
+        thumb_url = event.get("thumb_url") or _youtube_thumb(link)
     else:
-        # rss:<domain>
-        url = payload.get("url")
-        source_domain = _domain(url or source.replace("rss:", ""))
+        link = payload.get("url")
+        source_domain = _domain(link or source.replace("rss:", ""))
         raw_html = payload.get("content_html") or payload.get("description_html") or ""
         raw_sum = payload.get("summary") or ""
         body = raw_html or raw_sum
         raw_text = _strip_html(body)
         ott_platform = provider_from_title
+        thumb_url = event.get("thumb_url")
+
+    # Normalize link
+    link = _to_https(_abs_url(link, payload.get("feed") or link or "")) or ""
+    base_for_imgs = link or (payload.get("feed") or "")
+
+    # Resolve a dependable image
+    image_url = _pick_image_from_payload(payload, base_for_imgs, thumb_url)
+    if not image_url and source == "youtube":
+        image_url = _youtube_thumb(link)
 
     # Compose one short paragraph "crux"
     summary_text = _select_sentences_for_summary(title, raw_text)
@@ -527,17 +604,24 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "summary": summary_text or None,
         "published_at": published_at,
         "source": source,
-        "thumb_url": thumb_url,
+        "thumb_url": image_url or thumb_url,       # keep legacy field populated
         # computed extras for tabs/filters
         "release_date": rd_iso,
         "is_theatrical": True if is_theatrical else None,
         "is_upcoming": True if is_upcoming else None,
         "normalized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         # new enrichments used by API/UI
-        "url": url,
+        "url": link or None,
         "source_domain": source_domain,
         "ott_platform": ott_platform,
         "tags": tags or None,
+        # canonical image fields expected by web app
+        "image": image_url,
+        "thumbnail": image_url,
+        "poster": image_url,
+        "media": image_url,
+        # pass through enclosures for transparency (RSS)
+        "enclosures": payload.get("enclosures") or None,
     }
 
     # Deduplicate on story id: only push if brand-new.
@@ -745,6 +829,7 @@ def rss_poll(
                 "content_html": content_html,
                 "description_html": description_html,
                 "summary": entry.get("summary") or "",
+                "enclosures": entry.get("enclosures") or [],
             },
         }
 
