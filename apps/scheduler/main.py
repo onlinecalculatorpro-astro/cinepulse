@@ -4,13 +4,13 @@ import time
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, List, Optional, Tuple, Dict
+from typing import Iterable, List, Optional, Tuple, Dict, Any
 from urllib.parse import urlparse
 
 # Import polling functions implemented in workers
 from apps.workers.jobs import youtube_rss_poll, rss_poll
 
-# Optional YAML (for infra/source.yml). Falls back to env-only if missing.
+# Optional YAML (for /app/source.yml). Falls back to env-only if missing.
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
@@ -98,6 +98,111 @@ class Config:
     throttle_per_domain: Dict[str, int]
 
 
+# ------------------------- multi-group helpers -------------------------------
+
+# Built-in mapping for RSS-like top-level groups -> default kind_hint
+# (Can be extended without changing code elsewhere.)
+RSS_GROUP_KIND_DEFAULTS: Dict[str, str] = {
+    "rss": "",               # respect feed.kind_hint or fallback to "news"
+    "news": "news",
+    "trailers": "trailer",
+    "ott": "ott",
+    "in_theatres": "in_theatres",
+    "coming_soon": "coming_soon",
+}
+
+def _collect_group_feeds(
+    top: Dict[str, Any],
+    group_name: str,
+    default_kind: str,
+    global_default_kind: str = "news",
+) -> List[RSSSpec]:
+    """
+    Collect feeds from a single group. Supports BOTH of these shapes:
+
+    A) Simple:
+       group_name:
+         feeds:
+           - url: https://...
+             enabled: true
+             kind_hint: trailer   # optional, overrides group default
+             max_items_per_poll: 5
+
+    B) Bucketed (legacy under `rss`):
+       group_name:
+         defaults:
+           kind_hint: news
+           max_items_per_poll: 5
+         buckets:
+           some_bucket:
+             enabled: true
+             feeds:
+               - url: https://...
+                 enabled: true
+                 kind_hint: ott
+                 max_items_per_poll: 3
+    """
+    out: List[RSSSpec] = []
+
+    block = top.get(group_name)
+    if not isinstance(block, dict):
+        return out
+
+    # ---- Bucketed form (legacy)
+    if "buckets" in block and isinstance(block.get("buckets"), dict):
+        defaults = block.get("defaults") or {}
+        def_kind = str(defaults.get("kind_hint") or (default_kind or global_default_kind) or "news")
+        def_max = defaults.get("max_items_per_poll")
+
+        buckets = block.get("buckets") or {}
+        # Optional allow-list from scheduler config (kept for backward compat)
+        sched = (top.get("scheduler") or {})
+        enabled_list = sched.get("rss_buckets_enabled")
+        enabled_bucket_names = set(enabled_list) if enabled_list else set(buckets.keys())
+
+        for bname, bucket in buckets.items():
+            if not isinstance(bucket, dict):
+                continue
+            if not bucket.get("enabled", True):
+                continue
+            if bname not in enabled_bucket_names:
+                continue
+            feeds = bucket.get("feeds") or []
+            for feed in feeds:
+                if not isinstance(feed, dict) or not feed.get("enabled", True):
+                    continue
+                url = (feed.get("url") or "").strip()
+                if not url:
+                    continue
+                kind = str(feed.get("kind_hint") or def_kind or "news")
+                mi = feed.get("max_items_per_poll", def_max)
+                out.append(
+                    RSSSpec(url=url, kind_hint=kind, max_items=int(mi) if mi else None)
+                )
+        return out
+
+    # ---- Simple form
+    feeds = block.get("feeds") or []
+    if not isinstance(feeds, list):
+        return out
+
+    defaults = block.get("defaults") or {}
+    def_kind = str(defaults.get("kind_hint") or (default_kind or global_default_kind) or "news")
+    def_max = defaults.get("max_items_per_poll")
+
+    for feed in feeds:
+        if not isinstance(feed, dict) or not feed.get("enabled", True):
+            continue
+        url = (feed.get("url") or "").strip()
+        if not url:
+            continue
+        kind = str(feed.get("kind_hint") or def_kind or "news")
+        mi = feed.get("max_items_per_poll", def_max)
+        out.append(RSSSpec(url=url, kind_hint=kind, max_items=int(mi) if mi else None))
+
+    return out
+
+
 # ----------------------------- config loader ---------------------------------
 
 def _read_config() -> Config:
@@ -124,7 +229,7 @@ def _read_config() -> Config:
 
     # Optional YAML sources file
     use_sources_file = os.getenv("USE_SOURCES_FILE", "").lower() in ("1", "true", "yes")
-    sources_path = os.getenv("SOURCES_FILE") or "infra/source.yml"
+    sources_path = os.getenv("SOURCES_FILE") or "/app/source.yml"
 
     if use_sources_file and yaml and os.path.exists(sources_path):
         try:
@@ -138,6 +243,10 @@ def _read_config() -> Config:
             per_run = (sched.get("per_run_limits") or {})
             per_run_limit_yt = per_run.get("youtube_channels")
             per_run_limit_rss = per_run.get("rss_feeds")
+
+            # Optional allow-list of groups (if you want to enable a subset)
+            groups_enabled: Optional[List[str]] = sched.get("rss_groups_enabled")
+            groups_enabled_set = set(groups_enabled) if groups_enabled else None
 
             # Throttle map
             throttle = (S.get("throttle") or {}).get("per_domain_min_seconds") or {}
@@ -159,33 +268,33 @@ def _read_config() -> Config:
                 if not cid:
                     continue
                 mi = ch.get("max_items_per_poll", yt_def_max)
-                file_yt.append(YTSpec(channel_id=cid, max_items=int(mi) if mi else None))
+                file_yt.append(YTSpec(channel_id=str(cid), max_items=int(mi) if mi else None))
             if file_yt:
                 yt_specs = file_yt  # prefer file over env
 
-            # RSS buckets
-            rss_cfg = S.get("rss") or {}
-            rss_def = (rss_cfg.get("defaults") or {})
-            rss_def_max = rss_def.get("max_items_per_poll")
-            buckets = (rss_cfg.get("buckets") or {})
-
-            # If YAML lists explicit enabled buckets, honor that; else take all enabled
-            enabled_bucket_names = set((sched.get("rss_buckets_enabled") or buckets.keys()))
+            # ---- Multi-group RSS collection (supports both simple & bucketed)
             file_rss: List[RSSSpec] = []
-            for bname, bucket in buckets.items():
-                if not bucket.get("enabled", True):
+
+            # 1) Gather from the legacy/combined `rss` block (bucketed or simple)
+            file_rss.extend(_collect_group_feeds(S, "rss", default_kind=RSS_GROUP_KIND_DEFAULTS["rss"]))
+
+            # 2) Gather from well-known extra groups
+            for gname, gdefault in RSS_GROUP_KIND_DEFAULTS.items():
+                if gname == "rss":
                     continue
-                if bname not in enabled_bucket_names:
+                if groups_enabled_set is not None and gname not in groups_enabled_set:
                     continue
-                for feed in bucket.get("feeds", []):
-                    if not feed.get("enabled", True):
+                file_rss.extend(_collect_group_feeds(S, gname, default_kind=gdefault))
+
+            # If a custom/unknown group appears in YAML, also accept it, using "news" kind by default.
+            for key, val in S.items():
+                if key in RSS_GROUP_KIND_DEFAULTS or key in ("youtube", "scheduler", "throttle"):
+                    continue
+                if isinstance(val, dict) and ("feeds" in val or "buckets" in val):
+                    if groups_enabled_set is not None and key not in groups_enabled_set:
                         continue
-                    url = feed.get("url")
-                    if not url:
-                        continue
-                    kind = feed.get("kind_hint") or rss_def.get("kind_hint", "news")
-                    mi = feed.get("max_items_per_poll", rss_def_max)
-                    file_rss.append(RSSSpec(url=url, kind_hint=kind, max_items=int(mi) if mi else None))
+                    file_rss.extend(_collect_group_feeds(S, key, default_kind="news"))
+
             if file_rss:
                 rss_specs = file_rss  # prefer file over env
 
