@@ -9,11 +9,17 @@ import re
 import time as _time
 from datetime import datetime, timezone
 from typing import Optional, Union, TypedDict, Tuple
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 
 import feedparser
 from redis import Redis
 from rq import Queue
+
+# NEW: comprehensive feed extraction
+from apps.workers.extractors import (
+    build_rss_payload,        # (payload, thumb_hint, candidates)
+    choose_best_image,        # choose best image from candidate list
+)
 
 __all__ = ["youtube_rss_poll", "rss_poll", "normalize_event"]
 
@@ -155,34 +161,6 @@ def _extract_video_id(entry: dict) -> Optional[str]:
     link = (entry.get("link") or "") + " "
     if "watch?v=" in link:
         return link.split("watch?v=", 1)[1].split("&", 1)[0]
-    return None
-
-def _link_thumb(entry: dict) -> Optional[str]:
-    # feedparser media fields
-    thumbs = entry.get("media_thumbnail") or entry.get("media:thumbnail")
-    if isinstance(thumbs, list) and thumbs:
-        url = thumbs[0].get("url") if isinstance(thumbs[0], dict) else None
-        if url:
-            return url
-    # media_content often holds images too
-    mcont = entry.get("media_content") or entry.get("media:content")
-    if isinstance(mcont, list):
-        for it in mcont:
-            if isinstance(it, dict):
-                u = it.get("url") or it.get("href")
-                if u and (it.get("type", "").startswith("image/") or u.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp"))):
-                    return u
-    # enclosure links
-    for l in entry.get("links") or []:
-        if isinstance(l, dict) and l.get("rel") == "enclosure" and l.get("type", "").startswith("image/"):
-            return l.get("href")
-    # simple custom fields
-    for k in ("image", "picture", "logo", "thumbnail", "poster"):
-        v = entry.get(k)
-        if isinstance(v, str) and v.startswith(("http://", "https://")):
-            return v
-        if isinstance(v, dict) and v.get("href"):
-            return v["href"]
     return None
 
 def _safe_job_id(prefix: str, *parts: str) -> str:
@@ -478,97 +456,9 @@ def _industry_tags(source: str, source_domain: Optional[str], title: str, body_t
 
     return [t for t in INDUSTRY_ORDER if t in cand]
 
-# ------------------- Image/link normalization helpers -----------------
+# ------------------- Image helpers & YT fallback ----------------------
 
-DEBUG_IMAGES = os.getenv("DEBUG_IMAGES", "0") not in ("0", "", "false", "False")
-
-def _log_img(reason: str, url: str | None, ctx: dict | None = None) -> None:
-    if DEBUG_IMAGES:
-        print(f"[image] {reason}: {url} | {ctx or {}}")
-
-IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp")
 _YT_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
-
-def _abs_url(url: str | None, base: str) -> str | None:
-    if not url:
-        return None
-    u = urlparse(url)
-    if not u.scheme:
-        return urljoin(base, url)
-    return url
-
-def _to_https(url: str | None) -> str | None:
-    if not url:
-        return None
-    if url.startswith("//"):           # handle protocol-relative URLs
-        return "https:" + url
-    if url.startswith("http://"):
-        return "https://" + url[7:]
-    return url
-
-def _pick_from_srcset(srcset: str) -> Optional[str]:
-    best_url, best_w = None, -1
-    for part in srcset.split(","):
-        tokens = part.strip().split()
-        if not tokens:
-            continue
-        u = tokens[0]
-        w = 0
-        if len(tokens) > 1 and tokens[1].endswith("w"):
-            try:
-                w = int(re.sub(r"\D", "", tokens[1]))
-            except Exception:
-                w = 0
-        if w >= best_w:
-            best_url, best_w = u, w
-    return best_url
-
-def _first_img_from_html(html_str: str | None, base: str) -> str | None:
-    """
-    Extract first usable image URL from an HTML snippet.
-    Handles:
-      - <img src="...">
-      - <img data-src|data-original|data-lazy-src|data-image="...">
-      - <img>/<source> with srcset="url 640w, url2 1280w" (picks largest width)
-      - <meta property="og:image" content="..."> inside the snippet (rare)
-    """
-    if not html_str:
-        return None
-
-    s = html.unescape(html_str)
-
-    # 1) Standard src= on <img>
-    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', s, flags=re.I)
-    if m:
-        u = _abs_url(m.group(1), base)
-        _log_img("img.src", u, {"base": base})
-        return u
-
-    # 2) Common lazy-load attributes
-    for attr in ("data-src", "data-original", "data-lazy-src", "data-image"):
-        m = re.search(fr'<img[^>]+{attr}=["\']([^"\']+)["\']', s, flags=re.I)
-        if m:
-            u = _abs_url(m.group(1), base)
-            _log_img(f"img.{attr}", u, {"base": base})
-            return u
-
-    # 3) srcset on <img> or <source>
-    m = re.search(r'(?:<img|<source)[^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I)
-    if m:
-        pick = _pick_from_srcset(m.group(1))
-        if pick:
-            u = _abs_url(pick, base)
-            _log_img("srcset", u, {"base": base})
-            return u
-
-    # 4) OG tag inside the snippet (some feeds inline it)
-    m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', s, flags=re.I)
-    if m:
-        u = _abs_url(m.group(1), base)
-        _log_img("og:image(meta in snippet)", u, {"base": base})
-        return u
-
-    return None
 
 def _youtube_thumb(link: str | None) -> str | None:
     if not link:
@@ -579,36 +469,33 @@ def _youtube_thumb(link: str | None) -> str | None:
     vid = m.group(1)
     return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
 
-def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]) -> Optional[str]:
+def _pick_image_from_payload(payload: dict, thumb_hint: Optional[str], source: str, link: str | None) -> Optional[str]:
+    """
+    Decide thumbnail using: explicit thumb_hint (from extractor), image_candidates,
+    og_image, inline images, then YT fallback when applicable.
+    """
     cand: list[str] = []
+
     if thumb_hint:
-        _log_img("thumb_hint", thumb_hint)
         cand.append(thumb_hint)
 
-    # RSS: enclosures
-    for enc in (payload.get("enclosures") or []):
-        url = enc.get("href") or enc.get("url")
-        typ = (enc.get("type") or "").lower()
-        if url and (typ.startswith("image/") or url.lower().endswith(IMG_EXTS)):
-            _log_img("enclosure", url)
-            cand.append(url)
+    # candidates discovered by extractor (already normalized)
+    cand += list(payload.get("image_candidates") or [])
 
-    # HTML blocks
-    for key in ("content_html", "description_html", "summary"):
-        u = _first_img_from_html(payload.get(key), base)
-        if u:
-            _log_img(f"html.{key}", u)
-            cand.append(u)
+    # og_image is a strong hint
+    og = payload.get("og_image")
+    if og:
+        cand.append(og)
 
-    # Normalize and return first viable
-    for u in cand:
-        u = _abs_url(u, base)
-        u = _to_https(u)
-        if u:
-            _log_img("chosen", u, {"base": base})
-            return u
-    _log_img("no_image_found", None, {"base": base})
-    return None
+    # inline images from feed HTML (if any were captured)
+    cand += list(payload.get("inline_images") or [])
+
+    chosen = choose_best_image(cand) if cand else None
+
+    if not chosen and source == "youtube":
+        chosen = _youtube_thumb(link)
+
+    return chosen
 
 # ===================== Normalizer (writes to feed) ====================
 
@@ -639,8 +526,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         desc = payload.get("description") or ""
         raw_text = _strip_html(desc)
         ott_platform = provider_from_title or _detect_ott_provider(f"{title}\n{desc}")
-        # thumbnail fallback for YT
-        thumb_url = event.get("thumb_url") or _youtube_thumb(link)
+        thumb_hint = event.get("thumb_url") or _youtube_thumb(link)
     else:
         link = payload.get("url")
         source_domain = _domain(link or source.replace("rss:", ""))
@@ -649,16 +535,10 @@ def normalize_event(event: AdapterEventDict) -> dict:
         body = raw_html or raw_sum
         raw_text = _strip_html(body)
         ott_platform = provider_from_title
-        thumb_url = event.get("thumb_url")
+        thumb_hint = event.get("thumb_url")
 
-    # Normalize link
-    link = _to_https(_abs_url(link, payload.get("feed") or link or "")) or ""
-    base_for_imgs = link or (payload.get("feed") or "")
-
-    # Resolve a dependable image
-    image_url = _pick_image_from_payload(payload, base_for_imgs, thumb_url)
-    if not image_url and source == "youtube":
-        image_url = _youtube_thumb(link)
+    # Resolve a dependable image (use extractor signals)
+    image_url = _pick_image_from_payload(payload, thumb_hint, source, link)
 
     # Compose one short paragraph "crux"
     summary_text = _select_sentences_for_summary(title, raw_text)
@@ -673,7 +553,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "summary": summary_text or None,
         "published_at": published_at,
         "source": source,
-        "thumb_url": image_url or thumb_url,       # keep legacy field populated
+        "thumb_url": image_url or thumb_hint,       # keep legacy field populated
         # computed extras for tabs/filters
         "release_date": rd_iso,
         "is_theatrical": True if is_theatrical else None,
@@ -871,19 +751,8 @@ def rss_poll(
         # classify with hint as fallback
         kind, _, _, _, _ = _classify(title, fallback=kind_hint)
 
-        # Prefer full content HTML if present, else summary/description
-        content_html = ""
-        content = entry.get("content")
-        if isinstance(content, list) and content:
-            first = content[0]
-            if isinstance(first, dict):
-                content_html = first.get("value") or ""
-        description_html = (
-            entry.get("summary_detail", {}).get("value")
-            or entry.get("summary")
-            or entry.get("description")
-            or ""
-        )
+        # Use the new comprehensive extractor
+        payload, thumb_hint, _cands = build_rss_payload(entry, url)
 
         ev: AdapterEventDict = {
             "source": f"rss:{source_domain}",
@@ -891,15 +760,8 @@ def rss_poll(
             "title": title,
             "kind": kind,
             "published_at": pub_norm,
-            "thumb_url": _link_thumb(entry),
-            "payload": {
-                "url": link,
-                "feed": url,
-                "content_html": content_html,
-                "description_html": description_html,
-                "summary": entry.get("summary") or "",
-                "enclosures": entry.get("enclosures") or [],
-            },
+            "thumb_url": thumb_hint,     # best hint from extractor
+            "payload": payload,          # contains url/feed/html/enclosures/+extras
         }
 
         jid = _safe_job_id("normalize", "rss", source_domain, src_id[:10])
