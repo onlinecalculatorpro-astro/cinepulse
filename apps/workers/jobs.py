@@ -480,6 +480,12 @@ def _industry_tags(source: str, source_domain: Optional[str], title: str, body_t
 
 # ------------------- Image/link normalization helpers -----------------
 
+DEBUG_IMAGES = os.getenv("DEBUG_IMAGES", "0") not in ("0", "", "false", "False")
+
+def _log_img(reason: str, url: str | None, ctx: dict | None = None) -> None:
+    if DEBUG_IMAGES:
+        print(f"[image] {reason}: {url} | {ctx or {}}")
+
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp")
 _YT_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
 
@@ -494,9 +500,28 @@ def _abs_url(url: str | None, base: str) -> str | None:
 def _to_https(url: str | None) -> str | None:
     if not url:
         return None
+    if url.startswith("//"):           # handle protocol-relative URLs
+        return "https:" + url
     if url.startswith("http://"):
         return "https://" + url[7:]
     return url
+
+def _pick_from_srcset(srcset: str) -> Optional[str]:
+    best_url, best_w = None, -1
+    for part in srcset.split(","):
+        tokens = part.strip().split()
+        if not tokens:
+            continue
+        u = tokens[0]
+        w = 0
+        if len(tokens) > 1 and tokens[1].endswith("w"):
+            try:
+                w = int(re.sub(r"\D", "", tokens[1]))
+            except Exception:
+                w = 0
+        if w >= best_w:
+            best_url, best_w = u, w
+    return best_url
 
 def _first_img_from_html(html_str: str | None, base: str) -> str | None:
     """
@@ -504,8 +529,8 @@ def _first_img_from_html(html_str: str | None, base: str) -> str | None:
     Handles:
       - <img src="...">
       - <img data-src|data-original|data-lazy-src|data-image="...">
-      - <img/src or <source> with srcset="url 640w, url2 1280w" (picks first URL)
-      - <meta property="og:image" content="..."> inside the snippet (rare but cheap)
+      - <img>/<source> with srcset="url 640w, url2 1280w" (picks largest width)
+      - <meta property="og:image" content="..."> inside the snippet (rare)
     """
     if not html_str:
         return None
@@ -515,26 +540,33 @@ def _first_img_from_html(html_str: str | None, base: str) -> str | None:
     # 1) Standard src= on <img>
     m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', s, flags=re.I)
     if m:
-        return _abs_url(m.group(1), base)
+        u = _abs_url(m.group(1), base)
+        _log_img("img.src", u, {"base": base})
+        return u
 
     # 2) Common lazy-load attributes
     for attr in ("data-src", "data-original", "data-lazy-src", "data-image"):
         m = re.search(fr'<img[^>]+{attr}=["\']([^"\']+)["\']', s, flags=re.I)
         if m:
-            return _abs_url(m.group(1), base)
+            u = _abs_url(m.group(1), base)
+            _log_img(f"img.{attr}", u, {"base": base})
+            return u
 
     # 3) srcset on <img> or <source>
     m = re.search(r'(?:<img|<source)[^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I)
     if m:
-        srcset = m.group(1)
-        first = srcset.split(",")[0].strip().split()[0]  # "URL 640w" -> "URL"
-        if first:
-            return _abs_url(first, base)
+        pick = _pick_from_srcset(m.group(1))
+        if pick:
+            u = _abs_url(pick, base)
+            _log_img("srcset", u, {"base": base})
+            return u
 
     # 4) OG tag inside the snippet (some feeds inline it)
     m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', s, flags=re.I)
     if m:
-        return _abs_url(m.group(1), base)
+        u = _abs_url(m.group(1), base)
+        _log_img("og:image(meta in snippet)", u, {"base": base})
+        return u
 
     return None
 
@@ -550,6 +582,7 @@ def _youtube_thumb(link: str | None) -> str | None:
 def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]) -> Optional[str]:
     cand: list[str] = []
     if thumb_hint:
+        _log_img("thumb_hint", thumb_hint)
         cand.append(thumb_hint)
 
     # RSS: enclosures
@@ -557,12 +590,14 @@ def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]
         url = enc.get("href") or enc.get("url")
         typ = (enc.get("type") or "").lower()
         if url and (typ.startswith("image/") or url.lower().endswith(IMG_EXTS)):
+            _log_img("enclosure", url)
             cand.append(url)
 
     # HTML blocks
     for key in ("content_html", "description_html", "summary"):
         u = _first_img_from_html(payload.get(key), base)
         if u:
+            _log_img(f"html.{key}", u)
             cand.append(u)
 
     # Normalize and return first viable
@@ -570,7 +605,9 @@ def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]
         u = _abs_url(u, base)
         u = _to_https(u)
         if u:
+            _log_img("chosen", u, {"base": base})
             return u
+    _log_img("no_image_found", None, {"base": base})
     return None
 
 # ===================== Normalizer (writes to feed) ====================
