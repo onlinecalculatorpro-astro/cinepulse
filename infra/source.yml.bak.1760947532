@@ -1,0 +1,222 @@
+meta:
+  regions: ["IN"]
+  share_base_url: "https://cinepusle.netlify.app/#/s"
+
+throttle:
+  per_domain_min_seconds:
+    default: 300
+    youtube.com: 300
+    googlevideo.com: 300
+    bollywoodhungama.com: 600
+    filmcompanion.in: 600
+    pinkvilla.com: 600
+    koimoi.com: 600
+    tellyupdates.com: 600
+
+youtube:
+  defaults:
+    enabled: true
+    kind_hint: trailer
+    max_items_per_poll: 20
+    published_after_hours: 72
+    language: "en"
+    region: "IN"
+  channels:
+    - name: "T-Series"
+      enabled: true
+      channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+    - name: "YRF"
+      enabled: true
+      channel_id: "UCI5q9xeOp2-1bV7xEtkKgzA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+    - name: "Zee Studios"
+      enabled: true
+      channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+    - name: "Dharma Productions"
+      enabled: true
+      channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+rss:
+  defaults:
+    enabled: true
+    kind_hint: news
+    max_items_per_poll: 20
+    include_keywords: []
+    ignore_keywords:
+      - "behind the scenes"
+      - "interview"
+      - "live stream"
+  buckets:
+    news_hollywood:
+      enabled: false
+      feeds: []
+    news_india:
+      enabled: true
+      feeds:
+        - name: "Bollywood Hungama"
+          enabled: true
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+        - name: "Film Companion"
+          enabled: true
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+        - name: "Pinkvilla (Entertainment)"
+          enabled: true
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+        - name: "Koimoi"
+          enabled: true
+          url: "https://www.koimoi.com/feed/"
+          industry: "bollywood"
+    news_hindi_tv_ott:
+      enabled: true
+      feeds:
+        - name: "TellyUpdates"
+          enabled: true
+          url: "https://www.tellyupdates.com/feed/"
+          industry: "bollywood"
+        - name: "Bollywood Hungama — OTT/TV"
+          enabled: true
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+        - name: "Pinkvilla — OTT/TV"
+          enabled: true
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+        - name: "Film Companion — OTT/TV"
+          enabled: true
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+
+awards:
+  defaults:
+    enabled: false
+    kind_hint: award
+  sources: []
+  calendar:
+    - name: "Filmfare"
+      region: "IN"
+      tz: "Asia/Kolkata"
+      date_utc: ""
+
+box_office:
+  defaults:
+    enabled: false
+    kind_hint: bo
+  sources: []
+
+tmdb:
+  api_key_env: "TMDB_API_KEY"
+  regions: ["IN"]
+  enable_trending: true
+  enable_upcoming: true
+  ott_providers:
+    - "Netflix"
+    - "Amazon Prime Video"
+    - "Disney Plus Hotstar"
+    - "JioCinema"
+    - "ZEE5"
+    - "Sony LIV"
+
+rules:
+  trailer_keywords:
+    - "trailer"
+    - "teaser"
+    - "first look"
+    - "announcement"
+    - "promo"
+  release_keywords:
+    - "release"
+    - "in theatres"
+    - "coming soon"
+    - "on netflix"
+    - "on prime"
+    - "on hotstar"
+    - "on jiocinema"
+    - "on zee5"
+    - "on sonyliv"
+  award_keywords:
+    - "awards"
+    - "nominations"
+    - "winners"
+  ignore_keywords:
+    - "behind the scenes"
+    - "interview"
+    - "live stream"
+
+ranking_weights:
+  recency_half_life_minutes: 360
+  source_weight:
+    youtube: 2.0
+    tmdb: 1.2
+    rss: 1.0
+    awards: 1.4
+    bo: 1.1
+  has_video_bonus: 1.5
+  has_poster_bonus: 0.6
+  trend_bonus: 1.2
+
+scheduler:
+  poll_interval_min: 15
+  published_after_hours: 72
+  use_sources_file: true
+  rss_buckets_enabled:
+    - news_india
+    - news_hindi_tv_ott
+  per_run_limits:
+    youtube_channels: 10
+    rss_feeds: 12

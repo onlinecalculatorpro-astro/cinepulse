@@ -19,3 +19,4 @@ requests==2.32.3
 # === Utils ===
 python-dotenv==1.0.1
 pydantic==2.9.2
+PyYAML>=6.0
