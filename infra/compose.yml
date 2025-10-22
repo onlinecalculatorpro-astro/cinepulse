@@ -1,3 +1,4 @@
+# infra/compose.yml
 x-env: &defaults
   ENV: "prod"
   TZ: "Asia/Kolkata"
@@ -46,11 +47,14 @@ services:
       dockerfile: infra/Dockerfile
       target: worker
     restart: unless-stopped
-    environment: *defaults
+    environment:
+      <<: *defaults
+      # rq will auto-use this; we also include a default to silence warnings
+      RQ_REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
     depends_on:
       - redis
-    command: >
-      rq worker -u ${REDIS_URL} events
+    # keep it simple; no var expansion here
+    command: rq worker events
     read_only: true
     tmpfs:
       - /tmp
