@@ -106,7 +106,7 @@ class _StoryCardState extends State<StoryCard> {
     return out.trim();
   }
 
-  // ------------ New: helpers to render "Published" + "Added" times ------------
+  // ------------ Helpers to render "Published" + "Added" times ------------
   String _formatDateTimeShort(DateTime dt) {
     final loc = MaterialLocalizations.of(context);
     final date = loc.formatMediumDate(dt);
@@ -153,13 +153,15 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
 
-    // Existing "published" meta text (already formatted upstream)
+    // "Published" meta text (already formatted upstream)
     final rawMeta = widget.story.metaLine;
     final metaText = _stripKindPrefix(rawMeta);
 
-    // New: "added" time from ingestedAt (first-seen) or fallback to normalizedAt
+    // "Added" time: first-seen (ingested) if available; else normalizedAt
     final DateTime? publishedAt = widget.story.publishedAt;
-    final DateTime? addedAt = widget.story.ingestedAt ?? widget.story.normalizedAt;
+    final DateTime? addedAt =
+        widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
+
     final String? addedText = (addedAt != null)
         ? () {
             final base = _formatDateTimeShort(addedAt);
@@ -222,11 +224,10 @@ class _StoryCardState extends State<StoryCard> {
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            // One image only. Center-crop so grid looks consistent.
                             if (imageUrl.isNotEmpty)
                               CachedNetworkImage(
                                 imageUrl: imageUrl,
-                                fit: BoxFit.cover, // <-- center-crop
+                                fit: BoxFit.cover, // center-crop
                                 alignment: Alignment.center,
                                 memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
                                 fadeInDuration: const Duration(milliseconds: 160),
@@ -246,8 +247,7 @@ class _StoryCardState extends State<StoryCard> {
                                     : scheme.surfaceVariant.withOpacity(0.3),
                                 child: Center(child: _SampleIcon(kind: widget.story.kind)),
                               ),
-
-                            // Subtle bottom gradient for text contrast (like YouTube’s card shadow)
+                            // Bottom gradient for text contrast
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -282,7 +282,6 @@ class _StoryCardState extends State<StoryCard> {
                             children: [
                               KindMetaBadge(kind),
                               const SizedBox(width: 10),
-                              // Use Wrap so it gracefully wraps on narrow cards
                               Expanded(
                                 child: Wrap(
                                   spacing: 12,
@@ -302,7 +301,7 @@ class _StoryCardState extends State<StoryCard> {
                             fit: FlexFit.loose,
                             child: Text(
                               widget.story.title,
-                              maxLines: 3, // YouTube keeps it tight; feels punchier
+                              maxLines: 3,
                               softWrap: true,
                               overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.inter(
@@ -508,13 +507,41 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: const SizedBox(
+          child: SizedBox(
             width: 40,
             height: 40,
-            child: Center(child: SizedBox.shrink()),
+            child: Center(child: icon),
           ),
         ),
       ),
     );
+  }
+}
+
+/* ---------------------- Back-compat extension ---------------------- */
+// Works even if the Story model doesn't define `ingestedAt`.
+extension _StoryCompat on Story {
+  DateTime? get ingestedAtCompat {
+    // 1) Direct field on model (newer builds)
+    try {
+      final dyn = (this as dynamic);
+      final v = dyn.ingestedAt;
+      if (v is DateTime) return v;
+      if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
+    } catch (_) {/* ignore */}
+
+    // 2) Sometimes models attach extra/raw maps
+    try {
+      final dyn = (this as dynamic);
+      final extra = dyn.extra ?? dyn.metadata ?? dyn.payload ?? dyn.raw;
+      if (extra is Map) {
+        final raw = extra['ingested_at'] ?? extra['ingestedAt'];
+        if (raw is DateTime) return raw;
+        if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+      }
+    } catch (_) {/* ignore */}
+
+    // 3) Not available
+    return null;
   }
 }
