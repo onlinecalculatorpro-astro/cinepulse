@@ -39,10 +39,16 @@ def _redis() -> Redis:
         decode_responses=True,
     )
 
-# Single source of truth for the app feed LIST key.
+# Feed storage
 FEED_KEY = os.getenv("FEED_KEY", "feed:items")   # LIST, newest-first (LPUSH)
 SEEN_KEY = os.getenv("SEEN_KEY", "feed:seen")    # SET of story ids for dedupe
 FEED_MAX = int(os.getenv("FEED_MAX", "1200"))
+
+# Real-time fanout
+FEED_PUBSUB = os.getenv("FEED_PUBSUB", "feed:pub")       # Redis pub/sub channel
+FEED_STREAM = os.getenv("FEED_STREAM", "feed:stream")    # Redis stream key (XADD MAXLEN ~ 5k)
+FEED_STREAM_MAXLEN = int(os.getenv("FEED_STREAM_MAXLEN", "5000"))
+ENABLE_PUSH_NOTIFICATIONS = os.getenv("ENABLE_PUSH_NOTIFICATIONS", "0").lower() not in ("0", "", "false", "no")
 
 # Repair/patch settings (for items inserted pre-image-extractor)
 REPAIR_IF_MISSING_IMAGE = os.getenv("REPAIR_IF_MISSING_IMAGE", "1").lower() not in ("0", "", "false", "no")
@@ -436,6 +442,51 @@ def _has_any_image(obj: Dict[str, Any]) -> bool:
 
 _PATCH_FIELDS = ("image", "thumb_url", "thumbnail", "poster", "media", "image_candidates", "inline_images")
 
+def _publish_realtime(conn: Redis, story: dict, kind: str) -> None:
+    """Emit light-weight realtime signals so clients/servers can push immediately."""
+    try:
+        payload = {
+            "id": story.get("id"),
+            "kind": kind,
+            "normalized_at": story.get("normalized_at"),
+            "ingested_at": story.get("ingested_at"),
+            "title": story.get("title"),
+            "source": story.get("source"),
+            "source_domain": story.get("source_domain"),
+            "url": story.get("url"),
+            "thumb_url": story.get("thumb_url"),
+        }
+        # Pub/Sub
+        conn.publish(FEED_PUBSUB, json.dumps(payload, ensure_ascii=False))
+        # Stream (capped)
+        try:
+            conn.xadd(
+                FEED_STREAM,
+                {"id": payload["id"] or "", "kind": kind, "ts": payload["normalized_at"] or ""},
+                maxlen=FEED_STREAM_MAXLEN,
+                approximate=True,
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[realtime] publish error: {e}")
+
+def _enqueue_push(conn: Redis, story: dict) -> None:
+    """Optionally enqueue a push notification job (if you have a push worker)."""
+    if not ENABLE_PUSH_NOTIFICATIONS:
+        return
+    try:
+        Queue("push", connection=conn).enqueue(
+            "apps.workers.push.send_story_push",   # implement this worker to call FCM/APNs
+            story,
+            ttl=600,
+            result_ttl=60,
+            failure_ttl=600,
+            job_timeout=30,
+        )
+    except Exception as e:
+        print(f"[push] enqueue error: {e}")
+
 def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
     """
     If we already have a recent entry (matching id OR url) that lacks an image,
@@ -487,6 +538,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
     """
     Converts adapter events into the canonical feed shape and appends to the Redis LIST (newest-first).
     Dedupes on <source>:<source_event_id>. Also attempts in-place patch of duplicates missing an image.
+    Emits realtime signals (pub/sub + stream) and optional push job for NEW items.
     """
     conn = _redis()
 
@@ -571,6 +623,10 @@ def normalize_event(event: AdapterEventDict) -> dict:
         pipe.ltrim(FEED_KEY, 0, FEED_MAX - 1)
         pipe.execute()
         print(f"[normalize_event] NEW  -> {story_id} | {title}")
+
+        # Realtime fanout & optional push
+        _publish_realtime(conn, story, kind)
+        _enqueue_push(conn, story)
         return story
 
     # Duplicate: try to repair if existing lacks image (match by id or url)
