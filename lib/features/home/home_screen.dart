@@ -1,10 +1,13 @@
 // lib/features/home/home_screen.dart
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' show ImageFilter;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/status.dart' as ws_status;
 
 import '../../core/api.dart';
 import '../../core/cache.dart';
@@ -43,8 +46,11 @@ class _HomeScreenState extends State<HomeScreen>
     'comingsoon': 'Coming Soon',
   };
 
-  // Silent background refresh cadence.
+  // Silent background refresh cadence (fallback if WS not available).
   static const Duration _kAutoRefreshEvery = Duration(minutes: 2);
+
+  // Debounce for rapid WS event bursts -> a single fetch.
+  static const Duration _kRealtimeDebounce = Duration(milliseconds: 500);
 
   late final TabController _tab = TabController(length: _tabs.length, vsync: this);
 
@@ -56,9 +62,17 @@ class _HomeScreenState extends State<HomeScreen>
   bool _offline = false;
   bool _isForeground = true;
 
+  // Connectivity / timers
   StreamSubscription? _connSub;
-  Timer? _debounce;
+  Timer? _searchDebounce;
   Timer? _autoRefresh;
+
+  // Realtime (WebSocket)
+  WebSocketChannel? _ws;
+  StreamSubscription? _wsSub;
+  Timer? _wsReconnectTimer;
+  int _wsBackoffSecs = 2; // exponential backoff up to 60s
+  Timer? _realtimeDebounceTimer;
 
   String get _currentTabKey => _tabs.keys.elementAt(_tab.index);
   _PagedFeed get _currentFeed => _feeds[_currentTabKey]!;
@@ -81,9 +95,19 @@ class _HomeScreenState extends State<HomeScreen>
       if (!mounted) return;
       final wasOffline = _offline;
       setState(() => _offline = !hasNetwork);
-      // If back online, fetch deltas for current tab without flicker.
-      if (hasNetwork && wasOffline) {
+
+      if (hasNetwork) {
+        // Back online: gently fetch deltas for current tab and ensure WS is up.
         unawaited(_currentFeed.load(reset: false));
+        _ensureWebSocket(); // connect (or reconnect) when online
+      } else {
+        // Offline: drop the socket to avoid loop.
+        _teardownWebSocket();
+      }
+
+      // If we just came back from offline, reset backoff for quick reconnects.
+      if (hasNetwork && wasOffline) {
+        _wsBackoffSecs = 2;
       }
     });
 
@@ -93,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen>
       final hasNetwork = _hasNetworkFrom(initial);
       if (!mounted) return;
       setState(() => _offline = !hasNetwork);
+      if (hasNetwork) _ensureWebSocket();
     }();
 
     // Auto refresh tick (silent).
@@ -103,8 +128,15 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
-    _debounce?.cancel();
+    _searchDebounce?.cancel();
+    _realtimeDebounceTimer?.cancel();
     _autoRefresh?.cancel();
+
+    _wsReconnectTimer?.cancel();
+    _wsSub?.cancel();
+    _ws?.sink.close(ws_status.normalClosure);
+    _ws = null;
+
     _connSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
 
@@ -118,15 +150,100 @@ class _HomeScreenState extends State<HomeScreen>
     super.dispose();
   }
 
-  // Lifecycle → refresh when returning to foreground.
+  // Lifecycle → refresh + manage realtime when returning to foreground.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _isForeground = (state == AppLifecycleState.resumed);
     if (_isForeground && mounted && !_offline) {
       // Gentle, incremental fetch (no skeleton flicker).
       unawaited(_currentFeed.load(reset: false));
+      _ensureWebSocket(); // make sure WS is alive in foreground
+    } else if (!_isForeground) {
+      _teardownWebSocket(); // pause socket in background to save battery
     }
   }
+
+  /* --------------------------- Realtime (WebSocket) ------------------------ */
+
+  String _buildWsUrl() {
+    // Build ws/wss from your REST base, e.g. https://api.example.com -> wss://api.example.com/v1/realtime/ws
+    final base = Api.baseUrl; // assumes your Api exposes base URL as a string
+    final u = Uri.parse(base);
+    final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
+    // Keep host + (optional) port; replace path with the WS endpoint
+    return Uri(
+      scheme: scheme,
+      host: u.host,
+      port: u.hasPort ? u.port : null,
+      path: '/v1/realtime/ws',
+    ).toString();
+  }
+
+  void _ensureWebSocket() {
+    if (!mounted) return;
+    if (_offline || !_isForeground) return;
+    if (_ws != null) return; // already connected/connecting
+
+    final url = _buildWsUrl();
+    try {
+      _ws = WebSocketChannel.connect(Uri.parse(url));
+      _wsSub = _ws!.stream.listen(
+        (data) {
+          // Expected: {"id":"...", "kind":"...", "normalized_at":"..."} or {"type":"ping"}
+          try {
+            final obj = json.decode(data.toString());
+            if (obj is Map && obj['type'] == 'ping') return;
+          } catch (_) {
+            // If not JSON, ignore—server always sends JSON though.
+          }
+          _scheduleRealtimeRefresh();
+        },
+        onDone: _onWsClosed,
+        onError: (_) => _onWsClosed(),
+        cancelOnError: true,
+      );
+      // Connected → reset backoff
+      _wsBackoffSecs = 2;
+    } catch (_) {
+      _onWsClosed();
+    }
+  }
+
+  void _onWsClosed() {
+    _wsSub?.cancel();
+    _wsSub = null;
+    _ws = null;
+
+    if (!mounted) return;
+    if (_offline || !_isForeground) return;
+
+    // Exponential backoff reconnect (cap at 60s)
+    _wsReconnectTimer?.cancel();
+    _wsReconnectTimer = Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
+    _wsBackoffSecs = (_wsBackoffSecs * 2).clamp(2, 60);
+  }
+
+  void _teardownWebSocket() {
+    _wsReconnectTimer?.cancel();
+    _wsReconnectTimer = null;
+    _wsSub?.cancel();
+    _wsSub = null;
+    _ws?.sink.close(ws_status.normalClosure);
+    _ws = null;
+  }
+
+  void _scheduleRealtimeRefresh() {
+    // Debounce bursts of messages into a single gentle delta fetch.
+    _realtimeDebounceTimer?.cancel();
+    _realtimeDebounceTimer = Timer(_kRealtimeDebounce, () {
+      if (!mounted) return;
+      if (_offline) return;
+      if (_search.text.isNotEmpty) return; // don't disrupt focused search
+      unawaited(_currentFeed.load(reset: false));
+    });
+  }
+
+  /* ------------------------------ Helpers ---------------------------------- */
 
   bool _hasNetworkFrom(dynamic event) {
     if (event is ConnectivityResult) return event != ConnectivityResult.none;
@@ -137,8 +254,8 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onSearchChanged() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 250), () {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (mounted) setState(() {});
     });
   }
@@ -150,15 +267,16 @@ class _HomeScreenState extends State<HomeScreen>
     widget.onHeaderRefresh?.call();
   }
 
-  // Background silent refresh tick.
+  // Background silent refresh tick (fallback if WS is blocked by proxies).
   void _tickAutoRefresh() {
     if (!mounted) return;
     if (_offline) return;
     if (!_isForeground) return;
     if (_search.text.isNotEmpty) return; // don’t disturb while searching
-    // Only fetch deltas for the visible tab.
     unawaited(_currentFeed.load(reset: false));
   }
+
+  /* ------------------------------- UI -------------------------------------- */
 
   @override
   Widget build(BuildContext context) {
@@ -210,7 +328,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
               leading: IconButton(
                 icon: const Icon(Icons.menu_rounded),
-                onPressed: widget.onMenuPressed, // hamburger wired to RootShell
+                onPressed: widget.onMenuPressed,
                 tooltip: 'Menu',
               ),
               title: const _ModernBrandLogo(), // 🎬
