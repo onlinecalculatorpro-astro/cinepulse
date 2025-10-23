@@ -257,20 +257,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // “Trending Now” header — compact, baseline aligned, left-centered vertically
+            // “Trending Now” header
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
                 child: SizedBox(
-                  height: 36, // compact header height
+                  height: 36,
                   child: Align(
-                    alignment: Alignment.centerLeft, // left, but vertically centered
+                    alignment: Alignment.centerLeft,
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.baseline,
                       textBaseline: TextBaseline.alphabetic,
                       children: const [
-                        // tiny nudge so emoji sits perfectly on the text baseline
                         Padding(
                           padding: EdgeInsets.only(bottom: 1),
                           child: Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
@@ -291,7 +290,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Main tabbed feed list — auto-responsive grid
+            // Main tabbed feed list — auto-responsive grid (taller cards)
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -354,6 +353,7 @@ class _FeedListState extends State<_FeedList>
   bool get wantKeepAlive => true;
 
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
+    // Determine columns via max cross-axis extent (auto responsive).
     double maxTileW;
     if (width < 520) {
       maxTileW = width;         // 1 col
@@ -364,19 +364,21 @@ class _FeedListState extends State<_FeedList>
     } else {
       maxTileW = width / 4;     // 4 cols
     }
-    maxTileW = maxTileW.clamp(320.0, 460.0);
+    maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // Make tiles ~15–20% taller vs before so titles can fully show.
+    // Make cards taller than before:
+    // childAspectRatio = width / height, so LOWER = TALLER.
     double ratio;
     if (maxTileW <= 340) {
-      ratio = 0.72;
+      ratio = 0.60; // very tall on narrow phones
     } else if (maxTileW <= 380) {
-      ratio = 0.80;
+      ratio = 0.68;
     } else if (maxTileW <= 420) {
-      ratio = 0.88;
+      ratio = 0.76;
     } else {
-      ratio = 0.96;
+      ratio = 0.84;
     }
+    // Respect large text accessibility (taller with bigger text).
     ratio /= textScale.clamp(1.0, 1.6);
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
@@ -404,13 +406,13 @@ class _FeedListState extends State<_FeedList>
             final horizontalPad = 16.0;
             final topPad = 0.0;
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
-            final bottomPad = 24.0 + bottomSafe;
+            final bottomPad = 28.0 + bottomSafe;
 
             if (feed.isInitialLoading) {
               return GridView.builder(
                 padding: EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
-                cacheExtent: 1200,
+                cacheExtent: 1600, // a bit higher since cards are taller
                 gridDelegate: gridDelegate,
                 itemCount: 9,
                 itemBuilder: (_, __) => const SkeletonCard(),
@@ -457,7 +459,7 @@ class _FeedListState extends State<_FeedList>
             return GridView.builder(
               padding: EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
               physics: const AlwaysScrollableScrollPhysics(),
-              cacheExtent: 1400,
+              cacheExtent: 1800,
               gridDelegate: gridDelegate,
               itemCount: filtered.length + (showLoadMore ? 1 : 0),
               itemBuilder: (_, i) {
