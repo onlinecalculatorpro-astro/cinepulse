@@ -167,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   String _buildWsUrl() {
     // Build ws/wss from your REST base, e.g. https://api.example.com -> wss://api.example.com/v1/realtime/ws
-    final base = Api.baseUrl; // assumes your Api exposes base URL as a string
+    final base = kApiBaseUrl; // provided by core/api.dart
     final u = Uri.parse(base);
     final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
     // Keep host + (optional) port; replace path with the WS endpoint
