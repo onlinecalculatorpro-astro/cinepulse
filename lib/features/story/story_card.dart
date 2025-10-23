@@ -106,6 +106,45 @@ class _StoryCardState extends State<StoryCard> {
     return out.trim();
   }
 
+  // ------------ New: helpers to render "Published" + "Added" times ------------
+  String _formatDateTimeShort(DateTime dt) {
+    final loc = MaterialLocalizations.of(context);
+    final date = loc.formatMediumDate(dt);
+    final time = loc.formatTimeOfDay(TimeOfDay.fromDateTime(dt));
+    return '$date, $time';
+  }
+
+  String _formatGap(Duration d) {
+    final abs = d.isNegative ? d * -1 : d;
+    if (abs.inMinutes < 60) return '${abs.inMinutes}m';
+    if (abs.inHours < 48) return '${abs.inHours}h';
+    return '${abs.inDays}d';
+  }
+
+  Widget _timePill({required String emoji, required String text}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.13),
+            shape: BoxShape.circle,
+          ),
+          child: _Emoji(emoji: emoji, size: 14),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
+        ),
+      ],
+    );
+  }
+  // ---------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -113,8 +152,25 @@ class _StoryCardState extends State<StoryCard> {
     final isDark = theme.brightness == Brightness.dark;
 
     final kind = widget.story.kind.toLowerCase();
+
+    // Existing "published" meta text (already formatted upstream)
     final rawMeta = widget.story.metaLine;
     final metaText = _stripKindPrefix(rawMeta);
+
+    // New: "added" time from ingestedAt (first-seen) or fallback to normalizedAt
+    final DateTime? publishedAt = widget.story.publishedAt;
+    final DateTime? addedAt = widget.story.ingestedAt ?? widget.story.normalizedAt;
+    final String? addedText = (addedAt != null)
+        ? () {
+            final base = _formatDateTimeShort(addedAt);
+            if (publishedAt != null) {
+              final gap = addedAt.difference(publishedAt);
+              return 'Added $base (+${_formatGap(gap)})';
+            }
+            return 'Added $base';
+          }()
+        : null;
+
     final hasUrl = _linkUrl != null;
 
     final imageUrl = (widget.story.posterUrl?.isNotEmpty == true)
@@ -220,25 +276,23 @@ class _StoryCardState extends State<StoryCard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // ---------- Row with kind + both timestamps ----------
                           Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               KindMetaBadge(kind),
                               const SizedBox(width: 10),
-                              Container(
-                                padding: const EdgeInsets.all(4),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.13),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const _Emoji(emoji: '🕐', size: 14),
-                              ),
-                              const SizedBox(width: 8),
-                              Flexible(
-                                child: Text(
-                                  metaText,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
+                              // Use Wrap so it gracefully wraps on narrow cards
+                              Expanded(
+                                child: Wrap(
+                                  spacing: 12,
+                                  runSpacing: 4,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    _timePill(emoji: '🕐', text: metaText), // Published
+                                    if (addedText != null)
+                                      _timePill(emoji: '⏱', text: addedText), // Added (+gap)
+                                  ],
                                 ),
                               ),
                             ],
@@ -454,10 +508,10 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: SizedBox(
+          child: const SizedBox(
             width: 40,
             height: 40,
-            child: Center(child: icon), // <- show the icon
+            child: Center(child: SizedBox.shrink()),
           ),
         ),
       ),
