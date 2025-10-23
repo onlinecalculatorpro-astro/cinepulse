@@ -40,6 +40,17 @@ _redis_client = redis.from_url(
     socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0")),
 )
 
+# ------------------------------ Routers (realtime / push) ---------------------
+
+# Ensure these files exist:
+#   apps/api/app/realtime.py  -> defines: router = APIRouter(prefix="/v1/realtime", ...)
+#   apps/api/app/push.py      -> defines: router = APIRouter(prefix="/v1/push", ...)
+from apps.api.app.realtime import router as realtime_router
+try:
+    from apps.api.app.push import router as push_router  # optional
+except Exception:
+    push_router = None  # push router is optional
+
 # ------------------------------ Models ---------------------------------------
 
 class Story(BaseModel):
@@ -55,7 +66,7 @@ class Story(BaseModel):
     url: Optional[str] = None
     source_domain: Optional[str] = None
     poster_url: Optional[str] = None
-    release_date: Optional[str] = None            # YYYY-MM-DD when known (or RFC3339)
+    release_date: Optional[str] = None            # YYYY-MM-DD or RFC3339
     is_theatrical: Optional[bool] = None
     is_upcoming: Optional[bool] = None
     ott_platform: Optional[str] = None
@@ -89,8 +100,8 @@ class FeedTab(str, Enum):
 
 app = FastAPI(
     title="CinePulse API",
-    version="0.3.0",
-    description="Feed & story API for CinePulse with cursor pagination and basic rate limiting.",
+    version="0.4.0",
+    description="Feed & story API for CinePulse with cursor pagination, realtime fanout, and basic rate limiting.",
 )
 
 _cors = os.getenv("CORS_ORIGINS", "*").strip()
@@ -110,6 +121,11 @@ else:
         allow_headers=["*"],
     )
 
+# Mount new routers
+app.include_router(realtime_router, tags=["Realtime"])  # /v1/realtime/*
+if push_router is not None:
+    app.include_router(push_router, tags=["Push"])      # /v1/push/*
+
 # ------------------------------ Error handlers -------------------------------
 
 def _json_error(status_code: int, err: str, msg: str) -> JSONResponse:
@@ -120,7 +136,6 @@ def _json_error(status_code: int, err: str, msg: str) -> JSONResponse:
 
 @app.exception_handler(HTTPException)
 async def http_exc_handler(_: Request, exc: HTTPException):
-    # Normalize FastAPI HTTP errors
     detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
     return _json_error(exc.status_code, "http_error", detail)
 
@@ -130,16 +145,13 @@ async def validation_exc_handler(_: Request, exc: RequestValidationError):
 
 @app.exception_handler(Exception)
 async def unhandled_exc_handler(_: Request, exc: Exception):
-    # Hide internals but keep a type hint
     return _json_error(500, exc.__class__.__name__, "Internal server error")
 
 # ------------------------------ Rate limiting --------------------------------
 
 def _client_ip(req: Request) -> str:
-    # Respect common proxy headers; fall back to client host.
     xff = req.headers.get("x-forwarded-for", "")
     if xff:
-        # The first IP in the list is the original client
         return xff.split(",")[0].strip()
     return req.client.host if req.client else "unknown"
 
@@ -151,39 +163,26 @@ def limiter(route: str, limit_per_min: int) -> Callable:
         try:
             n = _redis_client.incr(key)
             if n == 1:
-                _redis_client.expire(key, 65)  # 1 minute + small buffer
+                _redis_client.expire(key, 65)
             if n > limit_per_min:
-                # 429 with uniform error body
                 raise HTTPException(
                     status_code=429,
                     detail=f"Rate limit exceeded for {route}; try again shortly",
                 )
-        except redis.RedisError as e:
-            # If Redis limiter fails, we don't block the request—best effort.
-            # Optionally log e here.
-            _ = e
+        except redis.RedisError:
             return
     return _limit_dep
 
 # ------------------------------ Helpers --------------------------------------
 
-# Buckets for the UI tabs
-TRAILER_KINDS = {
-    "trailer", "teaser", "clip", "featurette", "song", "poster",
-}
-OTT_ALIGNED_KINDS = {
-    "release-ott", "ott", "acquisition",
-}
-THEATRICAL_KINDS = {
-    "release-theatrical", "schedule-change", "re-release", "boxoffice",
-}
+TRAILER_KINDS = {"trailer", "teaser", "clip", "featurette", "song", "poster"}
+OTT_ALIGNED_KINDS = {"release-ott", "ott", "acquisition"}
+THEATRICAL_KINDS = {"release-theatrical", "schedule-change", "re-release", "boxoffice"}
 
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
-    """Parse RFC3339/ISO8601 into UTC-aware datetime."""
     if not s:
         return None
     try:
-        # allow trailing 'Z'
         if s.endswith("Z"):
             return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
         dt = datetime.fromisoformat(s)
@@ -197,7 +196,6 @@ def _redis_lrange(key: str, start: int, stop: int) -> list[str]:
     try:
         return _redis_client.lrange(key, start, stop)
     except Exception as e:
-        # Bubble up as 503 so clients know it's transient infra
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
 
 def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
@@ -209,14 +207,6 @@ def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
             continue
 
 def _matches_tab(item: dict, tab: FeedTab) -> bool:
-    """
-    Tab filter:
-      - all
-      - trailers  (trailer|teaser|clip|featurette|song|poster)
-      - ott       (release-ott|ott|acquisition OR is_theatrical == False OR has ott_platform)
-      - intheatres(release-theatrical|schedule-change|re-release|boxoffice OR is_theatrical == True)
-      - comingsoon(release_date in future OR is_upcoming == True)
-    """
     if tab == FeedTab.all:
         return True
 
@@ -233,10 +223,7 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
         )
 
     if tab == FeedTab.intheatres:
-        return (
-            kind in THEATRICAL_KINDS
-            or item.get("is_theatrical") is True
-        )
+        return kind in THEATRICAL_KINDS or item.get("is_theatrical") is True
 
     if tab == FeedTab.comingsoon:
         if item.get("is_upcoming") is True:
@@ -244,7 +231,7 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
         rd = _parse_iso(item.get("release_date"))
         return bool(rd and rd > datetime.now(timezone.utc))
 
-    return True  # fallback behaves like "all"
+    return True
 
 def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     if not since_iso:
@@ -253,7 +240,6 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     if not since_dt:
         return True
 
-    # Prefer release_date, else published_at, else normalized_at
     s = item.get("release_date") or item.get("published_at") or item.get("normalized_at")
     dt = _parse_iso(s)
     return bool(dt and dt >= since_dt)
@@ -264,15 +250,6 @@ def _scan_with_cursor(
     tab: FeedTab,
     since: Optional[str],
 ) -> Tuple[List[dict], Optional[int]]:
-    """
-    Scan the Redis LIST from start_idx forward (newest-first list),
-    apply filters, and collect up to `limit` items. We cap total scanned
-    rows per request at MAX_SCAN for safety.
-
-    Returns (items, next_cursor_index or None).
-    Cursor is the absolute Redis list index to resume from.
-    NOTE: New inserts at head may shift indices; cursors are best-effort.
-    """
     try:
         total_len = _redis_client.llen(FEED_KEY)
     except Exception as e:
@@ -286,7 +263,6 @@ def _scan_with_cursor(
     idx = max(0, start_idx)
 
     while len(items) < limit and idx < total_len and scanned < MAX_SCAN:
-        # Read a batch
         batch_end = min(idx + BATCH_SIZE - 1, total_len - 1)
         raw_batch = _redis_lrange(FEED_KEY, idx, batch_end)
         if not raw_batch:
@@ -310,14 +286,12 @@ def _scan_with_cursor(
                 next_cursor = pos + 1 if (pos + 1) < total_len else None
                 return (items, next_cursor)
 
-        idx = batch_end + 1  # move to next window
+        idx = batch_end + 1
 
         if scanned >= MAX_SCAN:
-            # We reached our scan budget; indicate where to continue
             next_cursor = idx if idx < total_len else None
             return (items, next_cursor)
 
-    # Exhausted or no more items
     next_cursor = idx if idx < total_len else None
     return (items, next_cursor)
 
@@ -363,25 +337,19 @@ async def feed(
     limit: int = Query(20, ge=1, le=100),
     _=Depends(limiter("feed", RL_FEED_PER_MIN)),
 ):
-    # Validate since
     if since is not None and _parse_iso(since) is None:
         raise HTTPException(status_code=422, detail="Invalid 'since' (use RFC3339, e.g. 2025-01-01T00:00:00Z)")
 
-    # Decode cursor (absolute list index); best-effort.
     start_idx = 0
     if cursor:
         try:
-            start_idx = int(cursor)
-            if start_idx < 0:
-                start_idx = 0
+            start_idx = max(0, int(cursor))
         except ValueError:
-            # Treat as invalid cursor -> start at 0
             start_idx = 0
 
     pool, next_idx = _scan_with_cursor(start_idx, limit, tab, since)
     items = [Story(**it) for it in pool]
     next_cursor = str(next_idx) if next_idx is not None else None
-
     return FeedResponse(tab=tab.value, since=since, items=items, next_cursor=next_cursor)
 
 @app.get(
