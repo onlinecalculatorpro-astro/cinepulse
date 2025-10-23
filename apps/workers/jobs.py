@@ -141,7 +141,7 @@ def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Opt
             value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(value, _time.struct_time):
-        epoch = calendar.timegm(value)  # struct_time is UTC from feedparser
+        epoch = calendar.timegm(value)  # struct_time from feedparser is UTC
         dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     s = str(value).strip()
@@ -668,7 +668,7 @@ def youtube_rss_poll(
         }
 
         jid = _safe_job_id("normalize", ev["source"], ev["source_event_id"])
-        Queue("events", connection=conn).enqueue(
+        q.enqueue(
             normalize_event,
             ev,
             job_id=jid,
