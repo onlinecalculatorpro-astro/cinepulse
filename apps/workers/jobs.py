@@ -1,6 +1,7 @@
 # apps/workers/jobs.py
 from __future__ import annotations
 
+import calendar
 import hashlib
 import html
 import json
@@ -8,6 +9,7 @@ import os
 import re
 import time as _time
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Optional, Union, TypedDict, Tuple, List, Dict, Any
 from urllib.parse import urlparse
 
@@ -58,7 +60,7 @@ class AdapterEventDict(TypedDict, total=False):
     source_event_id: str         # unique per source (videoId | link hash)
     title: str
     kind: str                    # trailer | ott | news | release
-    published_at: Optional[str]  # RFC3339
+    published_at: Optional[str]  # RFC3339 UTC
     thumb_url: Optional[str]
     payload: dict
 
@@ -126,6 +128,12 @@ _AUX_TAIL_RE = re.compile(r"\b(?:has|have|had|is|are|was|were|will|can|could|sho
 _SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
 
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
+    """
+    Normalize various datetime-like inputs to RFC3339 UTC (YYYY-MM-DDTHH:MM:SSZ).
+    - datetime: treat naive as UTC; convert any tz-aware to UTC
+    - struct_time: treat as UTC (use calendar.timegm, NOT mktime)
+    - str: parse common RFC822/RFC3339 formats (respects embedded tz)
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -133,10 +141,20 @@ def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Opt
             value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(value, _time.struct_time):
-        dt = datetime.fromtimestamp(_time.mktime(value), tz=timezone.utc)
+        epoch = calendar.timegm(value)  # struct_time is UTC from feedparser
+        dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    v = str(value).strip()
-    return v if v else None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        dt = parsedate_to_datetime(s)  # respects offset if present
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        # Last resort: pass through unchanged (already ISO-like)
+        return s
 
 def _extract_video_id(entry: dict) -> Optional[str]:
     vid = entry.get("yt_videoid") or entry.get("yt:videoid")
@@ -520,14 +538,14 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "kind": kind,
         "title": title,
         "summary": summary_text or None,
-        "published_at": published_at,        # source publish time
+        "published_at": published_at,        # source publish time (UTC)
         "source": source,
         "thumb_url": image_url or thumb_hint,
         "release_date": rd_iso,
         "is_theatrical": True if is_theatrical else None,
         "is_upcoming": True if is_upcoming else None,
 
-        # NEW: first-seen time (immutable on subsequent repairs) + current normalization time
+        # first-seen time (immutable on subsequent repairs) + current normalization time
         "ingested_at": now_ts,
         "normalized_at": now_ts,
 
@@ -598,8 +616,7 @@ def youtube_rss_poll(
     if getattr(parsed, "etag", None):
         conn.setex(etag_key, 7 * 24 * 3600, parsed.etag)
     if getattr(parsed, "modified_parsed", None):
-        from time import mktime as _mktime
-        conn.setex(mod_key, 7 * 24 * 3600, str(_mktime(parsed.modified_parsed)))
+        conn.setex(mod_key, 7 * 24 * 3600, str(calendar.timegm(parsed.modified_parsed)))
 
     cutoff = _to_rfc3339(published_after)
     q = Queue("events", connection=conn)
@@ -694,8 +711,7 @@ def rss_poll(
     if getattr(parsed, "etag", None):
         conn.setex(etag_key, 7 * 24 * 3600, parsed.etag)
     if getattr(parsed, "modified_parsed", None):
-        from time import mktime as _mktime
-        conn.setex(mod_key, 7 * 24 * 3600, str(_mktime(parsed.modified_parsed)))
+        conn.setex(mod_key, 7 * 24 * 3600, str(calendar.timegm(parsed.modified_parsed)))
 
     source_domain = _domain(parsed.feed.get("link") or url)
     q = Queue("events", connection=conn)
