@@ -449,13 +449,18 @@ def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
             return False  # already has an image
 
         patched = obj.copy()
+        # keep existing ingested_at (first-seen) if present
+        patched["ingested_at"] = obj.get("ingested_at") or story_new.get("ingested_at") or obj.get("normalized_at")
+
         for k in _PATCH_FIELDS:
             if story_new.get(k) is not None:
                 patched[k] = story_new[k]
+
+        # refresh normalized_at to mark repair time
         patched["normalized_at"] = story_new.get("normalized_at") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         conn.lset(FEED_KEY, idx, json.dumps(patched, ensure_ascii=False))
-        print(f"[normalize_event] REPAIR -> {new_id or new_url} (added image)")
+        print(f"[normalize_event] REPAIR -> {new_id or new_url} (added image, preserved ingested_at={patched.get('ingested_at')})")
         return True
 
     return False
@@ -508,18 +513,24 @@ def normalize_event(event: AdapterEventDict) -> dict:
     summary_text = _select_sentences_for_summary(title, raw_text)
     tags = _industry_tags(source, source_domain, title, raw_text, payload)
 
+    now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     story = {
         "id": story_id,
         "kind": kind,
         "title": title,
         "summary": summary_text or None,
-        "published_at": published_at,
+        "published_at": published_at,        # source publish time
         "source": source,
         "thumb_url": image_url or thumb_hint,
         "release_date": rd_iso,
         "is_theatrical": True if is_theatrical else None,
         "is_upcoming": True if is_upcoming else None,
-        "normalized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+
+        # NEW: first-seen time (immutable on subsequent repairs) + current normalization time
+        "ingested_at": now_ts,
+        "normalized_at": now_ts,
+
         "url": link or None,
         "source_domain": source_domain,
         "ott_platform": ott_platform,
@@ -743,14 +754,16 @@ def rss_poll(
 def backfill_repair_recent(scan: int = None) -> int:
     """
     Best-effort pass over recent FEED_KEY items:
-    - For entries missing an image, try to rebuild image from stored payload using extractor.
-    - Patch in place when an image is found.
-    Returns number of patched items.
+    - Ensure 'ingested_at' exists (use prior normalized_at or now).
+    - For entries missing an image, try to rebuild image from stored payload using extractor and patch in place.
+    Returns number of patched items (image set and/or ingested_at added).
     """
     conn = _redis()
     window = int(scan or REPAIR_SCAN)
     items = conn.lrange(FEED_KEY, 0, max(window - 1, 0))
     patched = 0
+
+    now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for idx, raw in enumerate(items):
         try:
@@ -758,45 +771,50 @@ def backfill_repair_recent(scan: int = None) -> int:
         except Exception:
             continue
 
-        if _has_any_image(obj):
-            continue
+        need_save = False
 
-        payload = obj.get("payload") or {}
-        link = obj.get("url") or (payload.get("url") if isinstance(payload, dict) else None)
-        base = link or (payload.get("feed") if isinstance(payload, dict) else "")
+        # Ensure a stable first-seen timestamp
+        if not obj.get("ingested_at"):
+            obj["ingested_at"] = obj.get("normalized_at") or now_ts
+            need_save = True
 
-        # Try extractor again with whatever we have
-        if isinstance(payload, dict) and payload:
-            # Try to pick from existing candidates/blocks
-            thumb = _pick_image_from_payload(payload, base, payload.get("image_candidates", [None])[0] if isinstance(payload.get("image_candidates"), list) else None)
-        else:
-            thumb = None
+        if not _has_any_image(obj):
+            payload = obj.get("payload") or {}
+            link = obj.get("url") or (payload.get("url") if isinstance(payload, dict) else None)
+            base = link or (payload.get("feed") if isinstance(payload, dict) else "")
 
-        if not thumb and link:
-            # construct minimal entry to re-extract
-            dummy_entry = {
-                "link": link,
-                "summary": obj.get("summary") or "",
-                "description": payload.get("description_html") if isinstance(payload, dict) else "",
-                "content": [{"type": "text/html", "value": payload.get("content_html") if isinstance(payload, dict) else ""}],
-            }
-            new_payload, thumb_hint, _ = build_rss_payload(dummy_entry, payload.get("feed") if isinstance(payload, dict) else "")
-            payload = {**payload, **new_payload} if isinstance(payload, dict) else new_payload
-            thumb = _pick_image_from_payload(payload, base, thumb_hint)
+            # Try extractor again with whatever we have
+            if isinstance(payload, dict) and payload:
+                thumb = _pick_image_from_payload(
+                    payload,
+                    base,
+                    payload.get("image_candidates", [None])[0] if isinstance(payload.get("image_candidates"), list) else None
+                )
+            else:
+                thumb = None
 
-        if not thumb:
-            continue
+            if not thumb and link:
+                # construct minimal entry to re-extract (may probe OG/AMP)
+                dummy_entry = {
+                    "link": link,
+                    "summary": obj.get("summary") or "",
+                    "description": payload.get("description_html") if isinstance(payload, dict) else "",
+                    "content": [{"type": "text/html", "value": payload.get("content_html") if isinstance(payload, dict) else ""}],
+                }
+                new_payload, thumb_hint, _ = build_rss_payload(dummy_entry, payload.get("feed") if isinstance(payload, dict) else "")
+                payload = {**payload, **new_payload} if isinstance(payload, dict) else new_payload
+                thumb = _pick_image_from_payload(payload, base, thumb_hint)
 
-        obj["image"] = thumb
-        obj["thumb_url"] = thumb
-        obj["thumbnail"] = thumb
-        obj["poster"] = thumb
-        obj["media"] = thumb
-        obj["normalized_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if thumb:
+                for k in ("image", "thumb_url", "thumbnail", "poster", "media"):
+                    obj[k] = thumb
+                obj["normalized_at"] = now_ts
+                need_save = True
 
-        conn.lset(FEED_KEY, idx, json.dumps(obj, ensure_ascii=False))
-        patched += 1
-        print(f"[backfill_repair_recent] patched idx={idx} url={obj.get('url')}")
+        if need_save:
+            conn.lset(FEED_KEY, idx, json.dumps(obj, ensure_ascii=False))
+            patched += 1
+            print(f"[backfill_repair_recent] patched idx={idx} url={obj.get('url')}")
 
     print(f"[backfill_repair_recent] done patched={patched}")
     return patched
