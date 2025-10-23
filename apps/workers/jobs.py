@@ -8,20 +8,25 @@ import os
 import re
 import time as _time
 from datetime import datetime, timezone
-from typing import Optional, Union, TypedDict, Tuple
+from typing import Optional, Union, TypedDict, Tuple, List, Dict, Any
 from urllib.parse import urlparse
 
 import feedparser
 from redis import Redis
 from rq import Queue
 
-# NEW: use the comprehensive extractor
+# Use the comprehensive extractor
 from apps.workers.extractors import (
     build_rss_payload,   # (payload, thumb_hint, candidates)
     abs_url, to_https,
 )
 
-__all__ = ["youtube_rss_poll", "rss_poll", "normalize_event"]
+__all__ = [
+    "youtube_rss_poll",
+    "rss_poll",
+    "normalize_event",
+    "backfill_repair_recent",
+]
 
 # ============================ Redis / keys ============================
 
@@ -33,13 +38,14 @@ def _redis() -> Redis:
     )
 
 # Single source of truth for the app feed LIST key.
-FEED_KEY = os.getenv("FEED_KEY", "feed:items")   # LIST, newest-first
+FEED_KEY = os.getenv("FEED_KEY", "feed:items")   # LIST, newest-first (LPUSH)
 SEEN_KEY = os.getenv("SEEN_KEY", "feed:seen")    # SET of story ids for dedupe
 FEED_MAX = int(os.getenv("FEED_MAX", "1200"))
 
 # Repair/patch settings (for items inserted pre-image-extractor)
 REPAIR_IF_MISSING_IMAGE = os.getenv("REPAIR_IF_MISSING_IMAGE", "1").lower() not in ("0", "", "false", "no")
 REPAIR_SCAN = int(os.getenv("REPAIR_SCAN", "250"))  # how many recent items to scan to patch
+REPAIR_BY_URL = os.getenv("REPAIR_BY_URL", "1").lower() not in ("0", "", "false", "no")
 
 # Per-poller defaults
 YT_MAX_ITEMS = int(os.getenv("YT_MAX_ITEMS", "50"))
@@ -144,7 +150,7 @@ def _extract_video_id(entry: dict) -> Optional[str]:
 def _safe_job_id(prefix: str, *parts: str) -> str:
     def clean(s: str) -> str:
         return re.sub(r"[^A-Za-z0-9_\-]+", "-", s).strip("-")
-    jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)])
+    jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)]).strip("-")
     return (jid or clean(prefix))[:200]
 
 def _domain(url: str) -> str:
@@ -374,13 +380,17 @@ def _youtube_thumb(link: str | None) -> str | None:
     vid = m.group(1)
     return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
 
+def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tuple[str, int]]:
+    """Local thin wrapper to reuse extractor internals without exposing them in __all__."""
+    from apps.workers.extractors import _images_from_html_block as _imgs  # type: ignore
+    return _imgs(html_str, base_url)
+
 def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
     Backward-compatible fallback:
     - Prefer thumb_hint (from extractor)
     - Else try feed enclosures / HTML blocks
     """
-    from apps.workers.extractors import _images_from_html_block as _imgs  # local reuse
     cand: list[str] = []
     if thumb_hint:
         cand.append(thumb_hint)
@@ -392,7 +402,7 @@ def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]
             cand.append(url)
 
     for key in ("content_html", "description_html", "summary"):
-        for u, _ in _imgs(payload.get(key), base):
+        for u, _ in _images_from_html_block(payload.get(key), base):
             cand.append(u)
 
     for u in cand:
@@ -401,35 +411,53 @@ def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]
             return u
     return None
 
+def _has_any_image(obj: Dict[str, Any]) -> bool:
+    return bool(obj.get("image") or obj.get("thumb_url") or obj.get("thumbnail") or obj.get("poster") or obj.get("media"))
+
 # ===================== Normalizer (writes to feed) ====================
 
-def _repair_existing_if_needed(conn: Redis, story_id: str, story_new: dict) -> bool:
+_PATCH_FIELDS = ("image", "thumb_url", "thumbnail", "poster", "media", "image_candidates", "inline_images")
+
+def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
     """
-    If we already have this id in the feed but without an image, patch it in place.
-    Returns True if a patch was performed.
+    If we already have a recent entry (matching id OR url) that lacks an image,
+    patch it in place. Returns True if a patch was performed.
     """
     if not REPAIR_IF_MISSING_IMAGE:
         return False
-
-    new_img = story_new.get("image") or story_new.get("thumbnail") or story_new.get("poster") or story_new.get("media") or story_new.get("thumb_url")
-    if not new_img:
+    if not _has_any_image(story_new):
         return False
 
-    # scan recent items
-    items = conn.lrange(FEED_KEY, 0, REPAIR_SCAN - 1)
-    for idx, raw in enumerate(items):
+    new_id = story_new.get("id")
+    new_url = story_new.get("url")
+    window = conn.lrange(FEED_KEY, 0, max(REPAIR_SCAN - 1, 0))
+
+    for idx, raw in enumerate(window):
         try:
             obj = json.loads(raw)
         except Exception:
             continue
-        if obj.get("id") == story_id:
-            old_img = obj.get("image") or obj.get("thumbnail") or obj.get("poster") or obj.get("media") or obj.get("thumb_url")
-            if old_img:
-                return False  # already has an image
-            # patch
-            conn.lset(FEED_KEY, idx, json.dumps(story_new))
-            print(f"[normalize_event] REPAIR -> {story_id} (added image)")
-            return True
+
+        same = (new_id and obj.get("id") == new_id)
+        if not same and REPAIR_BY_URL and new_url and obj.get("url") == new_url:
+            same = True
+
+        if not same:
+            continue
+
+        if _has_any_image(obj):
+            return False  # already has an image
+
+        patched = obj.copy()
+        for k in _PATCH_FIELDS:
+            if story_new.get(k) is not None:
+                patched[k] = story_new[k]
+        patched["normalized_at"] = story_new.get("normalized_at") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        conn.lset(FEED_KEY, idx, json.dumps(patched, ensure_ascii=False))
+        print(f"[normalize_event] REPAIR -> {new_id or new_url} (added image)")
+        return True
+
     return False
 
 def normalize_event(event: AdapterEventDict) -> dict:
@@ -503,19 +531,21 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "media": image_url,
         # transparency
         "enclosures": payload.get("enclosures") or None,
+        "image_candidates": payload.get("image_candidates") or None,
+        "inline_images": payload.get("inline_images") or None,
     }
 
     # Deduplicate OR repair
     if conn.sadd(SEEN_KEY, story_id):
         pipe = conn.pipeline()
-        pipe.lpush(FEED_KEY, json.dumps(story))
+        pipe.lpush(FEED_KEY, json.dumps(story, ensure_ascii=False))
         pipe.ltrim(FEED_KEY, 0, FEED_MAX - 1)
         pipe.execute()
         print(f"[normalize_event] NEW  -> {story_id} | {title}")
         return story
 
-    # Duplicate: try to repair if existing lacks image
-    if _repair_existing_if_needed(conn, story_id, story):
+    # Duplicate: try to repair if existing lacks image (match by id or url)
+    if _repair_recent_list(conn, story):
         return story
 
     print(f"[normalize_event] SKIP -> {story_id} (duplicate)")
@@ -610,7 +640,7 @@ def youtube_rss_poll(
         }
 
         jid = _safe_job_id("normalize", ev["source"], ev["source_event_id"])
-        q.enqueue(
+        Queue("events", connection=conn).enqueue(
             normalize_event,
             ev,
             job_id=jid,
@@ -662,11 +692,14 @@ def rss_poll(
 
     for entry in (parsed.entries or [])[:max_items]:
         title = entry.get("title", "") or ""
-        link = entry.get("link") or entry.get("id") or ""
-        if not link:
+        raw_link = entry.get("link") or entry.get("id") or ""
+        if not raw_link:
             continue
 
-        src_id = _hash_link(link)
+        # Normalize link before hashing to unify duplicates
+        norm_link = to_https(abs_url(raw_link, url)) or raw_link
+        src_id = _hash_link(norm_link)
+
         pub_norm = _to_rfc3339(
             entry.get("published_parsed")
             or entry.get("updated_parsed")
@@ -704,3 +737,66 @@ def rss_poll(
 
     print(f"[rss_poll] url={url} domain={source_domain} emitted={emitted}")
     return emitted
+
+# ======================= Backfill/repair helper ======================
+
+def backfill_repair_recent(scan: int = None) -> int:
+    """
+    Best-effort pass over recent FEED_KEY items:
+    - For entries missing an image, try to rebuild image from stored payload using extractor.
+    - Patch in place when an image is found.
+    Returns number of patched items.
+    """
+    conn = _redis()
+    window = int(scan or REPAIR_SCAN)
+    items = conn.lrange(FEED_KEY, 0, max(window - 1, 0))
+    patched = 0
+
+    for idx, raw in enumerate(items):
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            continue
+
+        if _has_any_image(obj):
+            continue
+
+        payload = obj.get("payload") or {}
+        link = obj.get("url") or (payload.get("url") if isinstance(payload, dict) else None)
+        base = link or (payload.get("feed") if isinstance(payload, dict) else "")
+
+        # Try extractor again with whatever we have
+        if isinstance(payload, dict) and payload:
+            # Try to pick from existing candidates/blocks
+            thumb = _pick_image_from_payload(payload, base, payload.get("image_candidates", [None])[0] if isinstance(payload.get("image_candidates"), list) else None)
+        else:
+            thumb = None
+
+        if not thumb and link:
+            # construct minimal entry to re-extract
+            dummy_entry = {
+                "link": link,
+                "summary": obj.get("summary") or "",
+                "description": payload.get("description_html") if isinstance(payload, dict) else "",
+                "content": [{"type": "text/html", "value": payload.get("content_html") if isinstance(payload, dict) else ""}],
+            }
+            new_payload, thumb_hint, _ = build_rss_payload(dummy_entry, payload.get("feed") if isinstance(payload, dict) else "")
+            payload = {**payload, **new_payload} if isinstance(payload, dict) else new_payload
+            thumb = _pick_image_from_payload(payload, base, thumb_hint)
+
+        if not thumb:
+            continue
+
+        obj["image"] = thumb
+        obj["thumb_url"] = thumb
+        obj["thumbnail"] = thumb
+        obj["poster"] = thumb
+        obj["media"] = thumb
+        obj["normalized_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        conn.lset(FEED_KEY, idx, json.dumps(obj, ensure_ascii=False))
+        patched += 1
+        print(f"[backfill_repair_recent] patched idx={idx} url={obj.get('url')}")
+
+    print(f"[backfill_repair_recent] done patched={patched}")
+    return patched
