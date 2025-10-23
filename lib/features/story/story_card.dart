@@ -106,16 +106,27 @@ class _StoryCardState extends State<StoryCard> {
     return out.trim();
   }
 
-  // ------------ Helpers to render "Published" + "Added" times ------------
-  String _formatDateTimeShort(DateTime dt) {
-    final loc = MaterialLocalizations.of(context);
-    final date = loc.formatMediumDate(dt);
-    final time = loc.formatTimeOfDay(TimeOfDay.fromDateTime(dt));
-    return '$date, $time';
+  // ---------- Time helpers ----------
+  static const List<String> _mon = [
+    'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+  ];
+
+  // Match the “metaLine” style you already show: 23 Oct 2025, 1:32 PM
+  String _formatMetaLike(DateTime dt) {
+    final d = dt.toLocal();
+    final day = d.day;
+    final m   = _mon[d.month - 1];
+    final y   = d.year;
+    var h = d.hour % 12;
+    if (h == 0) h = 12;
+    final mm = d.minute.toString().padLeft(2, '0');
+    final ap = d.hour >= 12 ? 'PM' : 'AM';
+    return '$day $m $y, $h:$mm $ap';
+    // Example: 23 Oct 2025, 1:18 PM
   }
 
   String _formatGap(Duration d) {
-    final abs = d.isNegative ? d * -1 : d;
+    final abs = d.isNegative ? -d : d;
     if (abs.inMinutes < 60) return '${abs.inMinutes}m';
     if (abs.inHours < 48) return '${abs.inHours}h';
     return '${abs.inDays}d';
@@ -143,7 +154,7 @@ class _StoryCardState extends State<StoryCard> {
       ],
     );
   }
-  // ---------------------------------------------------------------------------
+  // -----------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -153,28 +164,19 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
 
-    // "Published" meta text (already formatted upstream)
+    // Published (already formatted upstream)
     final rawMeta = widget.story.metaLine;
     final metaText = _stripKindPrefix(rawMeta);
 
-    // "Added" time: first-seen (ingested) if available; else normalizedAt
+    // Added: use ingestedAt if present, else normalizedAt — formatted EXACTLY like meta
     final DateTime? publishedAt = widget.story.publishedAt;
-    final DateTime? addedAt =
-        widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
-
+    final DateTime? addedAt = widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
     final String? addedText = (addedAt != null)
-        ? () {
-            final base = _formatDateTimeShort(addedAt);
-            if (publishedAt != null) {
-              final gap = addedAt.difference(publishedAt);
-              return 'Added $base (+${_formatGap(gap)})';
-            }
-            return 'Added $base';
-          }()
+        ? _formatMetaLike(addedAt) +
+            (publishedAt != null ? ' (+${_formatGap(addedAt.difference(publishedAt))})' : '')
         : null;
 
     final hasUrl = _linkUrl != null;
-
     final imageUrl = (widget.story.posterUrl?.isNotEmpty == true)
         ? widget.story.posterUrl!
         : (widget.story.thumbUrl ?? '');
@@ -207,14 +209,12 @@ class _StoryCardState extends State<StoryCard> {
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
-
-              // YouTube-style media area: strict 16:9
               final mediaH = math.max(140.0, w / (16 / 9));
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // === MEDIA (single image, center-cropped like YouTube) ===
+                  // Media
                   SizedBox(
                     height: mediaH,
                     child: Hero(
@@ -227,7 +227,7 @@ class _StoryCardState extends State<StoryCard> {
                             if (imageUrl.isNotEmpty)
                               CachedNetworkImage(
                                 imageUrl: imageUrl,
-                                fit: BoxFit.cover, // center-crop
+                                fit: BoxFit.cover,
                                 alignment: Alignment.center,
                                 memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
                                 fadeInDuration: const Duration(milliseconds: 160),
@@ -247,7 +247,6 @@ class _StoryCardState extends State<StoryCard> {
                                     : scheme.surfaceVariant.withOpacity(0.3),
                                 child: Center(child: _SampleIcon(kind: widget.story.kind)),
                               ),
-                            // Bottom gradient for text contrast
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -269,14 +268,13 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // === META + CTA ===
+                  // Meta + CTA
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // ---------- Row with kind + both timestamps ----------
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
@@ -290,7 +288,7 @@ class _StoryCardState extends State<StoryCard> {
                                   children: [
                                     _timePill(emoji: '🕐', text: metaText), // Published
                                     if (addedText != null)
-                                      _timePill(emoji: '⏱', text: addedText), // Added (+gap)
+                                      _timePill(emoji: '🕐', text: addedText), // Added (same style)
                                   ],
                                 ),
                               ),
@@ -397,7 +395,7 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-/* --------------------------- Kind badge (restored) --------------------------- */
+/* --------------------------- Kind badge --------------------------- */
 Widget KindMetaBadge(String kind) {
   final lower = kind.toLowerCase();
   Color bg;
@@ -484,7 +482,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* --------- Compact secondary action icon (supports emoji widget) --------- */
+/* --------- Compact secondary action icon --------- */
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -522,15 +520,15 @@ class _ActionIconBox extends StatelessWidget {
 // Works even if the Story model doesn't define `ingestedAt`.
 extension _StoryCompat on Story {
   DateTime? get ingestedAtCompat {
-    // 1) Direct field on model (newer builds)
+    // 1) direct field on model (newer builds)
     try {
       final dyn = (this as dynamic);
       final v = dyn.ingestedAt;
       if (v is DateTime) return v;
       if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
-    } catch (_) {/* ignore */}
+    } catch (_) {}
 
-    // 2) Sometimes models attach extra/raw maps
+    // 2) sometimes models attach extra/raw maps
     try {
       final dyn = (this as dynamic);
       final extra = dyn.extra ?? dyn.metadata ?? dyn.payload ?? dyn.raw;
@@ -539,9 +537,8 @@ extension _StoryCompat on Story {
         if (raw is DateTime) return raw;
         if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
       }
-    } catch (_) {/* ignore */}
+    } catch (_) {}
 
-    // 3) Not available
     return null;
   }
 }
