@@ -33,7 +33,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   static const Map<String, String> _tabs = {
     'all': 'All',
     'trailers': 'Trailers',
@@ -41,6 +42,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     'intheatres': 'In Theatres',
     'comingsoon': 'Coming Soon',
   };
+
+  // Silent background refresh cadence.
+  static const Duration _kAutoRefreshEvery = Duration(minutes: 2);
 
   late final TabController _tab = TabController(length: _tabs.length, vsync: this);
 
@@ -50,40 +54,78 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final Map<String, _PagedFeed> _feeds = {for (final k in _tabs.keys) k: _PagedFeed(tab: k)};
 
   bool _offline = false;
+  bool _isForeground = true;
+
   StreamSubscription? _connSub;
   Timer? _debounce;
+  Timer? _autoRefresh;
+
+  String get _currentTabKey => _tabs.keys.elementAt(_tab.index);
+  _PagedFeed get _currentFeed => _feeds[_currentTabKey]!;
 
   @override
   void initState() {
     super.initState();
+
+    // First load for all tabs (cached-first).
     for (final f in _feeds.values) {
       unawaited(f.load(reset: true));
     }
+
+    // Observe app lifecycle for resume refresh.
+    WidgetsBinding.instance.addObserver(this);
+
+    // Connectivity changes.
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
       final hasNetwork = _hasNetworkFrom(event);
       if (!mounted) return;
+      final wasOffline = _offline;
       setState(() => _offline = !hasNetwork);
+      // If back online, fetch deltas for current tab without flicker.
+      if (hasNetwork && wasOffline) {
+        unawaited(_currentFeed.load(reset: false));
+      }
     });
+
+    // Initial connectivity state.
     () async {
       final initial = await Connectivity().checkConnectivity();
       final hasNetwork = _hasNetworkFrom(initial);
       if (!mounted) return;
       setState(() => _offline = !hasNetwork);
     }();
+
+    // Auto refresh tick (silent).
+    _autoRefresh = Timer.periodic(_kAutoRefreshEvery, (_) => _tickAutoRefresh());
+
     _search.addListener(_onSearchChanged);
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _autoRefresh?.cancel();
     _connSub?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+
     _search.removeListener(_onSearchChanged);
     _search.dispose();
+
     for (final f in _feeds.values) {
       f.dispose();
     }
     _tab.dispose();
     super.dispose();
+  }
+
+  // Lifecycle → refresh when returning to foreground.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isForeground = (state == AppLifecycleState.resumed);
+    if (_isForeground && mounted && !_offline) {
+      // Gentle, incremental fetch (no skeleton flicker).
+      unawaited(_currentFeed.load(reset: false));
+    }
   }
 
   bool _hasNetworkFrom(dynamic event) {
@@ -101,10 +143,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
+  // Manual pull-to-refresh: full reset + optional external hook.
   Future<void> _refresh() async {
-    final key = _tabs.keys.elementAt(_tab.index);
+    final key = _currentTabKey;
     await _feeds[key]!.load(reset: true);
     widget.onHeaderRefresh?.call();
+  }
+
+  // Background silent refresh tick.
+  void _tickAutoRefresh() {
+    if (!mounted) return;
+    if (_offline) return;
+    if (!_isForeground) return;
+    if (_search.text.isNotEmpty) return; // don’t disturb while searching
+    // Only fetch deltas for the visible tab.
+    unawaited(_currentFeed.load(reset: false));
   }
 
   @override
@@ -248,7 +301,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           unselectedLabelStyle:
                               const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
                           tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
-                          onTap: (_) => setState(() {}),
+                          onTap: (_) {
+                            setState(() {});
+                            // When switching tabs, fetch recent deltas quickly.
+                            unawaited(_currentFeed.load(reset: false));
+                          },
                         ),
                       ),
                     );
@@ -257,7 +314,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // “Trending Now” header
+            // “Trending Now” header — compact
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
@@ -290,7 +347,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
 
-            // Main tabbed feed list — auto-responsive grid (taller cards)
+            // Main tabbed feed list — auto-responsive grid (slightly taller cards)
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -330,7 +387,7 @@ class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-// Responsive Feed List (auto columns + *taller* tiles so long titles fit)
+// Responsive Feed List (auto columns + *slightly taller* tiles)
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -366,20 +423,20 @@ class _FeedListState extends State<_FeedList>
     }
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // Make cards taller than before:
+    // Make cards a bit taller than before:
     // childAspectRatio = width / height, so LOWER = TALLER.
     double ratio;
     if (maxTileW <= 340) {
-      ratio = 0.60; // very tall on narrow phones
+      ratio = 0.56; // taller on narrow phones
     } else if (maxTileW <= 380) {
-      ratio = 0.68;
+      ratio = 0.64;
     } else if (maxTileW <= 420) {
-      ratio = 0.76;
+      ratio = 0.72;
     } else {
-      ratio = 0.84;
+      ratio = 0.80;
     }
     // Respect large text accessibility (taller with bigger text).
-    ratio /= textScale.clamp(1.0, 1.6);
+    ratio /= textScale.clamp(1.0, 1.8);
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
@@ -412,7 +469,7 @@ class _FeedListState extends State<_FeedList>
               return GridView.builder(
                 padding: EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
-                cacheExtent: 1600, // a bit higher since cards are taller
+                cacheExtent: 1800, // slightly higher since cards are taller
                 gridDelegate: gridDelegate,
                 itemCount: 9,
                 itemBuilder: (_, __) => const SkeletonCard(),
@@ -459,7 +516,7 @@ class _FeedListState extends State<_FeedList>
             return GridView.builder(
               padding: EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
               physics: const AlwaysScrollableScrollPhysics(),
-              cacheExtent: 1800,
+              cacheExtent: 2000,
               gridDelegate: gridDelegate,
               itemCount: filtered.length + (showLoadMore ? 1 : 0),
               itemBuilder: (_, i) {
