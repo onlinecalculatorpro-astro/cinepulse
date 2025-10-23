@@ -6,7 +6,7 @@ import json
 import os
 import re
 from typing import Iterable, Optional, Tuple, List, Dict, Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse, urlencode, parse_qsl
 
 __all__ = [
     "build_rss_payload",          # -> (payload: dict, thumb_hint: Optional[str], candidates: List[str])
@@ -24,8 +24,12 @@ OG_FETCH = os.getenv("OG_FETCH", "1").lower() not in ("0", "", "false", "no")
 # Allow-list of domains we are OK probing (comma-separated, suffix match)
 OG_ALLOWED_DOMAINS = {
     d.strip().lower()
-    for d in os.getenv("OG_ALLOWED_DOMAINS",
-                       "bollywoodhungama.com,koimoi.com,pinkvilla.com,filmfare.com,deadline.com,indiewire.com,slashfilm.com").split(",")
+    for d in os.getenv(
+        "OG_ALLOWED_DOMAINS",
+        # add common sites we ingest (inc. WordPress heavy ones)
+        "bollywoodhungama.com,koimoi.com,pinkvilla.com,filmfare.com,deadline.com,indiewire.com,slashfilm.com,"
+        "tellyupdates.com,wordpress.com,wp.com,wordpress.org,wpengine.com,cloudfront.net,akamaized.net"
+    ).split(",")
     if d.strip()
 }
 # Also try AMP page if present (link[rel=amphtml])
@@ -34,12 +38,10 @@ AMP_FETCH = os.getenv("AMP_FETCH", "1").lower() not in ("0", "", "false", "no")
 HEAD_PROBE = os.getenv("HEAD_PROBE", "0").lower() not in ("0", "", "false", "no")
 
 OG_TIMEOUT = float(os.getenv("OG_TIMEOUT", "3.5"))
-USER_AGENT = os.getenv(
-    "FETCH_UA",
-    "Mozilla/5.0 (compatible; CinePulseBot/1.1; +https://example.com/bot)"
-)
+USER_AGENT = os.getenv("FETCH_UA", "Mozilla/5.0 (compatible; CinePulseBot/1.2; +https://example.com/bot)")
 
-IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp", ".jfif", ".pjpeg")  # (svg excluded for thumbs)
+IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp", ".jfif", ".pjpeg")
+IMG_HOSTS_FRIENDLY = {"i0.wp.com", "i1.wp.com", "images.ctfassets.net"}  # hotlink-friendly CDNs we can trust
 
 # ============================== Helpers ==============================
 
@@ -51,7 +53,6 @@ def dlog(msg: str, *kv: Any) -> None:
 def abs_url(url: Optional[str], base: str) -> Optional[str]:
     if not url:
         return None
-    # unescape entities like &amp;
     url = html.unescape(url.strip())
     if not url:
         return None
@@ -69,15 +70,67 @@ def to_https(url: Optional[str]) -> Optional[str]:
         return "https://" + url[7:]
     return url
 
+def _strip_tracking_query(u: str) -> str:
+    """Remove pure tracking params (utm_*, fbclid, gclid, itok) to dedupe, preserve format/width params."""
+    p = urlparse(u)
+    if not p.query:
+        return u
+    keep = []
+    for k, v in parse_qsl(p.query, keep_blank_values=True):
+        lk = k.lower()
+        if lk.startswith("utm_") or lk in {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "itok"}:
+            continue
+        keep.append((k, v))
+    new_q = urlencode(keep)
+    return urlunparse((p.scheme, p.netloc, p.path, p.params, new_q, p.fragment))
+
 def _norm(url: Optional[str], base: str) -> Optional[str]:
-    return to_https(abs_url(url, base))
+    u = to_https(abs_url(url, base))
+    return _strip_tracking_query(u) if u else None
+
+def _has_image_ext(path_or_url: str) -> bool:
+    base = path_or_url.split("?", 1)[0].lower()
+    return base.endswith(IMG_EXTS)
 
 def _looks_image_like(url: str) -> bool:
-    """Accept typical extensions OR obvious 'image' cue paths even without extension."""
-    base = url.split("?", 1)[0].lower()
-    if base.endswith(IMG_EXTS):
+    """
+    Accept typical extensions OR obvious 'image' cues OR query-format hints even without extension.
+    Also handle WordPress uploads and Cloudinary-like URLs.
+    """
+    l = url.lower()
+    if _has_image_ext(l):
         return True
-    return bool(re.search(r"(og|open[-_]?graph|image|thumb|thumbnail|poster|photo|hero)", base))
+
+    # WordPress uploads often carry no extension at the very end due to query params or resized variants
+    if "/wp-content/uploads/" in l:
+        return True
+
+    # Query string hints (format=webp|jpg|png, fm=jpg, output=webp)
+    if re.search(r"([?&](?:format|fm|output)=(?:jpe?g|png|webp|avif))", l):
+        return True
+
+    # Generic cues
+    if re.search(r"(og|open[-_]?graph|image|thumb|thumbnail|poster|photo|hero|share)", l):
+        return True
+
+    # Cloudinary /imgix/GraphCMS style transforms are fine
+    if re.search(r"/(?:image|upload)/.*(?:/c_|/w_|/q_|/f_|/ar_|/g_)", l):
+        return True
+
+    return False
+
+def _prefer_same_origin_score(u: str, page_url: str) -> int:
+    """Small bias to images hosted on same registrable domain as the article."""
+    try:
+        host_img = urlparse(u).netloc.lower().removeprefix("www.")
+        host_pg = urlparse(page_url).netloc.lower().removeprefix("www.")
+        if host_img == host_pg:
+            return 70
+        if host_img in IMG_HOSTS_FRIENDLY:
+            return 30
+    except Exception:
+        pass
+    return 0
 
 def _fetch_text(url: str) -> Optional[str]:
     try:
@@ -86,11 +139,13 @@ def _fetch_text(url: str) -> Optional[str]:
             r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=OG_TIMEOUT)
             if r.status_code >= 400:
                 return None
+            # a few sites send latin-1 incorrectly; ignore errors
+            r.encoding = r.encoding or "utf-8"
             return r.text
         except Exception:
             from urllib.request import Request, urlopen
             req = Request(url, headers={"User-Agent": USER_AGENT})
-            with urlopen(req, timeout=OG_TIMEOUT) as resp:  # nosec - guarded by allowlist
+            with urlopen(req, timeout=OG_TIMEOUT) as resp:  # nosec
                 return resp.read().decode("utf-8", "ignore")
     except Exception:
         return None
@@ -139,10 +194,7 @@ def _choose_from_srcset(srcset: str) -> Optional[str]:
 # Candidate with score -------------------------------------------------
 
 def _numeric_size_hint(u: str) -> int:
-    """
-    Extract width/height hints embedded in URLs: 1200x630, -2048, _1080 etc.
-    Return an approximate 'size' number to boost ranking.
-    """
+    # Extract width/height hints embedded in URLs: 1200x630, -2048, _1080 etc.
     size = 0
     m = re.search(r'(\d{3,5})[xX_ -](\d{3,5})', u)
     if m:
@@ -162,7 +214,6 @@ def _numeric_size_hint(u: str) -> int:
 
 def _score_image_url(u: str, bias: int = 0) -> int:
     score = bias
-    # prefer bigger
     score += _numeric_size_hint(u)
     # OG/hero cues
     if re.search(r"(og|open[-_]?graph|hero|share|feature|original|full)", u, re.I):
@@ -184,7 +235,7 @@ def choose_best_image(candidates: Iterable[str]) -> Optional[str]:
 
 # ===================== HTML extraction (no fetch) =====================
 
-def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tuple[str, int]]:
+def _images_from_html_block(html_str: Optional[str], base_url: str, page_url: Optional[str] = None) -> List[Tuple[str, int]]:
     """Return [(normalized_url, score_bias), ...] from a snippet."""
     if not html_str:
         return []
@@ -194,48 +245,62 @@ def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tupl
 
     # <img src="...">
     for m in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', s, flags=re.I):
-        out.append((m.group(1), 120))
+        out.append((m.group(1), 140))
 
     # lazy-load attributes (popular variants)
-    for attr in ("data-src", "data-original", "data-lazy-src", "data-image", "data-srcset"):
+    for attr in ("data-src", "data-original", "data-lazy-src", "data-image", "data-orig-src", "data-lazyload"):
         for m in re.finditer(fr'<img[^>]+{attr}=["\']([^"\']+)["\']', s, flags=re.I):
-            out.append((m.group(1), 110))
+            out.append((m.group(1), 135))
 
     # srcset on <img>/<source>
     for m in re.finditer(r'(?:<img|<source)[^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I):
         pick = _choose_from_srcset(m.group(1))
         if pick:
-            out.append((pick, 160))
+            out.append((pick, 180))
+
+    # <picture><source> type=image/... (already covered by srcset but keep)
+    for m in re.finditer(r'<source[^>]+type=["\']image/[^"\']+["\'][^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I):
+        pick = _choose_from_srcset(m.group(1))
+        if pick:
+            out.append((pick, 185))
 
     # AMP <amp-img ...>
     for m in re.finditer(r'<amp-img[^>]+src=["\']([^"\']+)["\']', s, flags=re.I):
-        out.append((m.group(1), 150))
+        out.append((m.group(1), 170))
     for m in re.finditer(r'<amp-img[^>]+srcset=["\']([^"\']+)["\']', s, flags=re.I):
         pick = _choose_from_srcset(m.group(1))
         if pick:
-            out.append((pick, 165))
+            out.append((pick, 190))
 
     # <noscript> with <img>
     for m in re.finditer(r'<noscript[^>]*>(.*?)</noscript>', s, flags=re.I | re.S):
         sub = m.group(1)
         for m2 in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', sub, flags=re.I):
-            out.append((m2.group(1), 130))
+            out.append((m2.group(1), 160))
 
-    # CSS background-image: url("...")
+    # CSS background-image: url("...") (cards, hero divs)
     for m in re.finditer(r'background-image\s*:\s*url\((["\']?)([^)]+?)\1\)', s, flags=re.I):
-        out.append((m.group(2), 90))
+        out.append((m.group(2), 110))
     # data-background / data-bg
     for attr in ("data-background", "data-background-image", "data-bg", "data-bg-url"):
         for m in re.finditer(fr'(?:<\w+[^>]+{attr}=["\']([^"\']+)["\'])', s, flags=re.I):
-            out.append((m.group(1), 90))
+            out.append((m.group(1), 110))
+
+    # <a href="..."> directly to an image (e.g., TellyUpdates "Image:" link)
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(?:\s*Image[:\s]|<img|[^<]{0,7})', s, flags=re.I):
+        out.append((m.group(1), 200))
+    # any <a href="*.jpg|*.webp|...">
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+\.(?:jpe?g|png|webp|gif|avif))["\']', s, flags=re.I):
+        out.append((m.group(1), 195))
 
     # <meta> OpenGraph/Twitter/itemprop variants
     meta_pairs = [
-        (r'property=["\']og:image["\']', 400),
-        (r'property=["\']og:image:url["\']', 395),
-        (r'property=["\']og:image:secure_url["\']', 395),
-        (r'name=["\']twitter:image(?::src)?["\']', 380),
-        (r'itemprop=["\']image["\']', 360),
+        (r'property=["\']og:image["\']', 420),
+        (r'property=["\']og:image:url["\']', 415),
+        (r'property=["\']og:image:secure_url["\']', 415),
+        (r'name=["\']twitter:image(?::src)?["\']', 395),
+        (r'itemprop=["\']image["\']', 370),
+        (r'name=["\']parsely-image-url["\']', 360),
     ]
     for sel, bias in meta_pairs:
         for m in re.finditer(rf'<meta[^>]+{sel}[^>]+content=["\']([^"\']+)["\']', s, flags=re.I):
@@ -243,19 +308,24 @@ def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tupl
 
     # <link rel="image_src" ...>, <link rel="preload" as="image" href="...">
     for m in re.finditer(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', s, flags=re.I):
-        out.append((m.group(1), 320))
+        out.append((m.group(1), 330))
     for m in re.finditer(r'<link[^>]+rel=["\']preload["\'][^>]+as=["\']image["\'][^>]+href=["\']([^"\']+)["\']', s, flags=re.I):
-        out.append((m.group(1), 300))
+        out.append((m.group(1), 310))
 
     # JSON-LD blocks: image / thumbnailUrl / contentUrl / primaryImageOfPage / associatedMedia / logo
     for m in re.finditer(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', s, flags=re.I | re.S):
+        raw = m.group(1).strip()
+        # some sites (Yoast/RankMath) embed multiple JSON-LD objects, possibly invalid; try best-effort
         try:
-            data = json.loads(m.group(1).strip())
+            data = json.loads(raw)
         except Exception:
-            continue
+            # try to unescape & fix common trailing commas
+            try:
+                data = json.loads(raw.replace("\n", " ").replace(", }", " }"))
+            except Exception:
+                continue
         objs = data if isinstance(data, list) else [data]
         for obj in objs:
-            # nested helper
             def collect_from_ld(val: Any, bias: int) -> None:
                 if isinstance(val, str):
                     out.append((val, bias))
@@ -271,12 +341,12 @@ def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tupl
                         collect_from_ld(it, bias)
 
             for k, bias in (
-                ("image", 360),
-                ("thumbnailUrl", 350),
-                ("contentUrl", 350),
-                ("primaryImageOfPage", 370),
-                ("associatedMedia", 340),
-                ("logo", 200),
+                ("image", 380),
+                ("thumbnailUrl", 360),
+                ("contentUrl", 360),
+                ("primaryImageOfPage", 400),
+                ("associatedMedia", 345),
+                ("logo", 210),
             ):
                 v = obj.get(k)
                 if v:
@@ -292,6 +362,9 @@ def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tupl
         if _looks_image_like(u) or _head_is_image(u):
             if u not in seen:
                 seen.add(u)
+                # prefer same-origin slightly to avoid hotlink blocks
+                if page_url:
+                    bias += _prefer_same_origin_score(u, page_url)
                 results.append((u, bias))
     return results
 
@@ -302,14 +375,14 @@ def _enclosures_from_entry(entry: Dict[str, Any], base_url: str) -> List[Tuple[s
     for enc in entry.get("enclosures") or []:
         u = enc.get("href") or enc.get("url")
         typ = (enc.get("type") or "").lower()
-        if u and (typ.startswith("image/") or u.lower().split("?", 1)[0].endswith(IMG_EXTS)):
-            urls.append((_norm(u, base_url) or u, 260))
+        if u and (typ.startswith("image/") or _has_image_ext(u)):
+            urls.append((_norm(u, base_url) or u, 265))
     for l in entry.get("links") or []:
         if isinstance(l, dict) and l.get("rel") == "enclosure":
             u = l.get("href")
             typ = (l.get("type") or "").lower()
-            if u and (typ.startswith("image/") or u.lower().split("?", 1)[0].endswith(IMG_EXTS)):
-                urls.append((_norm(u, base_url) or u, 255))
+            if u and (typ.startswith("image/") or _has_image_ext(u)):
+                urls.append((_norm(u, base_url) or u, 260))
     return [(u, b) for (u, b) in urls if u]
 
 def _media_fields_from_entry(entry: Dict[str, Any], base_url: str) -> List[Tuple[str, int]]:
@@ -318,7 +391,7 @@ def _media_fields_from_entry(entry: Dict[str, Any], base_url: str) -> List[Tuple
     if isinstance(thumbs, list):
         for t in thumbs:
             if isinstance(t, dict) and t.get("url"):
-                urls.append((_norm(t["url"], base_url) or t["url"], 280))
+                urls.append((_norm(t["url"], base_url) or t["url"], 285))
     mcont = entry.get("media_content") or entry.get("media:content")
     if isinstance(mcont, list):
         for it in mcont:
@@ -326,15 +399,15 @@ def _media_fields_from_entry(entry: Dict[str, Any], base_url: str) -> List[Tuple
                 continue
             u = it.get("url") or it.get("href")
             typ = (it.get("type") or "").lower()
-            if u and (typ.startswith("image/") or u.lower().split("?", 1)[0].endswith(IMG_EXTS)):
-                urls.append((_norm(u, base_url) or u, 275))
+            if u and (typ.startswith("image/") or _has_image_ext(u)):
+                urls.append((_norm(u, base_url) or u, 280))
     # simple custom fields
     for k in ("image", "picture", "logo", "thumbnail", "poster"):
         v = entry.get(k)
         if isinstance(v, str):
-            urls.append((_norm(v, base_url) or v, 220))
+            urls.append((_norm(v, base_url) or v, 230))
         elif isinstance(v, dict) and v.get("href"):
-            urls.append((_norm(v["href"], base_url) or v["href"], 220))
+            urls.append((_norm(v["href"], base_url) or v["href"], 230))
     return [(u, b) for (u, b) in urls if u]
 
 def _collect_all_candidates(entry: Dict[str, Any], feed_url: str, link_url: str) -> List[Tuple[str, int]]:
@@ -355,8 +428,8 @@ def _collect_all_candidates(entry: Dict[str, Any], feed_url: str, link_url: str)
 
     summary_html = entry.get("summary_detail", {}).get("value") or entry.get("summary") or entry.get("description") or ""
 
-    cand += _images_from_html_block(content_html, base)
-    cand += _images_from_html_block(summary_html, base)
+    cand += _images_from_html_block(content_html, base, page_url=link_url or base)
+    cand += _images_from_html_block(summary_html, base, page_url=link_url or base)
 
     # unique, keep best bias if duplicates
     best_bias: Dict[str, int] = {}
@@ -367,7 +440,7 @@ def _collect_all_candidates(entry: Dict[str, Any], feed_url: str, link_url: str)
             best_bias[u] = b
     return [(u, best_bias[u]) for u in best_bias.keys()]
 
-# ===================== Optional page probing (OG/AMP) =================
+# ===================== Optional page probing (OG/AMP + shims) =========
 
 def _extract_amp_link(s: str, base: str) -> Optional[str]:
     m = re.search(r'<link[^>]+rel=["\']amphtml["\'][^>]+href=["\']([^"\']+)["\']', s, flags=re.I)
@@ -377,8 +450,22 @@ def _extract_amp_link(s: str, base: str) -> Optional[str]:
 
 def _page_discover_images(page_html: str, page_url: str) -> List[Tuple[str, int]]:
     page_base = _extract_base_href(page_html, page_url)
-    # Prefer OG/Twitter first (high bias), then everything else.
-    cands = _images_from_html_block(page_html, page_base)
+    cands = _images_from_html_block(page_html, page_base, page_url=page_url)
+
+    # ---- site shims (very light-touch) ----
+    host = urlparse(page_url).netloc.lower().removeprefix("www.")
+
+    # WordPress family (including Koimoi): prefer og:image first, then first gallery/featured image
+    if host.endswith(("koimoi.com", "tellyupdates.com")) or "wp-content" in page_html:
+        # already captured by meta OG; bump any uploads hero by a small bias
+        bumped: List[Tuple[str, int]] = []
+        for u, b in cands:
+            if "/wp-content/uploads/" in u:
+                bumped.append((u, b + 40))
+            else:
+                bumped.append((u, b))
+        cands = bumped
+
     return cands
 
 def _maybe_probe_page_for_images(url: str) -> List[Tuple[str, int]]:
@@ -412,25 +499,25 @@ def build_rss_payload(entry: Dict[str, Any], feed_url: str) -> Tuple[Dict[str, A
     cands = _collect_all_candidates(entry, feed_url, link)
 
     # If none (or only very weak), probe article page(s)
-    if OG_FETCH and (not cands or max((b for _, b in cands), default=0) < 300) and link:
+    top_bias = max((b for _, b in cands), default=0)
+    if OG_FETCH and (not cands or top_bias < 320) and link:
         cands += _maybe_probe_page_for_images(link)
 
-    # Normalize + unique + sort by score
+    # Normalize + unique + sort by score (+host preference)
     merged: Dict[str, int] = {}
     for u, b in cands:
         if not u:
             continue
         if _looks_image_like(u) or _head_is_image(u):
-            merged[u] = max(merged.get(u, -10**9), b + _score_image_url(u))
+            bonus = _prefer_same_origin_score(u, link) if link else 0
+            merged[u] = max(merged.get(u, -10**9), b + bonus + _score_image_url(u))
 
-    # Order by score
     ordered = sorted(merged.items(), key=lambda x: x[1], reverse=True)
     candidates = [u for u, _ in ordered]
 
     thumb_hint = candidates[0] if candidates else None
 
     # Build payload expected by normalizer (+ useful extras)
-    # Prefer full content if present
     content_html = ""
     content = entry.get("content")
     if isinstance(content, list) and content:
@@ -446,9 +533,9 @@ def build_rss_payload(entry: Dict[str, Any], feed_url: str) -> Tuple[Dict[str, A
     )
 
     # gather inline imgs (first few) for transparency/debug
-    inline_imgs = [u for u, _ in _images_from_html_block(content_html, link)[:3]]
+    inline_imgs = [u for u, _ in _images_from_html_block(content_html, link, page_url=link)[:3]]
     if not inline_imgs:
-        inline_imgs = [u for u, _ in _images_from_html_block(description_html, link)[:3]]
+        inline_imgs = [u for u, _ in _images_from_html_block(description_html, link, page_url=link)[:3]]
 
     payload: Dict[str, Any] = {
         "url": link,
