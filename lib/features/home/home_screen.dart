@@ -170,12 +170,16 @@ class _HomeScreenState extends State<HomeScreen>
     final base = kApiBaseUrl; // provided by core/api.dart
     final u = Uri.parse(base);
     final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
-    // Keep host + (optional) port; replace path with the WS endpoint
+
+    // If your API has a base path (e.g. /api), preserve it.
+    final basePath = (u.path.isEmpty || u.path == '/') ? '' : u.path;
+    final fullPath = '$basePath/v1/realtime/ws';
+
     return Uri(
       scheme: scheme,
       host: u.host,
       port: u.hasPort ? u.port : null,
-      path: '/v1/realtime/ws',
+      path: fullPath,
     ).toString();
   }
 
@@ -189,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen>
       _ws = WebSocketChannel.connect(Uri.parse(url));
       _wsSub = _ws!.stream.listen(
         (data) {
-          // Expected: {"id":"...", "kind":"...", "normalized_at":"..."} or {"type":"ping"}
+          // Expected: {"id":"...", "kind":"...", "..."} or {"type":"ping"}
           try {
             final obj = json.decode(data.toString());
             if (obj is Map && obj['type'] == 'ping') return;
