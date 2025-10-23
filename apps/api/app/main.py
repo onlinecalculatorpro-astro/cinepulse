@@ -105,22 +105,22 @@ app = FastAPI(
     description="Feed & story API for CinePulse with cursor pagination, realtime fanout, and basic rate limiting.",
 )
 
-_cors = os.getenv("CORS_ORIGINS", "*").strip()
-if _cors == "*":
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[o.strip() for o in _cors.split(",") if o.strip()],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+#_cors = os.getenv("CORS_ORIGINS", "*").strip()
+#if _cors == "*":
+#   app.add_middleware(
+#        CORSMiddleware,
+#        allow_origins=["*"],
+#        allow_methods=["*"],
+#        allow_headers=["*"],
+#    )
+#else:
+#    app.add_middleware(
+#        CORSMiddleware,
+#        allow_origins=[o.strip() for o in _cors.split(",") if o.strip()],
+#        allow_credentials=True,
+#        allow_methods=["*"],
+#        allow_headers=["*"],
+#    )
 
 # Mount new routers
 app.include_router(realtime_router)                 # /v1/realtime/*
