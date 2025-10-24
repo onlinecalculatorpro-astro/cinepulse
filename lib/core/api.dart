@@ -1,10 +1,16 @@
 // lib/core/api.dart
 //
 // CinePulse HTTP client & endpoints
-// - Keeps public API: fetchFeed / searchStories / fetchStory / fetchApproxFeedLength
-// - Persistent http.Client with tiny retry/backoff for flaky 50x/timeouts
-// - Sensible BASE URL resolution (dart-define > explicit prod > local dev)
-// - Safer path joining + clearer, truncated error messages
+// - Public API: fetchFeed / searchStories / fetchStory / fetchApproxFeedLength
+// - Persistent http.Client with tiny retry/backoff
+// - SAFE base URL resolution (prod by default; no implicit localhost)
+// - Optional dev knobs via --dart-define
+//
+// Dev flags you can pass when you WANT localhost:
+//   --dart-define=USE_LOCAL_DEV=true                 → http://10.0.2.2:8000 (Android emulator)
+//   --dart-define=DEV_SERVER=http://192.168.1.50:8000 → explicit dev server URL
+//
+// CI already injects API_BASE_URL/DEEP_LINK_BASE for release-like builds.
 
 import 'dart:async';
 import 'dart:convert';
@@ -15,44 +21,39 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 
 /// ------------------------------------
-/// Base URLs (prod by default; dev auto-detect)
+/// Base URLs (prod by default; NO implicit localhost)
 /// ------------------------------------
 
 String _resolveApiBase() {
-  // 1) Strongest: passed via --dart-define=API_BASE_URL=https://...
+  // 1) Strongest: --dart-define=API_BASE_URL=https://...
   const fromDefine = String.fromEnvironment('API_BASE_URL');
   if (fromDefine.isNotEmpty) return fromDefine;
 
-  // 2) Default to your live API domain.
-  //    For local/dev we override below when not in release mode.
-  const prod = 'https://api.onlinecalculatorpro.org';
-
-  // 3) Local/dev heuristics (only when not release).
-  if (!kReleaseMode) {
-    if (kIsWeb) {
-      // Helpful default for Codespaces: swap port → 8000
-      final host = Uri.base.host; // e.g. foo-5173.app.github.dev
-      if (host.endsWith('.app.github.dev')) {
-        final guessed = host.replaceFirst(RegExp(r'-\d+\.app\.github\.dev$'), '-8000.app.github.dev');
-        return 'https://$guessed';
-      }
-    }
-    return 'http://localhost:8000';
+  // 2) Explicit dev server override (e.g. --dart-define=DEV_SERVER=http://192.168.1.50:8000)
+  const devServer = String.fromEnvironment('DEV_SERVER');
+  if (devServer.isNotEmpty) {
+    return devServer.startsWith('http') ? devServer : 'http://$devServer';
   }
 
-  return prod;
+  // 3) Opt-in localhost for emulator ONLY if requested
+  const useLocal = String.fromEnvironment('USE_LOCAL_DEV');
+  if (useLocal.toLowerCase() == 'true' || useLocal == '1') {
+    // Android emulator host loopback
+    return 'http://10.0.2.2:8000';
+  }
+
+  // 4) Default to production
+  return 'https://api.onlinecalculatorpro.org';
 }
 
 String _resolveDeepBase() {
-  // 1) --dart-define=DEEP_LINK_BASE=https://.../#/s
+  // --dart-define=DEEP_LINK_BASE=https://.../#/s
   const fromDefine = String.fromEnvironment('DEEP_LINK_BASE');
   if (fromDefine.isNotEmpty) return fromDefine;
 
-  // 2) For Flutter web dev server, share links to same origin.
+  // Reasonable defaults
   if (kIsWeb) return '${Uri.base.origin}/#/s';
-
-  // 3) Fallback placeholder; override via --dart-define for releases if needed.
-  return 'https://cinepulse.example/#/s';
+  return 'https://cinepulse.netlify.app/#/s';
 }
 
 /// Public constants you can import elsewhere.
@@ -127,7 +128,6 @@ class ApiClient {
     var body = r.body;
     if (body.length > 400) body = '${body.substring(0, 400)}…';
 
-    // Friendlier messages for a few common cases.
     if (r.statusCode == 429) {
       throw Exception('API $path rate limited (429). Please try again shortly.');
     }
@@ -174,7 +174,7 @@ class ApiClient {
   Future<List<Story>> fetchFeed({
     String tab = 'all',
     DateTime? since,
-    int limit = 30, // show a healthy page by default
+    int limit = 30,
   }) async {
     final norm = _normalizeTab(tab);
     final uri = _build('/v1/feed', {
