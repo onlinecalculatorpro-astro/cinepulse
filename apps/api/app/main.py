@@ -40,17 +40,24 @@ _redis_client = redis.from_url(
     socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0")),
 )
 
-# ------------------------------ Routers (realtime / push) ---------------------
+# ------------------------------ Routers (realtime / push / img) --------------
 
 # Ensure these files exist:
-#   apps/api/app/realtime.py  -> defines: router = APIRouter(prefix="/v1/realtime", ...)
-#   apps/api/app/push.py      -> defines: router = APIRouter(prefix="/v1/push", ...)
+#   apps/api/app/realtime.py   -> defines: router = APIRouter(prefix="/v1/realtime", ...)
+#   apps/api/app/push.py       -> defines: router = APIRouter(prefix="/v1/push", ...)
+#   apps/api/app/img_proxy.py  -> defines: router = APIRouter(prefix="/v1", ...)
+
 from apps.api.app.realtime import router as realtime_router  # noqa: E402
 
 try:
     from apps.api.app.push import router as push_router  # optional
 except Exception:
     push_router = None  # push router is optional
+
+try:
+    from apps.api.app.img_proxy import router as img_proxy_router  # optional
+except Exception:
+    img_proxy_router = None
 
 # ------------------------------ Models ---------------------------------------
 
@@ -101,13 +108,13 @@ class FeedTab(str, Enum):
 
 app = FastAPI(
     title="CinePulse API",
-    version="0.4.1",
+    version="0.4.2",
     description="Feed & story API for CinePulse with cursor pagination, realtime fanout, and basic rate limiting.",
 )
 
 _cors = os.getenv("CORS_ORIGINS", "*").strip()
 if _cors == "*":
-   app.add_middleware(
+    app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["*"],
@@ -122,10 +129,12 @@ else:
         allow_headers=["*"],
     )
 
-# Mount new routers
+# Mount routers
 app.include_router(realtime_router)                 # /v1/realtime/*
 if push_router is not None:
     app.include_router(push_router)                 # /v1/push/*
+if img_proxy_router is not None:
+    app.include_router(img_proxy_router)            # /v1/img?u=...
 
 # ------------------------------ Error handlers -------------------------------
 
@@ -415,4 +424,4 @@ async def story_detail(
 
 @app.get("/")
 def root():
-    return {"ok": True, "service": "cinepulse-api"}
+    return {"ok": True, "service": "cinepulse-api", "version": "0.4.2"}
