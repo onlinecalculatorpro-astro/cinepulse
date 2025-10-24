@@ -9,12 +9,12 @@ plugins {
 }
 
 android {
-    namespace "api.onlinecalculatorpro.cinepulse"       // must match google-services.json package
-    compileSdk flutter.compileSdkVersion
+    namespace "api.onlinecalculatorpro.cinepulse"   // must match google-services.json package
+    compileSdk flutter.compileSdkVersion            // compileSdk warning is harmless; suppress via gradle.properties if needed
 
     defaultConfig {
         applicationId "api.onlinecalculatorpro.cinepulse"
-        minSdk 23
+        minSdk 24                                    // bump to 24 to satisfy Flutter’s upcoming requirement
         targetSdk flutter.targetSdkVersion
         versionCode flutter.versionCode
         versionName flutter.versionName
