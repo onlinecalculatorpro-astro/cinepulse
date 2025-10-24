@@ -370,6 +370,10 @@ def health():
         "error": err,
     }
 
+@app.get("/v1/health")
+def health_v1():
+    return health()
+    
 @app.get(
     "/v1/feed",
     response_model=FeedResponse,
