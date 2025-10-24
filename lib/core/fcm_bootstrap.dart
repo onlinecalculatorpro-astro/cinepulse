@@ -6,14 +6,13 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-const _channelId = 'cinepulse_general';
+const _channelId   = 'cinepulse_general';
 const _channelName = 'CinePulse';
 const _channelDesc = 'General updates';
 
 final FlutterLocalNotificationsPlugin _fln = FlutterLocalNotificationsPlugin();
 
-bool get _isAndroid =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+bool get _isAndroid => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 int _nextId() => DateTime.now().millisecondsSinceEpoch.remainder(1 << 31);
 
@@ -26,44 +25,41 @@ Future<void> _ensureFirebase() async {
 
 Future<void> _ensureChannel() async {
   if (!_isAndroid) return;
-  const channel = AndroidNotificationChannel(
+  const ch = AndroidNotificationChannel(
     _channelId,
     _channelName,
     description: _channelDesc,
     importance: Importance.high,
   );
   await _fln
-      .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(channel);
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(ch);
 }
 
 NotificationDetails _headsUpDetails() => const NotificationDetails(
-      android: AndroidNotificationDetails(
-        _channelId,
-        _channelName,
-        importance: Importance.high,
-        priority: Priority.high,
-        // icon: '@mipmap/ic_notification', // (optional) if you add one
-      ),
-    );
+  android: AndroidNotificationDetails(
+    _channelId,
+    _channelName,
+    importance: Importance.high,
+    priority: Priority.high,
+    // icon: '@mipmap/ic_notification', // optional custom small icon
+  ),
+);
 
-({String title, String body}) _titleBody(RemoteMessage msg) {
-  final title =
-      msg.data['title'] ?? msg.notification?.title ?? 'CinePulse';
-  final body =
-      msg.data['body'] ?? msg.notification?.body ?? 'New update';
-  return (title: title, body: body);
+String _extractTitle(RemoteMessage msg) {
+  final t = (msg.data['title'] ?? msg.notification?.title ?? 'CinePulse').toString().trim();
+  return t.isEmpty ? 'CinePulse' : t;
 }
 
 /// Background handler (must be top-level).
+/// Show ONLY for data-only messages to avoid duplicates with system notifications.
 @pragma('vm:entry-point')
 Future<void> cinepulseFcmBg(RemoteMessage message) async {
+  if (message.notification != null) return; // system will handle those
+  final title = _extractTitle(message);
   await _ensureFirebase();
   await _ensureChannel();
-
-  final tb = _titleBody(message);
-  await _fln.show(_nextId(), tb.title, tb.body, _headsUpDetails());
+  await _fln.show(_nextId(), title, null, _headsUpDetails());
 }
 
 bool _didInit = false;
@@ -75,39 +71,36 @@ Future<void> initCinepulseFcm() async {
 
   await _ensureFirebase();
 
-  // Local notifications init + channel
   const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
   await _fln.initialize(const InitializationSettings(android: androidInit));
   await _ensureChannel();
 
-  // Make sure FCM is on
+  // Ensure FCM auto-init and background handler
   await FirebaseMessaging.instance.setAutoInitEnabled(true);
-
-  // Background handler
   FirebaseMessaging.onBackgroundMessage(cinepulseFcmBg);
 
-  // Android 13+ runtime permission
-  await FirebaseMessaging.instance
-      .requestPermission(alert: true, badge: true, sound: true);
+  // Android 13+ permission
+  await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
 
-  // Foreground messages → local heads-up
+  // Foreground messages → show ONLY for data-only to prevent doubles
   FirebaseMessaging.onMessage.listen((msg) async {
-    final tb = _titleBody(msg);
-    await _fln.show(_nextId(), tb.title, tb.body, _headsUpDetails());
+    if (msg.notification != null) return; // ignore notification payloads
+    final title = _extractTitle(msg);
+    await _fln.show(_nextId(), title, null, _headsUpDetails());
   });
 
-  // Notification taps
+  // Debug hooks (taps)
   final initial = await FirebaseMessaging.instance.getInitialMessage();
   if (initial != null) {
     // ignore: avoid_print
     print('FCM initial message: ${initial.messageId} data=${initial.data}');
   }
-  FirebaseMessaging.onMessageOpenedApp.listen((msg) {
+  FirebaseMessaging.onMessageOpenedApp.listen((m) {
     // ignore: avoid_print
-    print('FCM onMessageOpenedApp: ${msg.messageId} data=${msg.data}');
+    print('FCM onMessageOpenedApp: ${m.messageId} data=${m.data}');
   });
 
-  // Subscribe everyone to broadcast topic and keep it on token refresh
+  // Subscribe everyone to the broadcast topic and keep it across token refreshes
   await FirebaseMessaging.instance.subscribeToTopic('global-feed');
   FirebaseMessaging.instance.onTokenRefresh.listen((_) {
     FirebaseMessaging.instance.subscribeToTopic('global-feed');
