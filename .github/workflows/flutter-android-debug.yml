@@ -29,6 +29,7 @@ jobs:
       contents: read
     concurrency:
       group: android-debug-${{ github.ref_name }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -88,21 +89,20 @@ jobs:
             fi
             echo "google-services.json written from secret."
           else
-            echo "No google-services.json provided (build will still proceed)."
+            echo "No google-services.json provided (build continues)."
           fi
 
-      - name: Quick sanity checks
+      - name: Quick Android sanity checks
         shell: bash
         run: |
           set -euo pipefail
-          # Manifest must not declare package="" (namespace handles it)
+          # No package= in <manifest> (namespace controls it)
           if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
             echo "::error::Remove package=\"...\" from AndroidManifest.xml <manifest>."
             exit 1
           fi
-          # Ensure minSdk >= 24 (your deps need it)
-          MS=$(awk '/minSdk/ {print $2}' android/app/build.gradle | tr -d '\r' | tail -n1 || true)
-          echo "minSdk (read) = ${MS:-unknown}"
+          # minSdk check (your deps require >=24)
+          awk '/minSdk/ {print "minSdk =", $2}' android/app/build.gradle || true
 
       - name: Ensure Gradle wrapper (bootstrap if missing)
         shell: bash
@@ -127,7 +127,6 @@ jobs:
           echo "Downloading Gradle from: $DIST_URL"
           curl -fsSL "$DIST_URL" -o /tmp/gradle.zip || {
             VER=$(printf '%s' "$DIST_URL" | sed -n 's#.*gradle-\([0-9][^/]*\)-.*#\1#p')
-            echo "Primary failed. Fallback to https://services.gradle.org/distributions/gradle-${VER}-bin.zip"
             curl -fsSL "https://services.gradle.org/distributions/gradle-${VER}-bin.zip" -o /tmp/gradle.zip
           }
           unzip -q /tmp/gradle.zip -d /tmp
@@ -137,35 +136,39 @@ jobs:
           chmod +x android/gradlew
           echo "Wrapper ready."
 
+      - name: Flutter analyze (show Dart issues but do not fail build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! flutter analyze; then
+            echo "::warning::flutter analyze found issues (shown above). Continuing to build so logs are captured."
+          fi
+          echo "Dependencies snapshot:"
+          flutter pub deps | sed -n '1,200p'
+
       - name: Build APKs (Flutter → fallback to Gradle)
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "== Try Flutter build =="
-          if ! flutter build apk --debug --split-per-abi \
+          echo "== Try Flutter build (verbose) =="
+          if ! flutter build apk --debug --split-per-abi -v \
               --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
               --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"; then
             echo "::warning::Flutter build failed. Will try Gradle."
           fi
 
-          have_apk() { find build/app/outputs/flutter-apk -maxdepth 1 -name "*.apk" | grep -q .; }
+          have_flutter_apk() { find build/app/outputs/flutter-apk -maxdepth 1 -name "*.apk" | grep -q .; }
 
-          if have_apk; then
+          if have_flutter_apk; then
             echo "Flutter produced APKs."
           else
             echo "== Flutter did not produce APKs; try Gradle wrapper =="
             cd android
-
-            # Encode dart-defines for Gradle Flutter task
             B64_API=$(printf '%s' "API_BASE_URL=${{ env.API_BASE_URL }}" | base64 | tr -d '\n')
             B64_DEEP=$(printf '%s' "DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}" | base64 | tr -d '\n')
             export DART_DEFINES="$B64_API,$B64_DEEP"
-
             ./gradlew --no-daemon --stacktrace --warning-mode=all :app:assembleDebug
-
-            echo "== Gradle outputs =="
-            find app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |'
           fi
 
           echo "== Final outputs =="
