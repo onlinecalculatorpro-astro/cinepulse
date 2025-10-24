@@ -1,77 +1,60 @@
 // android/app/build.gradle
 plugins {
-    id "com.android.application"
-    id "org.jetbrains.kotlin.android"
-    // Must be applied after Android/Kotlin
-    id "dev.flutter.flutter-gradle-plugin"
-    // Google Services (FCM) — reads android/app/google-services.json
-    id "com.google.gms.google-services"
+  id "com.android.application"
+  id "org.jetbrains.kotlin.android"
+  id "dev.flutter.flutter-gradle-plugin"
+  id "com.google.gms.google-services"
 }
 
 android {
-    // Must match the package_name in google-services.json
-    namespace "api.onlinecalculatorpro.cinepulse"
-    compileSdk flutter.compileSdkVersion
+  namespace = "api.onlinecalculatorpro.cinepulse"
+  compileSdk = flutter.compileSdkVersion
 
-    defaultConfig {
-        applicationId "api.onlinecalculatorpro.cinepulse"
-        minSdk 24
-        targetSdk flutter.targetSdkVersion
-        versionCode flutter.versionCode
-        versionName flutter.versionName
-        // If you ever hit 65535 methods in debug, uncomment:
-        // multiDexEnabled true
-    }
+  defaultConfig {
+    applicationId = "api.onlinecalculatorpro.cinepulse"
+    minSdk = 24
+    targetSdk = flutter.targetSdkVersion
+    versionCode = flutter.versionCode
+    versionName = flutter.versionName
+  }
 
-    // Keep debug & release simple for now (no shrinking)
-    buildTypes {
-        debug {
-            minifyEnabled false
-            shrinkResources false
-        }
-        release {
-            minifyEnabled false
-            shrinkResources false
-            // TODO: replace with your real release keystore when ready
-            signingConfig signingConfigs.debug
-        }
+  buildTypes {
+    debug {
+      minifyEnabled = false
+      shrinkResources = false
     }
+    release {
+      minifyEnabled = false
+      shrinkResources = false
+      signingConfig = signingConfigs.debug
+    }
+  }
 
-    compileOptions {
-        coreLibraryDesugaringEnabled true
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+  compileOptions {
+    coreLibraryDesugaringEnabled = true
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+  }
+  kotlinOptions { jvmTarget = "17" }
 
-    // Exclude some meta files that sometimes conflict in transitive deps
-    packaging {
-        resources {
-            excludes += [
-                "META-INF/DEPENDENCIES",
-                "META-INF/NOTICE",
-                "META-INF/LICENSE",
-                "META-INF/LICENSE.txt",
-                "META-INF/NOTICE.txt",
-                "META-INF/ASL2.0"
-            ]
-        }
+  packaging {
+    resources {
+      excludes += [
+        "META-INF/DEPENDENCIES",
+        "META-INF/NOTICE",
+        "META-INF/LICENSE",
+        "META-INF/LICENSE.txt",
+        "META-INF/NOTICE.txt",
+        "META-INF/ASL2.0"
+      ]
     }
+  }
 }
 
-flutter {
-    source = "../.."
-}
+flutter { source = "../.." }
 
 dependencies {
-    // Desugaring
-    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
-
-    // Firebase BoM keeps all Firebase libs aligned
-    implementation platform("com.google.firebase:firebase-bom:33.6.0")
-    implementation "com.google.firebase:firebase-messaging"
-    // Optional:
-    // implementation "com.google.firebase:firebase-analytics"
+  coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
+  implementation platform("com.google.firebase:firebase-bom:33.6.0")
+  implementation "com.google.firebase:firebase-messaging"
 }
