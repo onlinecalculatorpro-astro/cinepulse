@@ -1,0 +1,26 @@
+// android/build.gradle (project-level)
+plugins {
+    id "com.android.application" version "8.9.1" apply false
+    id "com.android.library"     version "8.9.1" apply false
+    id "org.jetbrains.kotlin.android" version "2.0.21" apply false
+    id "com.google.gms.google-services" version "4.4.2" apply false
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// Optional: keep your custom build dir layout
+def newBuildDir = file("../../build")
+rootProject.buildDir = newBuildDir
+subprojects {
+    project.buildDir = "${newBuildDir}/${project.name}"
+    evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
