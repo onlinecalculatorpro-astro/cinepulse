@@ -41,7 +41,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Flutter (for Gradle Flutter plugin)
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -100,14 +100,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          NS=$(awk -F'"' '/^[[:space:]]*namespace[[:space:]]+/ {print $2}' android/app/build.gradle | head -n1)
+          # Extract namespace from Groovy build.gradle
+          NS=$(awk -F'"' '/^[[:space:]]*namespace[[:space:]]+/ {print $2}' android/app/build.gradle | head -n1 | tr -d '\r')
           echo "namespace in app/build.gradle = ${NS:-<none>}"
           if [[ "$NS" != "api.onlinecalculatorpro.cinepulse" ]]; then
             echo "::error::Namespace must be api.onlinecalculatorpro.cinepulse"
             exit 1
           fi
-          if [[ ! -f android/app/src/main/kotlin/api/onlinecalculatorpro/cinepulse/MainActivity.kt ]]; then
-            echo "::error::MainActivity.kt missing at android/app/src/main/kotlin/api/onlinecalculatorpro/cinepulse/MainActivity.kt"
+          PKG_DIR="${NS//./\/}"
+          EXPECTED="android/app/src/main/kotlin/${PKG_DIR}/MainActivity.kt"
+          if [[ ! -f "$EXPECTED" ]]; then
+            echo "::error::MainActivity.kt not found at $EXPECTED"
+            echo "Here are the MainActivity candidates:"
+            find android/app/src/main/kotlin -name MainActivity.kt -print || true
             exit 1
           fi
           # Ensure <manifest> tag has no package="..."
@@ -122,22 +127,36 @@ jobs:
           set -euo pipefail
           if [[ -x android/gradlew ]]; then
             echo "Gradle wrapper already present."
-          else
-            PROP_FILE="android/gradle/wrapper/gradle-wrapper.properties"
-            if [[ ! -f "$PROP_FILE" ]]; then
-              echo "::error::${PROP_FILE} not found. The Android template is incomplete."
-              exit 1
-            fi
-            DIST_URL=$(grep '^distributionUrl=' "$PROP_FILE" | cut -d= -f2-)
-            echo "Downloading Gradle distribution: $DIST_URL"
-            curl -sLf "$DIST_URL" -o /tmp/gradle.zip
-            unzip -q /tmp/gradle.zip -d /tmp
-            GRADLE_HOME=$(echo /tmp/gradle-*)
-            export PATH="$GRADLE_HOME/bin:$PATH"
-            (cd android && gradle wrapper)
-            chmod +x android/gradlew
-            echo "Wrapper ready: android/gradlew"
+            exit 0
           fi
+
+          PROP_FILE="android/gradle/wrapper/gradle-wrapper.properties"
+          if [[ ! -f "$PROP_FILE" ]]; then
+            echo "::error::${PROP_FILE} not found. The Android template is incomplete."
+            exit 1
+          fi
+
+          # Read and unescape the distributionUrl (handles https\:// and CRLF)
+          RAW_URL=$(grep '^distributionUrl=' "$PROP_FILE" | cut -d= -f2- | tr -d '\r' || true)
+          DIST_URL=$(printf '%s' "$RAW_URL" | sed 's#\\://#://#g')
+          echo "Unescaped distributionUrl: $DIST_URL"
+
+          # Try downloading the declared distribution; on failure, fallback to "-bin.zip"
+          if ! curl -fsSL "$DIST_URL" -o /tmp/gradle.zip; then
+            echo "Primary URL failed. Falling back to -bin.zip…"
+            VER=$(printf '%s' "$DIST_URL" | sed -n 's#.*gradle-\([0-9][^/]*\)-.*#\1#p')
+            [[ -z "${VER:-}" ]] && { echo "::error::Could not parse Gradle version from distributionUrl"; exit 1; }
+            FALLBACK="https://services.gradle.org/distributions/gradle-${VER}-bin.zip"
+            echo "Fallback URL: $FALLBACK"
+            curl -fsSL "$FALLBACK" -o /tmp/gradle.zip
+          fi
+
+          unzip -q /tmp/gradle.zip -d /tmp
+          GRADLE_HOME=$(echo /tmp/gradle-*)
+          export PATH="$GRADLE_HOME/bin:$PATH"
+          (cd android && gradle wrapper)
+          chmod +x android/gradlew
+          echo "Wrapper ready: android/gradlew"
 
       - name: Build (Gradle wrapper only)
         shell: bash
