@@ -1,9 +1,22 @@
 // android/build.gradle
-// Do NOT put versions here — they come from settings.gradle.
+// Keep plugin versions in settings.gradle only.
 
 plugins {
     id "com.android.application" apply false
-    id "com.android.library"    apply false
+    id "com.android.library"     apply false
     id "org.jetbrains.kotlin.android" apply false
     id "com.google.gms.google-services" apply false
+}
+
+// Repositories for all subprojects
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// Clean task
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
 }
