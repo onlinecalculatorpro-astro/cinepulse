@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       apiBase:
-        description: 'API base URL (e.g. https://api.onlinecalculatorpro.org)'
+        description: "API base URL (e.g. https://api.onlinecalculatorpro.org)"
         required: false
-        default: ''
+        default: ""
       deepLinkBase:
-        description: 'Deep link base (e.g. https://cinepulse.netlify.app/#/s)'
+        description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
         required: false
-        default: ''
+        default: ""
       applicationId:
-        description: 'Android applicationId / package (must match google-services.json)'
+        description: "Android applicationId / package (must match google-services.json)"
         required: false
-        default: 'api.onlinecalculatorpro.cinepulse'
+        default: "api.onlinecalculatorpro.cinepulse"
 
 env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
@@ -25,7 +25,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions: { contents: read }
+    permissions:
+      contents: read
     concurrency:
       group: android-debug-${{ github.ref_name }}
       cancel-in-progress: false
@@ -38,13 +39,13 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Setup Flutter (for Gradle Flutter plugin)
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.35.6'
+          flutter-version: "3.35.6"
 
       - name: Show versions
         run: |
@@ -99,20 +100,43 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          NS=$(grep -E '^\s*namespace\s' android/app/build.gradle | sed 's/.*"\(.*\)".*/\1/')
-          echo "namespace in app/build.gradle = $NS"
+          NS=$(awk -F'"' '/^[[:space:]]*namespace[[:space:]]+/ {print $2}' android/app/build.gradle | head -n1)
+          echo "namespace in app/build.gradle = ${NS:-<none>}"
           if [[ "$NS" != "api.onlinecalculatorpro.cinepulse" ]]; then
             echo "::error::Namespace must be api.onlinecalculatorpro.cinepulse"
             exit 1
           fi
-          test -f android/app/src/main/kotlin/api/onlinecalculatorpro/cinepulse/MainActivity.kt || {
+          if [[ ! -f android/app/src/main/kotlin/api/onlinecalculatorpro/cinepulse/MainActivity.kt ]]; then
             echo "::error::MainActivity.kt missing at android/app/src/main/kotlin/api/onlinecalculatorpro/cinepulse/MainActivity.kt"
             exit 1
-          }
-          # Make sure <manifest> has no package="..." (namespace handles it)
+          fi
+          # Ensure <manifest> tag has no package="..."
           if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
-            echo "::error::Remove package=\"...\" from AndroidManifest.xml (<manifest> tag)."
+            echo "::error::Remove package=\"...\" from AndroidManifest.xml (<manifest> tag) since namespace handles it."
             exit 1
+          fi
+
+      - name: Bootstrap Gradle wrapper (if missing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -x android/gradlew ]]; then
+            echo "Gradle wrapper already present."
+          else
+            PROP_FILE="android/gradle/wrapper/gradle-wrapper.properties"
+            if [[ ! -f "$PROP_FILE" ]]; then
+              echo "::error::${PROP_FILE} not found. The Android template is incomplete."
+              exit 1
+            fi
+            DIST_URL=$(grep '^distributionUrl=' "$PROP_FILE" | cut -d= -f2-)
+            echo "Downloading Gradle distribution: $DIST_URL"
+            curl -sLf "$DIST_URL" -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp
+            GRADLE_HOME=$(echo /tmp/gradle-*)
+            export PATH="$GRADLE_HOME/bin:$PATH"
+            (cd android && gradle wrapper)
+            chmod +x android/gradlew
+            echo "Wrapper ready: android/gradlew"
           fi
 
       - name: Build (Gradle wrapper only)
