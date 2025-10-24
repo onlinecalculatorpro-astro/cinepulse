@@ -11,7 +11,6 @@ plugins {
 android {
     namespace "api.onlinecalculatorpro.cinepulse"       // must match google-services.json package
     compileSdk flutter.compileSdkVersion
-    ndkVersion flutter.ndkVersion
 
     defaultConfig {
         applicationId "api.onlinecalculatorpro.cinepulse"
@@ -35,11 +34,7 @@ android {
             shrinkResources false
         }
         release {
-            // If you want simple release builds for now, set both to false.
-            // minifyEnabled false
-            // shrinkResources false
-
-            // Recommended (enable both together):
+            // Enable both together (recommended)
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -49,7 +44,7 @@ android {
         }
     }
 
-    packagingOptions {
+    packaging {
         resources {
             excludes += [
                 "META-INF/DEPENDENCIES",
