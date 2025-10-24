@@ -4,21 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       packageName:
-        description: "Android package/applicationId (must match google-services.json)"
+        description: "Android package/applicationId (e.g. api.onlinecalculatorpro.cinepulse)"
         required: true
         default: "api.onlinecalculatorpro.cinepulse"
 
-env:
-  PACKAGE_NAME: ${{ inputs.packageName }}
-  # Optional: paste your google-services.json as a repo secret
-  FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
-
 permissions:
-  contents: write   # needed to push the regenerated /android back to the repo
+  contents: write   # needed to push android/ back to the repo
 
 jobs:
   regen:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,175 +39,39 @@ jobs:
           dart --version
           java -version
 
-      - name: Regenerate /android with Flutter and wire FCM
-        shell: bash
+      - name: Regenerate android/ via Flutter
+        env:
+          PACKAGE_NAME: ${{ inputs.packageName }}
         run: |
           set -euo pipefail
 
-          # derive org from package (everything except last segment)
+          # Derive org from package (everything before last dot)
           ORG="${PACKAGE_NAME%.*}"
           echo "Package: $PACKAGE_NAME"
           echo "Org:     $ORG"
 
-          # ensure deps then recreate android
+          # Clean & fetch deps
           flutter clean
           flutter pub get
 
+          # Remove old folder and recreate
           rm -rf android
           flutter create --platforms=android --org "$ORG" .
 
-          # project-level build.gradle: add google-services classpath
-          cat > android/build.gradle <<'GRADLE'
-// android/build.gradle
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.google.gms:google-services:4.4.2'
-    }
-}
-
-plugins {
-    id "com.android.application" apply false
-    id "org.jetbrains.kotlin.android" apply false
-}
-GRADLE
-
-          # app-level build.gradle (minimal, Java 17, FCM plugin)
-          cat > android/app/build.gradle <<GRADLE
-// android/app/build.gradle
-plugins {
-    id "com.android.application"
-    id "org.jetbrains.kotlin.android"
-    id "dev.flutter.flutter-gradle-plugin"
-    id "com.google.gms.google-services"
-}
-
-android {
-    namespace "$PACKAGE_NAME"
-    compileSdk flutter.compileSdkVersion
-
-    defaultConfig {
-        applicationId "$PACKAGE_NAME"
-        minSdk 23
-        targetSdk flutter.targetSdkVersion
-        versionCode flutter.versionCode
-        versionName flutter.versionName
-    }
-
-    compileOptions {
-        coreLibraryDesugaringEnabled true
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-    kotlinOptions { jvmTarget = "17" }
-
-    buildTypes {
-        debug {
-            minifyEnabled false
-            shrinkResources false
-        }
-        release {
-            minifyEnabled false
-            shrinkResources false
-            signingConfig signingConfigs.debug
-        }
-    }
-}
-
-flutter {
-    source = "../.."
-}
-
-dependencies {
-    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
-    implementation platform("com.google.firebase:firebase-bom:33.6.0")
-    implementation "com.google.firebase:firebase-messaging"
-}
-GRADLE
-
-          # clean manifest (no package= on <manifest>)
-          cat > android/app/src/main/AndroidManifest.xml <<'XML'
-<!-- android/app/src/main/AndroidManifest.xml -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <uses-permission android:name="android.permission.WAKE_LOCK"/>
-
-    <application
-        android:name="${applicationName}"
-        android:label="CinePulse"
-        android:icon="@mipmap/ic_launcher"
-        android:allowBackup="false"
-        android:fullBackupContent="false"
-        android:supportsRtl="true"
-        android:usesCleartextTraffic="false">
-
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="cinepulse_general" />
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:launchMode="singleTop"
-            android:theme="@style/LaunchTheme"
-            android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode">
-
-            <meta-data
-                android:name="io.flutter.embedding.android.NormalTheme"
-                android:resource="@style/NormalTheme" />
-
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-
-            <intent-filter>
-                <action android:name="FLUTTER_NOTIFICATION_CLICK"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-            </intent-filter>
-        </activity>
-
-        <meta-data android:name="flutterEmbedding" android:value="2"/>
-    </application>
-
-</manifest>
-XML
-
-          # Ensure MainActivity path matches PACKAGE_NAME
-          PKG_PATH="android/app/src/main/kotlin/${PACKAGE_NAME//./\/}"
-          mkdir -p "$PKG_PATH"
-          cat > "$PKG_PATH/MainActivity.kt" <<KOT
-package $PACKAGE_NAME
-import io.flutter.embedding.android.FlutterActivity
-class MainActivity : FlutterActivity()
-KOT
-
-          # Optionally write google-services.json from secret
-          if [[ -n "${FIREBASE_GOOGLE_SERVICES_JSON:-}" ]]; then
-            echo "Writing android/app/google-services.json from secret"
-            printf '%s' "${FIREBASE_GOOGLE_SERVICES_JSON}" > android/app/google-services.json
-          else
-            echo "::warning::No FIREBASE_GOOGLE_SERVICES_JSON secret; add android/app/google-services.json later."
-          fi
+          # Sanity: print resulting namespace and main activity path
+          echo "Generated files:"
+          ls -la android | sed 's/^/  /'
+          grep -R --line-number --include="*.gradle" "namespace" android || true
 
       - name: Commit & push regenerated android/
-        shell: bash
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A android
+          git add android
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "chore(android): regenerate Android folder; FCM wiring; package $PACKAGE_NAME"
+            git commit -m "chore(android): regenerate Android folder for ${{ inputs.packageName }}"
             git push
           fi
