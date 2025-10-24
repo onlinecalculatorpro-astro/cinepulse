@@ -27,11 +27,11 @@ dependencies:
   # Realtime updates (server push)
   web_socket_channel: ^3.0.0
 
-  # Notifications (FCM + local display) — upgraded to v3/15 to resolve `web` conflict
-  firebase_core: ^3.15.0
+  # Notifications (FCM + local display)
   firebase_core: ^3.15.0
   firebase_messaging: ^15.1.2
   flutter_local_notifications: ^18.0.1   # fixes several Android 14/15 quirks
+  permission_handler: ^11.3.1            # Android 13+ notification permission
 
   # Images & shimmer
   cached_network_image: ^3.4.1
