@@ -10,10 +10,14 @@ import 'app/app.dart';
 import 'app/app_settings.dart';
 import 'core/api.dart';   // for kApiBaseUrl, kDeepLinkBase
 import 'core/cache.dart';
+import 'core/fcm_bootstrap.dart'; // <-- FCM init
 
 Future<void> main() async {
-  // Ensure bindings for async init (prefs, caches, etc.)
+  // Ensure bindings for async init (prefs, caches, plugins, etc.)
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase/FCM (channel, permissions, handlers, topic, token log)
+  await initCinepulseFcm();
 
   // Default locale (can be overridden by device/user settings later).
   Intl.defaultLocale = 'en_US';
@@ -23,7 +27,6 @@ Future<void> main() async {
   await SavedStore.instance.init();
 
   // Log compiled-in config once (helps verify --dart-define on CI).
-  // Remove or lower to verbose logging if you prefer.
   debugPrint('[CinePulse] API_BASE_URL = $kApiBaseUrl');
   debugPrint('[CinePulse] DEEP_LINK_BASE = $kDeepLinkBase');
 
