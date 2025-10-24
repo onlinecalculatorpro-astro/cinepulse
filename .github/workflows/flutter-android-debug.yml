@@ -56,6 +56,11 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
+      - name: Quick static checks
+        run: |
+          # Catch missing packages, assets, analyzer errors early
+          flutter analyze || true
+
       - name: Write android/local.properties
         shell: bash
         run: |
@@ -88,25 +93,19 @@ jobs:
           PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
           echo "google-services package_name = ${PKG:-<unknown>}"
 
-      - name: Sanity checks (namespace/MainActivity/Manifest)
+      - name: Sanity checks (namespace/Manifest)
         shell: bash
         run: |
           set -euo pipefail
           NS=$(awk -F'"' '/^[[:space:]]*namespace[[:space:]]+/ {print $2}' android/app/build.gradle | head -n1 | tr -d '\r')
           echo "namespace in app/build.gradle = ${NS:-<none>}"
-          if [[ -z "${NS:-}" ]]; then
-            echo "::error::Could not find namespace in android/app/build.gradle"
+          if [[ "$NS" != "api.onlinecalculatorpro.cinepulse" ]]; then
+            echo "::error::Namespace must be api.onlinecalculatorpro.cinepulse"
             exit 1
           fi
-          PKG_DIR="${NS//./\/}"
-          EXPECTED="android/app/src/main/kotlin/${PKG_DIR}/MainActivity.kt"
-          if [[ ! -f "$EXPECTED" ]]; then
-            echo "::warning::MainActivity.kt not found at $EXPECTED"
-            echo "Candidates:"
-            find android/app/src/main/kotlin -name MainActivity.kt -print || true
-          fi
+          # Ensure <manifest> tag has no package="..."; namespace handles it
           if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
-            echo "::error::Remove package=\"...\" from <manifest> (namespace handles it)."
+            echo "::error::Remove package=\"...\" from <manifest> (use 'namespace' in build.gradle)."
             exit 1
           fi
 
@@ -118,14 +117,12 @@ jobs:
             echo "Gradle wrapper already present."
             exit 0
           fi
-
-          # Prefer the version declared in gradle-wrapper.properties if it exists
           PROP="android/gradle/wrapper/gradle-wrapper.properties"
           if [[ -f "$PROP" ]]; then
             RAW_URL=$(grep '^distributionUrl=' "$PROP" | cut -d= -f2- | tr -d '\r' || true)
             if [[ -n "$RAW_URL" ]]; then
               DIST_URL=$(printf '%s' "$RAW_URL" | sed 's#\\://#://#g')
-              echo "Bootstrapping Gradle from distributionUrl: $DIST_URL"
+              echo "Bootstrapping from distributionUrl: $DIST_URL"
               curl -fsSL "$DIST_URL" -o /tmp/gradle.zip
               unzip -q /tmp/gradle.zip -d /tmp
               GR_HOME=$(echo /tmp/gradle-*)
@@ -135,33 +132,37 @@ jobs:
               exit 0
             fi
           fi
-
-          # Fallback to a known-good version
           GRADLE_VERSION=8.10.2
-          echo "gradle-wrapper.properties missing or unreadable; falling back to $GRADLE_VERSION"
+          echo "Fallback bootstrap to $GRADLE_VERSION"
           curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /tmp
           export PATH="/tmp/gradle-${GRADLE_VERSION}/bin:$PATH"
           (cd android && gradle wrapper --gradle-version "${GRADLE_VERSION}")
           chmod +x android/gradlew
-          echo "Wrapper ready: android/gradlew"
 
-      - name: Build debug APK (Gradle)
+      - name: Build debug APK (verbose)
         shell: bash
         run: |
           set -euo pipefail
           cd android
-          ./gradlew --no-daemon --stacktrace --warning-mode=all \
-            -PAPI_BASE_URL="${{ env.API_BASE_URL }}" \
-            -PDEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}" \
-            :app:assembleDebug
-          echo "== APKs produced =="
-          find app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |'
-          cnt=$(find app/build/outputs -type f -name "*.apk" | wc -l | tr -d ' ')
-          if [[ "$cnt" -eq 0 ]]; then
-            echo "::error::Gradle finished but no APK was found under android/app/build/outputs."
+          # First compile Flutter bundle with verbose flag to surface real Dart errors
+          set +e
+          ./gradlew --no-daemon --stacktrace --warning-mode=all -Pverbose=true :app:compileFlutterBuildDebug
+          STATUS=$?
+          set -e
+          if [[ $STATUS -ne 0 ]]; then
+            echo "::warning::compileFlutterBuildDebug failed. Running 'flutter build apk -v' for diagnostic output…"
+            cd ..
+            # This will fail again, but prints the *actual* Flutter error to the log
+            flutter build apk --debug -v \
+              --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
+              --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}" || true
             exit 1
           fi
+          # If compile succeeded, assemble APKs
+          ./gradlew --no-daemon --stacktrace --warning-mode=all :app:assembleDebug
+          echo "== APKs produced =="
+          find app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |'
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
@@ -172,3 +173,15 @@ jobs:
             android/app/build/outputs/apk/*/debug/*.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Always upload logs (diagnostics)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-logs
+          path: |
+            **/*.log
+            android/app/build/**/reports/**
+            build/**
+          if-no-files-found: ignore
+          retention-days: 3
