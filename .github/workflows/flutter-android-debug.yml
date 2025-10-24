@@ -29,8 +29,6 @@ jobs:
       contents: read
     concurrency:
       group: android-debug-${{ github.ref_name }}
-      cancel-in-progress: false
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,13 +73,13 @@ jobs:
           echo "flutter.sdk=$FLUTTER_SDK" >> android/local.properties
           cat android/local.properties
 
-      - name: Ensure google-services.json (if secret provided)
+      - name: Ensure google-services.json (optional)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p android/app
           if [[ -f android/app/google-services.json ]]; then
-            echo "google-services.json present in repo."
+            echo "google-services.json present."
           elif [[ -n "${FIREBASE_GOOGLE_SERVICES_JSON:-}" ]]; then
             if [[ "${FIREBASE_GOOGLE_SERVICES_JSON:0:1}" == "{" ]]; then
               printf '%s' "${FIREBASE_GOOGLE_SERVICES_JSON}" > android/app/google-services.json
@@ -90,25 +88,103 @@ jobs:
             fi
             echo "google-services.json written from secret."
           else
-            echo "No google-services.json provided (continuing; FCM features may be limited)."
+            echo "No google-services.json provided (build will still proceed)."
           fi
 
-      - name: Build debug APKs (Flutter)
+      - name: Quick sanity checks
+        shell: bash
         run: |
-          flutter clean
-          flutter build apk --debug --split-per-abi \
-            --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
-            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
+          set -euo pipefail
+          # Manifest must not declare package="" (namespace handles it)
+          if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
+            echo "::error::Remove package=\"...\" from AndroidManifest.xml <manifest>."
+            exit 1
+          fi
+          # Ensure minSdk >= 24 (your deps need it)
+          MS=$(awk '/minSdk/ {print $2}' android/app/build.gradle | tr -d '\r' | tail -n1 || true)
+          echo "minSdk (read) = ${MS:-unknown}"
 
-      - name: List APKs
+      - name: Ensure Gradle wrapper (bootstrap if missing)
+        shell: bash
         run: |
-          echo "== Flutter outputs =="
+          set -euo pipefail
+          if [[ -x android/gradlew ]]; then
+            echo "Gradle wrapper exists."
+            exit 0
+          fi
+          PROP="android/gradle/wrapper/gradle-wrapper.properties"
+          if [[ ! -f "$PROP" ]]; then
+            echo "::warning::gradle-wrapper.properties missing. Bootstrapping with Gradle 8.10.2"
+            curl -sL https://services.gradle.org/distributions/gradle-8.10.2-bin.zip -o /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /tmp
+            export PATH="/tmp/gradle-8.10.2/bin:$PATH"
+            (cd android && gradle wrapper)
+            chmod +x android/gradlew
+            exit 0
+          fi
+          RAW_URL=$(grep '^distributionUrl=' "$PROP" | cut -d= -f2- | tr -d '\r' || true)
+          DIST_URL=$(printf '%s' "$RAW_URL" | sed 's#\\://#://#g')
+          echo "Downloading Gradle from: $DIST_URL"
+          curl -fsSL "$DIST_URL" -o /tmp/gradle.zip || {
+            VER=$(printf '%s' "$DIST_URL" | sed -n 's#.*gradle-\([0-9][^/]*\)-.*#\1#p')
+            echo "Primary failed. Fallback to https://services.gradle.org/distributions/gradle-${VER}-bin.zip"
+            curl -fsSL "https://services.gradle.org/distributions/gradle-${VER}-bin.zip" -o /tmp/gradle.zip
+          }
+          unzip -q /tmp/gradle.zip -d /tmp
+          GRADLE_HOME=$(echo /tmp/gradle-*)
+          export PATH="$GRADLE_HOME/bin:$PATH"
+          (cd android && gradle wrapper)
+          chmod +x android/gradlew
+          echo "Wrapper ready."
+
+      - name: Build APKs (Flutter → fallback to Gradle)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "== Try Flutter build =="
+          if ! flutter build apk --debug --split-per-abi \
+              --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
+              --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"; then
+            echo "::warning::Flutter build failed. Will try Gradle."
+          fi
+
+          have_apk() { find build/app/outputs/flutter-apk -maxdepth 1 -name "*.apk" | grep -q .; }
+
+          if have_apk; then
+            echo "Flutter produced APKs."
+          else
+            echo "== Flutter did not produce APKs; try Gradle wrapper =="
+            cd android
+
+            # Encode dart-defines for Gradle Flutter task
+            B64_API=$(printf '%s' "API_BASE_URL=${{ env.API_BASE_URL }}" | base64 | tr -d '\n')
+            B64_DEEP=$(printf '%s' "DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}" | base64 | tr -d '\n')
+            export DART_DEFINES="$B64_API,$B64_DEEP"
+
+            ./gradlew --no-daemon --stacktrace --warning-mode=all :app:assembleDebug
+
+            echo "== Gradle outputs =="
+            find app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |'
+          fi
+
+          echo "== Final outputs =="
           find build/app/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
+          find android/app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
+
+          if ! find build/app/outputs -type f -name "*.apk" | grep -q . && \
+             ! find android/app/build/outputs -type f -name "*.apk" | grep -q .; then
+            echo "::error::No APKs were produced."
+            exit 1
+          fi
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-debug
-          path: build/app/outputs/flutter-apk/*.apk
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/*/debug/*.apk
           if-no-files-found: error
           retention-days: 7
