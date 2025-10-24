@@ -25,8 +25,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    permissions: { contents: read }
     concurrency:
       group: android-debug-${{ github.ref_name }}
       cancel-in-progress: false
@@ -56,9 +55,14 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      - name: Quick static checks
+      - name: Quick sanity (asset & analyze)
+        shell: bash
         run: |
-          # Catch missing packages, assets, analyzer errors early
+          set -euo pipefail
+          if [[ ! -f assets/logo.png ]]; then
+            echo "::error::assets/logo.png is missing (referenced in pubspec.yaml)"; exit 1
+          fi
+          # Do not fail the build on warnings here; just surface them
           flutter analyze || true
 
       - name: Write android/local.properties
@@ -103,13 +107,12 @@ jobs:
             echo "::error::Namespace must be api.onlinecalculatorpro.cinepulse"
             exit 1
           fi
-          # Ensure <manifest> tag has no package="..."; namespace handles it
           if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
             echo "::error::Remove package=\"...\" from <manifest> (use 'namespace' in build.gradle)."
             exit 1
           fi
 
-      - name: Bootstrap Gradle wrapper (if missing)
+      - name: Bootstrap Gradle wrapper if missing
         shell: bash
         run: |
           set -euo pipefail
@@ -118,53 +121,39 @@ jobs:
             exit 0
           fi
           PROP="android/gradle/wrapper/gradle-wrapper.properties"
-          if [[ -f "$PROP" ]]; then
-            RAW_URL=$(grep '^distributionUrl=' "$PROP" | cut -d= -f2- | tr -d '\r' || true)
-            if [[ -n "$RAW_URL" ]]; then
-              DIST_URL=$(printf '%s' "$RAW_URL" | sed 's#\\://#://#g')
-              echo "Bootstrapping from distributionUrl: $DIST_URL"
-              curl -fsSL "$DIST_URL" -o /tmp/gradle.zip
-              unzip -q /tmp/gradle.zip -d /tmp
-              GR_HOME=$(echo /tmp/gradle-*)
-              export PATH="$GR_HOME/bin:$PATH"
-              (cd android && gradle wrapper)
-              chmod +x android/gradlew
-              exit 0
-            fi
+          if [[ ! -f "$PROP" ]]; then
+            echo "::error::${PROP} not found. Commit the Android template."; exit 1
           fi
-          GRADLE_VERSION=8.10.2
-          echo "Fallback bootstrap to $GRADLE_VERSION"
-          curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip
+          RAW_URL=$(grep '^distributionUrl=' "$PROP" | cut -d= -f2- | tr -d '\r' || true)
+          DIST_URL=$(printf '%s' "$RAW_URL" | sed 's#\\://#://#g')
+          echo "Bootstrapping from $DIST_URL"
+          curl -fsSL "$DIST_URL" -o /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /tmp
-          export PATH="/tmp/gradle-${GRADLE_VERSION}/bin:$PATH"
-          (cd android && gradle wrapper --gradle-version "${GRADLE_VERSION}")
+          GR_HOME=$(echo /tmp/gradle-*)
+          export PATH="$GR_HOME/bin:$PATH"
+          (cd android && gradle wrapper)
           chmod +x android/gradlew
 
-      - name: Build debug APK (verbose)
+      # ---------- KEY: build Flutter bundle first (shows real Dart error) ----------
+      - name: Build Flutter bundle (verbose)
+        run: |
+          set -euo pipefail
+          flutter build bundle -v \
+            --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
+            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
+
+      # If bundle succeeded, Gradle assembly should not fail due to Dart code.
+      - name: Assemble debug APK (Gradle)
         shell: bash
         run: |
           set -euo pipefail
           cd android
-          # First compile Flutter bundle with verbose flag to surface real Dart errors
-          set +e
-          ./gradlew --no-daemon --stacktrace --warning-mode=all -Pverbose=true :app:compileFlutterBuildDebug
-          STATUS=$?
-          set -e
-          if [[ $STATUS -ne 0 ]]; then
-            echo "::warning::compileFlutterBuildDebug failed. Running 'flutter build apk -v' for diagnostic output…"
-            cd ..
-            # This will fail again, but prints the *actual* Flutter error to the log
-            flutter build apk --debug -v \
-              --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
-              --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}" || true
-            exit 1
-          fi
-          # If compile succeeded, assemble APKs
-          ./gradlew --no-daemon --stacktrace --warning-mode=all :app:assembleDebug
-          echo "== APKs produced =="
+          ./gradlew --no-daemon --stacktrace --warning-mode=all \
+            :app:assembleDebug
+          echo "== APKs =="
           find app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |'
 
-      - name: Upload APK artifacts
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-debug
@@ -174,7 +163,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Always upload logs (diagnostics)
+      - name: Always upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
