@@ -20,7 +20,7 @@ env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
-  # Optional: raw JSON or base64; used only if the file is not in the repo
+  # Optional: raw JSON/base64; used only if the file is not in the repo
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -78,8 +78,6 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # Do NOT regenerate Android on CI (avoids template main.dart)
-
       - name: Ensure Android local.properties
         shell: bash
         run: |
@@ -126,14 +124,22 @@ jobs:
             echo "::warning::APPLICATION_ID ($APPLICATION_ID) != google-services.json package_name ($PKG)"
           fi
 
-      # Build with Gradle for reliable outputs + full error logs
-      - name: Build debug APKs with Gradle (verbose)
+      # Build: use Gradle if wrapper exists, otherwise fall back to Flutter
+      - name: Build debug APKs
         shell: bash
         run: |
           set -euo pipefail
-          pushd android >/dev/null
-          ./gradlew --no-daemon --stacktrace --warning-mode=all clean :app:assembleDebug
-          popd >/dev/null
+          if [[ -x android/gradlew ]]; then
+            echo "Using Gradle wrapper"
+            pushd android >/dev/null
+            ./gradlew --no-daemon --stacktrace --warning-mode=all clean :app:assembleDebug
+            popd >/dev/null
+          else
+            echo "::warning::android/gradlew not found; falling back to 'flutter build apk'. Commit the Gradle wrapper for faster, more reliable CI."
+            flutter build apk --debug --split-per-abi \
+              --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
+              --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
+          fi
 
       - name: Locate APKs
         shell: bash
@@ -141,7 +147,7 @@ jobs:
           set -e
           echo "== Gradle outputs =="
           find android/app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
-          echo "== Flutter outputs (if any) =="
+          echo "== Flutter outputs =="
           find build/app/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
 
       - name: Upload APK artifacts
