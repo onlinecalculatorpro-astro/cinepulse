@@ -370,9 +370,10 @@ def health():
         "error": err,
     }
 
-@app.get("/v1/health")
-def health_v1():
+@app.get("/v1/health", include_in_schema=False)
+def v1_health():
     return health()
+
     
 @app.get(
     "/v1/feed",
