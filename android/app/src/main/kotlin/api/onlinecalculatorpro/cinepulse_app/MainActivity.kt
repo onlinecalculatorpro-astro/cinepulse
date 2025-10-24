@@ -1,4 +1,4 @@
-package api.onlinecalculatorpro.cinepulse_app
+package api.onlinecalculatorpro.cinepulse
 
 import io.flutter.embedding.android.FlutterActivity
 
