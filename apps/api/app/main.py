@@ -7,7 +7,7 @@ import time
 from enum import Enum
 from datetime import datetime, timezone
 from typing import Callable, Iterable, List, Optional, Tuple
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -43,9 +43,9 @@ _redis_client = redis.from_url(
 # ------------------------------ Routers (realtime / push / img) --------------
 
 # Ensure these files exist:
-#   apps/api/app/realtime.py   -> defines: router = APIRouter(prefix="/v1/realtime", ...)
-#   apps/api/app/push.py       -> defines: router = APIRouter(prefix="/v1/push", ...)
-#   apps/api/app/img_proxy.py  -> defines: router = APIRouter(prefix="/v1", ...)
+#   apps/api/app/realtime.py   -> router = APIRouter(prefix="/v1/realtime", ...)
+#   apps/api/app/push.py       -> router = APIRouter(prefix="/v1/push", ...)
+#   apps/api/app/img_proxy.py  -> router = APIRouter(prefix="/v1", ...)
 
 from apps.api.app.realtime import router as realtime_router  # noqa: E402
 
@@ -108,7 +108,7 @@ class FeedTab(str, Enum):
 
 app = FastAPI(
     title="CinePulse API",
-    version="0.4.2",
+    version="0.4.3",
     description="Feed & story API for CinePulse with cursor pagination, realtime fanout, and basic rate limiting.",
 )
 
@@ -190,6 +190,12 @@ TRAILER_KINDS = {"trailer", "teaser", "clip", "featurette", "song", "poster"}
 OTT_ALIGNED_KINDS = {"release-ott", "ott", "acquisition"}
 THEATRICAL_KINDS = {"release-theatrical", "schedule-change", "re-release", "boxoffice"}
 
+# Public URL for proxy rewriting
+API_PUBLIC_BASE_URL = os.getenv(
+    "API_PUBLIC_BASE_URL",
+    "https://api.onlinecalculatorpro.org",
+).strip().rstrip("/")
+
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
@@ -255,12 +261,27 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     dt = _parse_iso(s)
     return bool(dt and dt >= since_dt)
 
+def _to_proxy(u: Optional[str]) -> Optional[str]:
+    """
+    Wrap absolute external URLs so the frontend can fetch images via our
+    CORS-safe proxy endpoint: /v1/img?u=...
+    Avoid double-wrapping and leave relative / already-proxied URLs untouched.
+    """
+    if not u:
+        return u
+    if u.startswith("/v1/img?") or u.startswith(f"{API_PUBLIC_BASE_URL}/v1/img?"):
+        return u
+    if u.startswith("http://") or u.startswith("https://"):
+        return f"{API_PUBLIC_BASE_URL}/v1/img?u={quote(u, safe='')}"
+    return u
+
 def _adapt_for_response(it: dict) -> dict:
     """
     Map worker field names to API response names for backward-compat clients.
     - poster_url <- poster
     - thumb_url  <- thumb_url or image/thumbnail/media (fallbacks)
     - normalized_at <- normalized_at or ingested_at
+    Also rewrite image URLs to go through our proxy to avoid CORS.
     """
     obj = dict(it)
     # poster
@@ -272,6 +293,10 @@ def _adapt_for_response(it: dict) -> dict:
     # normalized_at fallback
     if not obj.get("normalized_at"):
         obj["normalized_at"] = obj.get("ingested_at")
+
+    # rewrite images to proxy
+    obj["thumb_url"] = _to_proxy(obj.get("thumb_url"))
+    obj["poster_url"] = _to_proxy(obj.get("poster_url"))
     return obj
 
 def _scan_with_cursor(
@@ -424,4 +449,4 @@ async def story_detail(
 
 @app.get("/")
 def root():
-    return {"ok": True, "service": "cinepulse-api", "version": "0.4.2"}
+    return {"ok": True, "service": "cinepulse-api", "version": "0.4.3"}
