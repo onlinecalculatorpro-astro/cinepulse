@@ -53,18 +53,10 @@ jobs:
           dart --version
           java -version
 
-      - name: Cache pub packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-cache-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
-          restore-keys: |
-            pub-cache-${{ runner.os }}-
-
       - name: flutter pub get
         run: flutter pub get
 
-      - name: Write android/local.properties (SDK + Flutter path)
+      - name: Write android/local.properties
         shell: bash
         run: |
           set -euo pipefail
@@ -81,7 +73,7 @@ jobs:
           set -euo pipefail
           mkdir -p android/app
           if [[ -f android/app/google-services.json ]]; then
-            echo "google-services.json is present."
+            echo "google-services.json present."
           elif [[ -n "${FIREBASE_GOOGLE_SERVICES_JSON:-}" ]]; then
             if [[ "${FIREBASE_GOOGLE_SERVICES_JSON:0:1}" == "{" ]]; then
               printf '%s' "${FIREBASE_GOOGLE_SERVICES_JSON}" > android/app/google-services.json
@@ -96,69 +88,39 @@ jobs:
           PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
           echo "google-services package_name = ${PKG:-<unknown>}"
 
-      - name: Sanity checks (namespace/MainActivity path)
+      - name: Sanity checks (namespace/MainActivity/Manifest)
         shell: bash
         run: |
           set -euo pipefail
-          # Extract namespace from Groovy build.gradle
           NS=$(awk -F'"' '/^[[:space:]]*namespace[[:space:]]+/ {print $2}' android/app/build.gradle | head -n1 | tr -d '\r')
           echo "namespace in app/build.gradle = ${NS:-<none>}"
-          if [[ "$NS" != "api.onlinecalculatorpro.cinepulse" ]]; then
-            echo "::error::Namespace must be api.onlinecalculatorpro.cinepulse"
+          if [[ -z "${NS:-}" ]]; then
+            echo "::error::Could not find namespace in android/app/build.gradle"
             exit 1
           fi
           PKG_DIR="${NS//./\/}"
           EXPECTED="android/app/src/main/kotlin/${PKG_DIR}/MainActivity.kt"
           if [[ ! -f "$EXPECTED" ]]; then
             echo "::error::MainActivity.kt not found at $EXPECTED"
-            echo "Here are the MainActivity candidates:"
+            echo "Candidates:"
             find android/app/src/main/kotlin -name MainActivity.kt -print || true
             exit 1
           fi
-          # Ensure <manifest> tag has no package="..."
           if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
-            echo "::error::Remove package=\"...\" from AndroidManifest.xml (<manifest> tag) since namespace handles it."
+            echo "::error::Remove package=\"...\" from <manifest> (namespace handles it)."
             exit 1
           fi
 
-      - name: Bootstrap Gradle wrapper (if missing)
+      - name: Ensure Gradle wrapper executable
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -x android/gradlew ]]; then
-            echo "Gradle wrapper already present."
-            exit 0
+          if [[ ! -x android/gradlew ]]; then
+            chmod +x android/gradlew || true
           fi
+          test -x android/gradlew || { echo "::error::android/gradlew not found. Android template should include the wrapper."; exit 1; }
 
-          PROP_FILE="android/gradle/wrapper/gradle-wrapper.properties"
-          if [[ ! -f "$PROP_FILE" ]]; then
-            echo "::error::${PROP_FILE} not found. The Android template is incomplete."
-            exit 1
-          fi
-
-          # Read and unescape the distributionUrl (handles https\:// and CRLF)
-          RAW_URL=$(grep '^distributionUrl=' "$PROP_FILE" | cut -d= -f2- | tr -d '\r' || true)
-          DIST_URL=$(printf '%s' "$RAW_URL" | sed 's#\\://#://#g')
-          echo "Unescaped distributionUrl: $DIST_URL"
-
-          # Try downloading the declared distribution; on failure, fallback to "-bin.zip"
-          if ! curl -fsSL "$DIST_URL" -o /tmp/gradle.zip; then
-            echo "Primary URL failed. Falling back to -bin.zip…"
-            VER=$(printf '%s' "$DIST_URL" | sed -n 's#.*gradle-\([0-9][^/]*\)-.*#\1#p')
-            [[ -z "${VER:-}" ]] && { echo "::error::Could not parse Gradle version from distributionUrl"; exit 1; }
-            FALLBACK="https://services.gradle.org/distributions/gradle-${VER}-bin.zip"
-            echo "Fallback URL: $FALLBACK"
-            curl -fsSL "$FALLBACK" -o /tmp/gradle.zip
-          fi
-
-          unzip -q /tmp/gradle.zip -d /tmp
-          GRADLE_HOME=$(echo /tmp/gradle-*)
-          export PATH="$GRADLE_HOME/bin:$PATH"
-          (cd android && gradle wrapper)
-          chmod +x android/gradlew
-          echo "Wrapper ready: android/gradlew"
-
-      - name: Build (Gradle wrapper only)
+      - name: Build debug APK (Gradle)
         shell: bash
         run: |
           set -euo pipefail
@@ -167,10 +129,16 @@ jobs:
             -PAPI_BASE_URL="${{ env.API_BASE_URL }}" \
             -PDEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}" \
             :app:assembleDebug
-          echo "== List APKs =="
+          echo "== APKs produced =="
           find app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |'
+          # Guard: fail if no APK found
+          cnt=$(find app/build/outputs -type f -name "*.apk" | wc -l | tr -d ' ')
+          if [[ "$cnt" -eq 0 ]]; then
+            echo "::error::Gradle finished but no APK was found under android/app/build/outputs."
+            exit 1
+          fi
 
-      - name: Upload APK
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-debug
