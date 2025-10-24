@@ -22,8 +22,7 @@ env:
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
 
-  # If provided, will be used to write android/app/google-services.json
-  # Accepts raw JSON or base64.
+  # If provided, will be used to write android/app/google-services.json (raw JSON or base64)
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -77,11 +76,26 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # Optional: fixes template drift / unsupported project warnings on CI images
-      - name: Ensure Android platform exists
-        run: flutter create --platforms=android .
+      # Regenerate Android scaffolding to keep templates in a supported shape
+      - name: Ensure Android platform exists (overwrite)
+        run: flutter create --platforms=android --overwrite .
 
-      # ✅ No here-doc; write JSON only if needed or from secret
+      # Make sure Flutter/Android SDK paths are discoverable by settings.gradle.kts
+      - name: Ensure Android local.properties
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android
+          # ANDROID_SDK_ROOT is provided by the runner
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > android/local.properties
+          # Derive flutter.sdk from installed flutter binary
+          FLUTTER_BIN="$(which flutter)"
+          FLUTTER_SDK="$(dirname "$(dirname "$FLUTTER_BIN")")"  # .../flutter
+          echo "flutter.sdk=${FLUTTER_SDK}" >> android/local.properties
+          echo "== android/local.properties =="
+          cat android/local.properties
+
+      # Write google-services.json if not in repo; supports secret as raw or base64 JSON
       - name: Ensure google-services.json
         shell: bash
         run: |
