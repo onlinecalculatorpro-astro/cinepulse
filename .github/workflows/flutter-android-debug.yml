@@ -91,18 +91,20 @@ jobs:
           else
             echo "No google-services.json provided (build continues)."
           fi
+          PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json 2>/dev/null | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
+          [[ -n "${PKG:-}" ]] && echo "google-services package_name = ${PKG}"
 
       - name: Quick Android sanity checks
         shell: bash
         run: |
           set -euo pipefail
-          # No package= in <manifest> (namespace controls it)
+          # <manifest> must NOT have package="..."
           if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
-            echo "::error::Remove package=\"...\" from AndroidManifest.xml <manifest>."
+            echo "::error::Remove package=\"...\" from AndroidManifest.xml <manifest> (namespace controls it)."
             exit 1
           fi
-          # minSdk line (should be 24)
-          awk '/minSdk/ {print "minSdk =", $2}' android/app/build.gradle || true
+          # Show minSdk for visibility
+          awk '/minSdk/ {print "minSdk =", $0}' android/app/build.gradle || true
 
       - name: Ensure Gradle wrapper (bootstrap if missing)
         shell: bash
@@ -141,17 +143,16 @@ jobs:
         run: |
           set -euo pipefail
           if ! flutter analyze; then
-            echo "::warning::flutter analyze found issues (shown above). Continuing to build so logs are captured."
+            echo "::warning::flutter analyze found issues (shown above). Continuing so we capture full logs."
           fi
 
-      - name: Build (capture verbose logs) — Flutter first, Gradle fallback
+      - name: Build (Flutter verbose, Gradle fallback)
         shell: bash
         run: |
           set -euo pipefail
-          # capture verbose output to a file we will upload
           FL_LOG="flutter-verbose.log"
 
-          # Try Flutter build (verbose)
+          # Try Flutter first (verbose)
           if ! flutter build apk --debug --split-per-abi -v \
               --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
               --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}" \
@@ -161,14 +162,13 @@ jobs:
 
           have_flutter_apk() { find build/app/outputs/flutter-apk -maxdepth 1 -name "*.apk" | grep -q .; }
           if have_flutter_apk; then
-            echo "Flutter produced APKs."
-            echo "APK list:"
+            echo "Flutter produced APK(s):"
             find build/app/outputs/flutter-apk -name "*.apk" -print
             echo "APK_PRESENT=1" >> "$GITHUB_ENV"
             exit 0
           fi
 
-          # Gradle fallback (passes dart-defines via DART_DEFINES)
+          # Gradle fallback (pass dart-defines via DART_DEFINES)
           cd android
           B64_API=$(printf '%s' "API_BASE_URL=${{ env.API_BASE_URL }}" | base64 | tr -d '\n')
           B64_DEEP=$(printf '%s' "DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}" | base64 | tr -d '\n')
@@ -227,6 +227,6 @@ jobs:
           set -euo pipefail
           echo "APK_PRESENT=${APK_PRESENT:-0}"
           if [[ "${APK_PRESENT:-0}" != "1" ]]; then
-            echo "::error::No APKs were produced. See flutter-verbose-log and gradle-problems-report artifacts."
+            echo "::error::No APKs were produced. See flutter-verbose-log and gradle-problems-report artifacts for the real error."
             exit 1
           fi
