@@ -33,7 +33,7 @@ android {
 
     buildTypes {
         release {
-            // TODO: replace with your real release signing config when ready
+            // TODO: replace with your real signing config for production
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
         }
@@ -55,9 +55,7 @@ android {
     }
 }
 
-flutter {
-    source = "../.."
-}
+flutter { source = "../.." }
 
 dependencies {
     // Desugaring (when coreLibraryDesugaringEnabled = true)
