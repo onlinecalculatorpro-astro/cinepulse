@@ -9,12 +9,12 @@ plugins {
 }
 
 android {
-    namespace "api.onlinecalculatorpro.cinepulse"        // must match your appId + firebase package
+    namespace "api.onlinecalculatorpro.cinepulse"       // must match google-services.json package
     compileSdk flutter.compileSdkVersion
     ndkVersion flutter.ndkVersion
 
     defaultConfig {
-        applicationId "api.onlinecalculatorpro.cinepulse" // keep in sync with namespace & google-services.json
+        applicationId "api.onlinecalculatorpro.cinepulse"
         minSdk 23
         targetSdk flutter.targetSdkVersion
         versionCode flutter.versionCode
@@ -29,10 +29,23 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     buildTypes {
-        release {
-            // replace with your real release signing config when ready
-            signingConfig signingConfigs.debug
+        debug {
+            // Never shrink in debug
             minifyEnabled false
+            shrinkResources false
+        }
+        release {
+            // If you want simple release builds for now, set both to false.
+            // minifyEnabled false
+            // shrinkResources false
+
+            // Recommended (enable both together):
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+
+            // Temporary signing until real keystore is configured
+            signingConfig signingConfigs.debug
         }
     }
 
@@ -55,12 +68,12 @@ flutter {
 }
 
 dependencies {
-    // desugaring
+    // Desugaring
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
 
-    // Firebase BoM keeps all firebase libs in sync
+    // Firebase BoM keeps all Firebase libs in sync
     implementation platform("com.google.firebase:firebase-bom:33.6.0")
     implementation "com.google.firebase:firebase-messaging"
-    // (optional) analytics:
+    // Optional:
     // implementation "com.google.firebase:firebase-analytics"
 }
