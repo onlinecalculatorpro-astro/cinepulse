@@ -42,7 +42,6 @@ _redis_client = redis.from_url(
 
 # ------------------------------ Routers (realtime / push / img) --------------
 
-# Ensure these files exist:
 #   apps/api/app/realtime.py   -> router = APIRouter(prefix="/v1/realtime", ...)
 #   apps/api/app/push.py       -> router = APIRouter(prefix="/v1/push", ...)
 #   apps/api/app/img_proxy.py  -> router = APIRouter(prefix="/v1", ...)
@@ -52,7 +51,7 @@ from apps.api.app.realtime import router as realtime_router  # noqa: E402
 try:
     from apps.api.app.push import router as push_router  # optional
 except Exception:
-    push_router = None  # push router is optional
+    push_router = None
 
 try:
     from apps.api.app.img_proxy import router as img_proxy_router  # optional
@@ -81,15 +80,18 @@ class Story(BaseModel):
     tags: Optional[List[str]] = None
     normalized_at: Optional[str] = None
 
+
 class FeedResponse(BaseModel):
     tab: str
     since: Optional[str] = None
     items: List[Story]
     next_cursor: Optional[str] = None
 
+
 class SearchResponse(BaseModel):
     q: str
     items: List[Story]
+
 
 class ErrorBody(BaseModel):
     ok: bool = False
@@ -97,12 +99,14 @@ class ErrorBody(BaseModel):
     error: str
     message: str
 
+
 class FeedTab(str, Enum):
     all = "all"
     trailers = "trailers"
     ott = "ott"
     intheatres = "intheatres"
     comingsoon = "comingsoon"
+
 
 # ------------------------------ App / CORS -----------------------------------
 
@@ -144,18 +148,22 @@ def _json_error(status_code: int, err: str, msg: str) -> JSONResponse:
         content=ErrorBody(status=status_code, error=err, message=msg).model_dump(),
     )
 
+
 @app.exception_handler(HTTPException)
 async def http_exc_handler(_: Request, exc: HTTPException):
     detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
     return _json_error(exc.status_code, "http_error", detail)
 
+
 @app.exception_handler(RequestValidationError)
 async def validation_exc_handler(_: Request, exc: RequestValidationError):
     return _json_error(422, "validation_error", exc.errors().__repr__())
 
+
 @app.exception_handler(Exception)
 async def unhandled_exc_handler(_: Request, exc: Exception):
     return _json_error(500, exc.__class__.__name__, "Internal server error")
+
 
 # ------------------------------ Rate limiting --------------------------------
 
@@ -164,6 +172,7 @@ def _client_ip(req: Request) -> str:
     if xff:
         return xff.split(",")[0].strip()
     return req.client.host if req.client else "unknown"
+
 
 def limiter(route: str, limit_per_min: int) -> Callable:
     async def _limit_dep(req: Request):
@@ -184,17 +193,16 @@ def limiter(route: str, limit_per_min: int) -> Callable:
             return
     return _limit_dep
 
+
 # ------------------------------ Helpers --------------------------------------
 
 TRAILER_KINDS = {"trailer", "teaser", "clip", "featurette", "song", "poster"}
 OTT_ALIGNED_KINDS = {"release-ott", "ott", "acquisition"}
 THEATRICAL_KINDS = {"release-theatrical", "schedule-change", "re-release", "boxoffice"}
 
-# Public URL for proxy rewriting
-API_PUBLIC_BASE_URL = os.getenv(
-    "API_PUBLIC_BASE_URL",
-    "https://api.onlinecalculatorpro.org",
-).strip().rstrip("/")
+# Public URL for proxy rewriting (used by _to_proxy)
+API_PUBLIC_BASE_URL = os.getenv("API_PUBLIC_BASE_URL", "https://api.onlinecalculatorpro.org").strip().rstrip("/")
+
 
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
     if not s:
@@ -209,11 +217,13 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
     except Exception:
         return None
 
+
 def _redis_lrange(key: str, start: int, stop: int) -> list[str]:
     try:
         return _redis_client.lrange(key, start, stop)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
+
 
 def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
     raw = _redis_lrange(FEED_KEY, 0, max(0, max_items - 1))
@@ -222,6 +232,7 @@ def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
             yield json.loads(s)
         except Exception:
             continue
+
 
 def _matches_tab(item: dict, tab: FeedTab) -> bool:
     if tab == FeedTab.all:
@@ -250,6 +261,7 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
 
     return True
 
+
 def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     if not since_iso:
         return True
@@ -260,6 +272,7 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     s = item.get("release_date") or item.get("published_at") or item.get("normalized_at")
     dt = _parse_iso(s)
     return bool(dt and dt >= since_dt)
+
 
 def _to_proxy(u: Optional[str]) -> Optional[str]:
     """
@@ -274,6 +287,7 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
     if u.startswith("http://") or u.startswith("https://"):
         return f"{API_PUBLIC_BASE_URL}/v1/img?u={quote(u, safe='')}"
     return u
+
 
 def _adapt_for_response(it: dict) -> dict:
     """
@@ -298,6 +312,7 @@ def _adapt_for_response(it: dict) -> dict:
     obj["thumb_url"] = _to_proxy(obj.get("thumb_url"))
     obj["poster_url"] = _to_proxy(obj.get("poster_url"))
     return obj
+
 
 def _scan_with_cursor(
     start_idx: int,
@@ -349,6 +364,7 @@ def _scan_with_cursor(
     next_cursor = idx if idx < total_len else None
     return (items, next_cursor)
 
+
 # ------------------------------ Endpoints ------------------------------------
 
 @app.get("/health")
@@ -370,11 +386,13 @@ def health():
         "error": err,
     }
 
+
 @app.get("/v1/health", include_in_schema=False)
 def v1_health():
+    # Convenience shim so both /health and /v1/health answer 200 JSON
     return health()
 
-    
+
 @app.get(
     "/v1/feed",
     response_model=FeedResponse,
@@ -411,6 +429,7 @@ async def feed(
     next_cursor = str(next_idx) if next_idx is not None else None
     return FeedResponse(tab=tab.value, since=since, items=items, next_cursor=next_cursor)
 
+
 @app.get(
     "/v1/search",
     response_model=SearchResponse,
@@ -436,6 +455,7 @@ async def search(
             break
     return SearchResponse(q=q, items=[Story(**it) for it in res])
 
+
 @app.get(
     "/v1/story/{story_id}",
     response_model=Story,
@@ -451,6 +471,7 @@ async def story_detail(
         if it.get("id") == sid:
             return Story(**_adapt_for_response(it))
     raise HTTPException(status_code=404, detail="Story not found")
+
 
 @app.get("/")
 def root():
