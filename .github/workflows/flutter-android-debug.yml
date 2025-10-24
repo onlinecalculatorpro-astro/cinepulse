@@ -17,12 +17,9 @@ on:
         default: "api.onlinecalculatorpro.cinepulse"
 
 env:
-  # Prefer repo secrets → manual inputs → sensible defaults
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
-
-  # If provided, will be used to write android/app/google-services.json (raw JSON or base64)
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -76,26 +73,22 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # Regenerate Android scaffolding to keep templates in a supported shape
-      - name: Ensure Android platform exists (overwrite)
-        run: flutter create --platforms=android --overwrite .
+      # 🔒 Do NOT overwrite the project – this is what caused the template screen
+      # (If you ever need to re-generate only Android scaffolding, run this LOCALLY, not in CI.)
+      # - name: Ensure Android platform exists (no overwrite)
+      #   run: flutter create --platforms=android .
 
-      # Make sure Flutter/Android SDK paths are discoverable by settings.gradle.kts
       - name: Ensure Android local.properties
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p android
-          # ANDROID_SDK_ROOT is provided by the runner
           echo "sdk.dir=${ANDROID_SDK_ROOT}" > android/local.properties
-          # Derive flutter.sdk from installed flutter binary
           FLUTTER_BIN="$(which flutter)"
-          FLUTTER_SDK="$(dirname "$(dirname "$FLUTTER_BIN")")"  # .../flutter
+          FLUTTER_SDK="$(dirname "$(dirname "$FLUTTER_BIN")")"
           echo "flutter.sdk=${FLUTTER_SDK}" >> android/local.properties
-          echo "== android/local.properties =="
           cat android/local.properties
 
-      # Write google-services.json if not in repo; supports secret as raw or base64 JSON
       - name: Ensure google-services.json
         shell: bash
         run: |
@@ -115,11 +108,13 @@ jobs:
             exit 1
           fi
 
-          # Sanity check: show package_name from the file and compare
-          PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
-          echo "google-services.json package_name = ${PKG:-<unknown>}"
-          if [[ -n "${PKG:-}" && -n "${APPLICATION_ID:-}" && "$PKG" != "$APPLICATION_ID" ]]; then
-            echo "::warning::APPLICATION_ID ($APPLICATION_ID) != google-services.json package_name ($PKG)"
+      # (Optional) Guard: fail if the template main.dart got in somehow
+      - name: Verify app entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! grep -R "CinePulseApp" -n lib/main.dart lib 2>/dev/null; then
+            echo "::warning::CinePulseApp not found in lib/. If you see the Flutter template screen, check lib/main.dart."
           fi
 
       - name: Build debug APKs (per ABI)
