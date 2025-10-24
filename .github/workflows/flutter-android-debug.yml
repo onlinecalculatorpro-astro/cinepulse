@@ -20,7 +20,6 @@ env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
-  # Raw JSON or base64; only used if file isn't in repo
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -42,7 +41,7 @@ jobs:
       - name: Setup Java (Temurin 17)
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: "temurin"
           java-version: "17"
 
       - name: Setup Flutter
@@ -51,7 +50,7 @@ jobs:
           channel: stable
           flutter-version: "3.35.6"
 
-      - name: Show versions
+      - name: Versions
         run: |
           flutter --version
           dart --version
@@ -78,7 +77,7 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      - name: Ensure Android local.properties
+      - name: Ensure local.properties
         shell: bash
         run: |
           set -euo pipefail
@@ -87,24 +86,24 @@ jobs:
           FLUTTER_BIN="$(which flutter)"
           FLUTTER_SDK="$(dirname "$(dirname "$FLUTTER_BIN")")"
           echo "flutter.sdk=${FLUTTER_SDK}" >> android/local.properties
-          echo "== android/local.properties ==" && cat android/local.properties
+          cat android/local.properties
 
-      - name: Ensure gradle.properties (stable defaults)
+      - name: Ensure gradle.properties (no heredoc)
         shell: bash
         run: |
           set -euo pipefail
-          cat > android/gradle.properties <<'PROPS'
-org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
-org.gradle.daemon=false
-org.gradle.parallel=true
-org.gradle.configureondemand=true
-org.gradle.workers.max=2
-android.useAndroidX=true
-android.enableJetifier=true
-# Hide AGP warning for compileSdk 36 (optional)
-android.suppressUnsupportedCompileSdk=36
-PROPS
-          echo "== android/gradle.properties ==" && cat android/gradle.properties
+          mkdir -p android
+          printf '%s\n' \
+            'org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8' \
+            'org.gradle.daemon=false' \
+            'org.gradle.parallel=true' \
+            'org.gradle.configureondemand=true' \
+            'org.gradle.workers.max=2' \
+            'android.useAndroidX=true' \
+            'android.enableJetifier=true' \
+            'android.suppressUnsupportedCompileSdk=36' \
+            > android/gradle.properties
+          cat android/gradle.properties
 
       - name: Ensure google-services.json
         shell: bash
@@ -112,61 +111,46 @@ PROPS
           set -euo pipefail
           mkdir -p android/app
           if [[ -f android/app/google-services.json ]]; then
-            echo "google-services.json found in repository."
+            echo "google-services.json present."
           elif [[ -n "${FIREBASE_GOOGLE_SERVICES_JSON:-}" ]]; then
-            echo "Writing google-services.json from secret."
             if [[ "${FIREBASE_GOOGLE_SERVICES_JSON:0:1}" == "{" ]]; then
               printf '%s' "${FIREBASE_GOOGLE_SERVICES_JSON}" > android/app/google-services.json
             else
               printf '%s' "${FIREBASE_GOOGLE_SERVICES_JSON}" | base64 -d > android/app/google-services.json
             fi
           else
-            echo "::error::google-services.json is missing and no secret was provided."
+            echo "::error::google-services.json missing and no secret provided."
             exit 1
           fi
 
-      - name: Preflight sanity checks (fail fast)
+      - name: Preflight checks (fail fast)
         shell: bash
         run: |
           set -euo pipefail
-          # 1) google-services.json package_name must match APPLICATION_ID
           PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
           echo "google-services package_name = ${PKG:-<unknown>}"
-          if [[ -z "${PKG:-}" || "$PKG" != "${APPLICATION_ID}" ]]; then
-            echo "::error::Mismatch: APPLICATION_ID (${APPLICATION_ID}) != google-services package_name (${PKG:-<unknown>})"
-            exit 1
-          fi
-          # 2) Manifest must NOT set package= on <manifest>
-          if grep -R --line-number --include="AndroidManifest.xml" -E '^\s*<manifest[^>]*\spackage=' android/app/src ; then
-            echo "::error::Remove package=\"...\" from <manifest> (namespace comes from app/build.gradle)"
-            exit 1
-          fi
-          # 3) app/build.gradle must apply google services + namespace match
+          [[ -n "$PKG" && "$PKG" == "$APPLICATION_ID" ]] || { echo "::error::APPLICATION_ID ($APPLICATION_ID) != google-services package_name (${PKG:-<unknown>})"; exit 1; }
+          ! grep -R --line-number --include="AndroidManifest.xml" -E '^\s*<manifest[^>]*\spackage=' android/app/src || { echo "::error::Remove package=\"...\" from <manifest> (namespace lives in app/build.gradle)"; exit 1; }
           APP_GRADLE="android/app/build.gradle"
-          grep -q 'id "com.google.gms.google-services"' "$APP_GRADLE" || { echo "::error::Missing plugin id \"com.google.gms.google-services\" in android/app/build.gradle"; exit 1; }
+          grep -q 'id "com.google.gms.google-services"' "$APP_GRADLE" || { echo "::error::Missing plugin com.google.gms.google-services in app/build.gradle"; exit 1; }
           NS=$(grep -E '^\s*namespace\s*"' "$APP_GRADLE" | sed -E 's/.*"([^"]+)".*/\1/' | head -n1 || true)
           echo "namespace in app/build.gradle = ${NS:-<unknown>}"
-          [[ "${NS:-}" == "${APPLICATION_ID}" ]] || { echo "::error::namespace (${NS:-<unknown>}) != APPLICATION_ID (${APPLICATION_ID})"; exit 1; }
-          # 4) MainActivity path + package must match APPLICATION_ID
+          [[ "$NS" == "$APPLICATION_ID" ]] || { echo "::error::namespace (${NS:-<unknown>}) != APPLICATION_ID ($APPLICATION_ID)"; exit 1; }
           MA_PATH="android/app/src/main/kotlin/${APPLICATION_ID//./\/}/MainActivity.kt"
           test -f "$MA_PATH" || { echo "::error::MainActivity.kt not found at $MA_PATH"; exit 1; }
-          head -n1 "$MA_PATH"
           grep -q "^package ${APPLICATION_ID}\$" "$MA_PATH" || { echo "::error::First line of MainActivity.kt must be: 'package ${APPLICATION_ID}'"; exit 1; }
-          echo "✅ Preflight checks passed"
+          echo "Preflight OK"
 
       - name: Build debug APKs (Flutter, verbose)
         run: |
-          # -v gives full Gradle/AGP errors if anything goes wrong
           flutter build apk -v --debug --split-per-abi \
             --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
             --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
 
       - name: List APKs
         run: |
-          echo "== Flutter outputs =="
-          ls -lh build/app/outputs/flutter-apk || true
-          echo "== Gradle outputs =="
-          find android/app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
+          echo "== Flutter outputs ==" && ls -lh build/app/outputs/flutter-apk || true
+          echo "== Gradle outputs ==" && find android/app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
