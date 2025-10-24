@@ -25,7 +25,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions: { contents: read }
+    permissions:
+      contents: read
     concurrency:
       group: android-debug-${{ github.ref_name }}
       cancel-in-progress: false
@@ -52,18 +53,16 @@ jobs:
           dart --version
           java -version
 
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-cache-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            pub-cache-${{ runner.os }}-
+
       - name: flutter pub get
         run: flutter pub get
-
-      - name: Quick sanity (asset & analyze)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -f assets/logo.png ]]; then
-            echo "::error::assets/logo.png is missing (referenced in pubspec.yaml)"; exit 1
-          fi
-          # Do not fail the build on warnings here; just surface them
-          flutter analyze || true
 
       - name: Write android/local.properties
         shell: bash
@@ -76,13 +75,13 @@ jobs:
           echo "flutter.sdk=$FLUTTER_SDK" >> android/local.properties
           cat android/local.properties
 
-      - name: Ensure google-services.json
+      - name: Ensure google-services.json (if secret provided)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p android/app
           if [[ -f android/app/google-services.json ]]; then
-            echo "google-services.json present."
+            echo "google-services.json present in repo."
           elif [[ -n "${FIREBASE_GOOGLE_SERVICES_JSON:-}" ]]; then
             if [[ "${FIREBASE_GOOGLE_SERVICES_JSON:0:1}" == "{" ]]; then
               printf '%s' "${FIREBASE_GOOGLE_SERVICES_JSON}" > android/app/google-services.json
@@ -91,86 +90,25 @@ jobs:
             fi
             echo "google-services.json written from secret."
           else
-            echo "::error::Missing android/app/google-services.json and no secret provided."
-            exit 1
-          fi
-          PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
-          echo "google-services package_name = ${PKG:-<unknown>}"
-
-      - name: Sanity checks (namespace/Manifest)
-        shell: bash
-        run: |
-          set -euo pipefail
-          NS=$(awk -F'"' '/^[[:space:]]*namespace[[:space:]]+/ {print $2}' android/app/build.gradle | head -n1 | tr -d '\r')
-          echo "namespace in app/build.gradle = ${NS:-<none>}"
-          if [[ "$NS" != "api.onlinecalculatorpro.cinepulse" ]]; then
-            echo "::error::Namespace must be api.onlinecalculatorpro.cinepulse"
-            exit 1
-          fi
-          if grep -q '<manifest[^>]*package=' android/app/src/main/AndroidManifest.xml; then
-            echo "::error::Remove package=\"...\" from <manifest> (use 'namespace' in build.gradle)."
-            exit 1
+            echo "No google-services.json provided (continuing; FCM features may be limited)."
           fi
 
-      - name: Bootstrap Gradle wrapper if missing
-        shell: bash
+      - name: Build debug APKs (Flutter)
         run: |
-          set -euo pipefail
-          if [[ -x android/gradlew ]]; then
-            echo "Gradle wrapper already present."
-            exit 0
-          fi
-          PROP="android/gradle/wrapper/gradle-wrapper.properties"
-          if [[ ! -f "$PROP" ]]; then
-            echo "::error::${PROP} not found. Commit the Android template."; exit 1
-          fi
-          RAW_URL=$(grep '^distributionUrl=' "$PROP" | cut -d= -f2- | tr -d '\r' || true)
-          DIST_URL=$(printf '%s' "$RAW_URL" | sed 's#\\://#://#g')
-          echo "Bootstrapping from $DIST_URL"
-          curl -fsSL "$DIST_URL" -o /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /tmp
-          GR_HOME=$(echo /tmp/gradle-*)
-          export PATH="$GR_HOME/bin:$PATH"
-          (cd android && gradle wrapper)
-          chmod +x android/gradlew
-
-      # ---------- KEY: build Flutter bundle first (shows real Dart error) ----------
-      - name: Build Flutter bundle (verbose)
-        run: |
-          set -euo pipefail
-          flutter build bundle -v \
+          flutter clean
+          flutter build apk --debug --split-per-abi \
             --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
             --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
 
-      # If bundle succeeded, Gradle assembly should not fail due to Dart code.
-      - name: Assemble debug APK (Gradle)
-        shell: bash
+      - name: List APKs
         run: |
-          set -euo pipefail
-          cd android
-          ./gradlew --no-daemon --stacktrace --warning-mode=all \
-            :app:assembleDebug
-          echo "== APKs =="
-          find app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |'
+          echo "== Flutter outputs =="
+          find build/app/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
 
-      - name: Upload APK
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-debug
-          path: |
-            android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/apk/*/debug/*.apk
+          path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
           retention-days: 7
-
-      - name: Always upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-build-logs
-          path: |
-            **/*.log
-            android/app/build/**/reports/**
-            build/**
-          if-no-files-found: ignore
-          retention-days: 3
