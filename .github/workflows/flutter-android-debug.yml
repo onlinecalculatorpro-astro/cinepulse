@@ -20,8 +20,7 @@ env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
-
-  # Optional: if provided, will be written to android/app/google-services.json (raw JSON or base64)
+  # Optional: raw JSON or base64, used only if the file isn't in repo
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -39,7 +38,7 @@ jobs:
       - name: Setup Java (Temurin 17)
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: "temurin"
           java-version: "17"
 
       - name: Setup Flutter
@@ -75,8 +74,8 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # DO NOT regenerate Android on CI (this caused template main.dart before)
-      # If you ever need to refresh scaffolding, do it locally and commit.
+      # Do NOT regenerate Android on CI (avoids template main.dart)
+      # If you need to refresh scaffolding, do it locally and commit.
 
       - name: Ensure Android local.properties
         shell: bash
