@@ -23,8 +23,8 @@ except Exception as e:  # pragma: no cover
     raise RuntimeError("redis package is required") from e
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-FEED_KEY = os.getenv("FEED_KEY", "feed:items")          # LIST, index 0 = newest
-MAX_SCAN = int(os.getenv("MAX_SCAN", "400"))            # how deep search/detail can look
+FEED_KEY = os.getenv("FEED_KEY", "feed:items")          # LIST, index 0 = newest (by push order only)
+MAX_SCAN = int(os.getenv("MAX_SCAN", "400"))            # how deep feed/search/detail can look
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "200"))        # lrange chunk size for scans
 
 # Rate limits (per IP)
@@ -112,7 +112,7 @@ class FeedTab(str, Enum):
 
 app = FastAPI(
     title="CinePulse API",
-    version="0.4.3",
+    version="0.4.4",
     description="Feed & story API for CinePulse with cursor pagination, realtime fanout, and basic rate limiting.",
 )
 
@@ -262,15 +262,22 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
     return True
 
 
+def _best_dt(item: dict) -> Optional[datetime]:
+    """Choose the best timestamp for ordering/filters: normalized_at > published_at > release_date."""
+    for fld in ("normalized_at", "published_at", "release_date"):
+        dt = _parse_iso(item.get(fld))
+        if dt:
+            return dt
+    return None
+
+
 def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     if not since_iso:
         return True
     since_dt = _parse_iso(since_iso)
     if not since_dt:
         return True
-
-    s = item.get("release_date") or item.get("published_at") or item.get("normalized_at")
-    dt = _parse_iso(s)
+    dt = _best_dt(item)
     return bool(dt and dt >= since_dt)
 
 
@@ -320,25 +327,32 @@ def _scan_with_cursor(
     tab: FeedTab,
     since: Optional[str],
 ) -> Tuple[List[dict], Optional[int]]:
+    """
+    Read a window from the Redis LIST (by push order), then sort the window by the
+    *effective* timestamp (normalized_at > published_at > release_date) so newest
+    truly appears first even if producers push slightly out-of-order.
+    """
     try:
         total_len = _redis_client.llen(FEED_KEY)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
 
     total_len = int(total_len or 0)
-
-    items: List[dict] = []
-    scanned = 0
     idx = max(0, start_idx)
 
-    while len(items) < limit and idx < total_len and scanned < MAX_SCAN:
+    collected: List[dict] = []
+    scanned = 0
+
+    # collect more than strictly needed so the sort is meaningful
+    target_collect = max(limit * 5, limit)
+
+    while idx < total_len and scanned < MAX_SCAN and len(collected) < target_collect:
         batch_end = min(idx + BATCH_SIZE - 1, total_len - 1)
         raw_batch = _redis_lrange(FEED_KEY, idx, batch_end)
         if not raw_batch:
             break
 
-        for offset, raw in enumerate(raw_batch):
-            pos = idx + offset
+        for raw in raw_batch:
             scanned += 1
             try:
                 it = json.loads(raw)
@@ -350,19 +364,22 @@ def _scan_with_cursor(
             if not _matches_tab(it, tab):
                 continue
 
-            items.append(_adapt_for_response(it))
-            if len(items) >= limit:
-                next_cursor = pos + 1 if (pos + 1) < total_len else None
-                return (items, next_cursor)
+            collected.append(_adapt_for_response(it))
+
+            if scanned >= MAX_SCAN or len(collected) >= target_collect:
+                break
 
         idx = batch_end + 1
 
-        if scanned >= MAX_SCAN:
-            next_cursor = idx if idx < total_len else None
-            return (items, next_cursor)
+    # newest → oldest by effective timestamp
+    collected.sort(
+        key=lambda d: (_best_dt(d) or datetime(1970, 1, 1, tzinfo=timezone.utc)),
+        reverse=True,
+    )
 
+    page = collected[:limit]
     next_cursor = idx if idx < total_len else None
-    return (items, next_cursor)
+    return (page, next_cursor)
 
 
 # ------------------------------ Endpoints ------------------------------------
@@ -397,7 +414,7 @@ def v1_health():
     "/v1/feed",
     response_model=FeedResponse,
     summary="Feed items",
-    description="Cursor-paginated feed. Newest-first (best-effort). Use the returned `next_cursor` to fetch the next page.",
+    description="Cursor-paginated feed. Newest-first (by effective timestamp). Use returned `next_cursor` for next page.",
 )
 async def feed(
     request: Request,
@@ -406,7 +423,7 @@ async def feed(
         description="Tabs: all | trailers | ott | intheatres | comingsoon",
     ),
     since: Optional[str] = Query(
-        None, description="RFC3339; only items with date >= this time (checks release_date → published_at → normalized_at)"
+        None, description="RFC3339; items with (normalized_at → published_at → release_date) >= this time"
     ),
     cursor: Optional[str] = Query(
         None, description="Opaque cursor returned by the previous page; start from the beginning when omitted"
@@ -475,4 +492,4 @@ async def story_detail(
 
 @app.get("/")
 def root():
-    return {"ok": True, "service": "cinepulse-api", "version": "0.4.3"}
+    return {"ok": True, "service": "cinepulse-api", "version": "0.4.4"}
