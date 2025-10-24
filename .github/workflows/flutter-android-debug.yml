@@ -20,13 +20,15 @@ env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
-  # Optional: raw JSON or base64, used only if the file isn't in repo
+  # Optional: raw JSON or base64; used only if the file is not in the repo
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
   build:
     name: Build debug APKs
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     concurrency:
       group: android-debug-${{ github.ref_name }}
       cancel-in-progress: false
@@ -34,6 +36,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Java (Temurin 17)
         uses: actions/setup-java@v4
@@ -82,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p android
-          echo "sdk.dir=${ANDROID_SDK_ROOT}" > android/local.properties
+          echo "sdk.dir=${ANDROID_SDK_ROOT:-${ANDROID_HOME}}" > android/local.properties
           FLUTTER_BIN="$(which flutter)"
           FLUTTER_SDK="$(dirname "$(dirname "$FLUTTER_BIN")")"
           echo "flutter.sdk=${FLUTTER_SDK}" >> android/local.properties
