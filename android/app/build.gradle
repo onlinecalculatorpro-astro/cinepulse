@@ -1,0 +1,65 @@
+// android/app/build.gradle
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+    id "dev.flutter.flutter-gradle-plugin"   // must follow Android/Kotlin
+    id "com.google.gms.google-services"      // FCM (reads google-services.json)
+}
+
+android {
+    namespace "api.onlinecalculatorpro.cinepulse"  // keep in sync with Firebase
+    compileSdk flutter.compileSdkVersion
+
+    defaultConfig {
+        applicationId "api.onlinecalculatorpro.cinepulse"
+        minSdk 23
+        targetSdk flutter.targetSdkVersion
+        versionCode flutter.versionCode
+        versionName flutter.versionName
+    }
+
+    // keep debug simple to avoid shrink errors
+    buildTypes {
+        debug {
+            minifyEnabled false
+            shrinkResources false
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.debug // replace with real keystore later
+        }
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+
+    packaging {
+        resources {
+            excludes += [
+                "META-INF/DEPENDENCIES",
+                "META-INF/NOTICE",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE.txt",
+                "META-INF/ASL2.0"
+            ]
+        }
+    }
+}
+
+flutter { source = "../.." }
+
+dependencies {
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
+
+    // Firebase BoM keeps all Firebase libs in sync
+    implementation platform("com.google.firebase:firebase-bom:33.6.0")
+    implementation "com.google.firebase:firebase-messaging"
+    // (optional) analytics:
+    // implementation "com.google.firebase:firebase-analytics"
+}
