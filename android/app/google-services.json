@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "260374615233",
+    "project_id": "cinepulse-94c98",
+    "storage_bucket": "cinepulse-94c98.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:260374615233:android:d8554d78678e3f94453040",
+        "android_client_info": {
+          "package_name": "api.onlinecalculatorpro.cinepulse"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDC4-wYOC9EBFiyKviPU0uawyr_p6nelSQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
