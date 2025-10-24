@@ -2,12 +2,15 @@
 plugins {
     id "com.android.application"
     id "org.jetbrains.kotlin.android"
-    id "dev.flutter.flutter-gradle-plugin"   // must follow Android/Kotlin
-    id "com.google.gms.google-services"      // FCM (reads google-services.json)
+    // Must be applied after Android/Kotlin
+    id "dev.flutter.flutter-gradle-plugin"
+    // Google Services (FCM) — reads android/app/google-services.json
+    id "com.google.gms.google-services"
 }
 
 android {
-    namespace "api.onlinecalculatorpro.cinepulse"  // keep in sync with Firebase
+    // Must match the package_name in google-services.json
+    namespace "api.onlinecalculatorpro.cinepulse"
     compileSdk flutter.compileSdkVersion
 
     defaultConfig {
@@ -16,9 +19,11 @@ android {
         targetSdk flutter.targetSdkVersion
         versionCode flutter.versionCode
         versionName flutter.versionName
+        // If you ever hit 65535 methods in debug, uncomment:
+        // multiDexEnabled true
     }
 
-    // keep debug simple to avoid shrink errors
+    // Keep debug & release simple for now (no shrinking)
     buildTypes {
         debug {
             minifyEnabled false
@@ -27,7 +32,8 @@ android {
         release {
             minifyEnabled false
             shrinkResources false
-            signingConfig signingConfigs.debug // replace with real keystore later
+            // TODO: replace with your real release keystore when ready
+            signingConfig signingConfigs.debug
         }
     }
 
@@ -36,8 +42,11 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 
+    // Exclude some meta files that sometimes conflict in transitive deps
     packaging {
         resources {
             excludes += [
@@ -52,14 +61,17 @@ android {
     }
 }
 
-flutter { source = "../.." }
+flutter {
+    source = "../.."
+}
 
 dependencies {
+    // Desugaring
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
 
-    // Firebase BoM keeps all Firebase libs in sync
+    // Firebase BoM keeps all Firebase libs aligned
     implementation platform("com.google.firebase:firebase-bom:33.6.0")
     implementation "com.google.firebase:firebase-messaging"
-    // (optional) analytics:
+    // Optional:
     // implementation "com.google.firebase:firebase-analytics"
 }
