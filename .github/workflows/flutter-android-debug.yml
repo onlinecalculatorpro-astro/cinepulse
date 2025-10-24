@@ -20,6 +20,7 @@ env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
+  # Raw JSON or base64; only used if file isn't in repo
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -106,52 +107,34 @@ jobs:
             echo "::error::google-services.json is missing and no secret was provided."
             exit 1
           fi
+
+          # Sanity check: compare package_name to APPLICATION_ID
           PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
           echo "google-services.json package_name = ${PKG:-<unknown>}"
           if [[ -n "${PKG:-}" && -n "${APPLICATION_ID:-}" && "$PKG" != "$APPLICATION_ID" ]]; then
             echo "::warning::APPLICATION_ID ($APPLICATION_ID) != google-services.json package_name ($PKG)"
           fi
 
-      - name: Generate Gradle wrapper (no commit)
-        shell: bash
+      - name: Build debug APKs (Flutter)
         run: |
-          set -euo pipefail
-          GRADLE_VERSION=8.10.2
-          curl -sL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /tmp
-          export PATH="/tmp/gradle-${GRADLE_VERSION}/bin:$PATH"
-          pushd android >/dev/null
-          gradle wrapper --gradle-version "${GRADLE_VERSION}"
-          popd >/dev/null
-          test -x android/gradlew && echo "Wrapper ready: android/gradlew"
+          flutter build apk --debug --split-per-abi \
+            --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
+            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
 
-      - name: Build debug APKs (Gradle)
-        shell: bash
+      - name: List APKs
         run: |
-          set -euo pipefail
-          pushd android >/dev/null
-          ./gradlew --no-daemon --stacktrace --warning-mode=all \
-            -PAPI_BASE_URL="${{ env.API_BASE_URL }}" \
-            -PDEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}" \
-            :app:assembleDebug
-          popd >/dev/null
-
-      - name: Locate APKs
-        shell: bash
-        run: |
-          set -e
-          echo "== Gradle outputs =="
-          find android/app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
           echo "== Flutter outputs =="
-          find build/app/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
+          ls -lh build/app/outputs/flutter-apk || true
+          echo "== Gradle outputs (if any) =="
+          find android/app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-debug
           path: |
+            build/app/outputs/flutter-apk/*.apk
             android/app/build/outputs/apk/debug/*.apk
             android/app/build/outputs/apk/*/debug/*.apk
-            build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
           retention-days: 7
