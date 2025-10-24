@@ -1,18 +1,20 @@
-// android/app/build.gradle (module)
+// android/app/build.gradle
 plugins {
     id "com.android.application"
     id "org.jetbrains.kotlin.android"
+    // Must be after Android/Kotlin
     id "dev.flutter.flutter-gradle-plugin"
+    // Google services (FCM)
     id "com.google.gms.google-services"
 }
 
 android {
-    namespace "api.onlinecalculatorpro.cinepulse"
+    namespace "api.onlinecalculatorpro.cinepulse"        // must match your appId + firebase package
     compileSdk flutter.compileSdkVersion
     ndkVersion flutter.ndkVersion
 
     defaultConfig {
-        applicationId "api.onlinecalculatorpro.cinepulse"
+        applicationId "api.onlinecalculatorpro.cinepulse" // keep in sync with namespace & google-services.json
         minSdk 23
         targetSdk flutter.targetSdkVersion
         versionCode flutter.versionCode
@@ -28,20 +30,37 @@ android {
 
     buildTypes {
         release {
-            signingConfig signingConfigs.debug   // TODO: replace with real release signing
+            // replace with your real release signing config when ready
+            signingConfig signingConfigs.debug
             minifyEnabled false
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += [
+                "META-INF/DEPENDENCIES",
+                "META-INF/NOTICE",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE.txt",
+                "META-INF/ASL2.0"
+            ]
         }
     }
 }
 
 flutter {
-    source "../.."
+    source = "../.."
 }
 
 dependencies {
+    // desugaring
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
 
+    // Firebase BoM keeps all firebase libs in sync
     implementation platform("com.google.firebase:firebase-bom:33.6.0")
     implementation "com.google.firebase:firebase-messaging"
+    // (optional) analytics:
     // implementation "com.google.firebase:firebase-analytics"
 }
