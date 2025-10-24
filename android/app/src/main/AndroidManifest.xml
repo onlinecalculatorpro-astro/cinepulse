@@ -1,5 +1,6 @@
 <!-- android/app/src/main/AndroidManifest.xml -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest package="api.onlinecalculatorpro.cinepulse"
+          xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Networking -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -7,7 +8,7 @@
 
     <!-- Notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Helpful for delivery/wake -->
+    <!-- Helps device wake for delivery -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
@@ -23,7 +24,7 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="cinepulse_general" />
-        <!-- Optional: set a monochrome small icon if you add one
+        <!-- Optional small monochrome icon if you add one
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_stat_notification" /> -->
@@ -48,13 +49,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Needed when your FCM payload sets click_action=FLUTTER_NOTIFICATION_CLICK -->
+            <!-- For FCM payloads with click_action=FLUTTER_NOTIFICATION_CLICK -->
             <intent-filter>
                 <action android:name="FLUTTER_NOTIFICATION_CLICK" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
-            <!-- App Links (enable only if you host Digital Asset Links on this domain) -->
+            <!-- App Links (only useful if assetlinks.json is set on this domain) -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
