@@ -22,9 +22,9 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     this.showSearchBar = false, // show only when Search tab active
-    this.onMenuPressed,         // opens drawer (from RootShell)
-    this.onHeaderRefresh,       // optional external hook
-    this.onOpenDiscover,        // header "Discover" button -> Search tab
+    this.onMenuPressed, // opens drawer (from RootShell)
+    this.onHeaderRefresh, // optional external hook
+    this.onOpenDiscover, // header "Discover" button -> Search tab
   });
 
   final bool showSearchBar;
@@ -57,7 +57,9 @@ class _HomeScreenState extends State<HomeScreen>
   final TextEditingController _search = TextEditingController();
   final GlobalKey<RefreshIndicatorState> _refreshKey = GlobalKey<RefreshIndicatorState>();
 
-  final Map<String, _PagedFeed> _feeds = {for (final k in _tabs.keys) k: _PagedFeed(tab: k)};
+  final Map<String, _PagedFeed> _feeds = {
+    for (final k in _tabs.keys) k: _PagedFeed(tab: k)
+  };
 
   bool _offline = false;
   bool _isForeground = true;
@@ -106,9 +108,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
 
       // If we just came back from offline, reset backoff for quick reconnects.
-      if (hasNetwork && wasOffline) {
-        _wsBackoffSecs = 2;
-      }
+      if (hasNetwork && wasOffline) _wsBackoffSecs = 2;
     });
 
     // Initial connectivity state.
@@ -535,13 +535,13 @@ class _FeedListState extends State<_FeedList>
     // Determine columns via max cross-axis extent (auto responsive).
     double maxTileW;
     if (width < 520) {
-      maxTileW = width;         // 1 col
+      maxTileW = width; // 1 col
     } else if (width < 900) {
-      maxTileW = width / 2;     // 2 cols
+      maxTileW = width / 2; // 2 cols
     } else if (width < 1400) {
-      maxTileW = width / 3;     // 3 cols
+      maxTileW = width / 3; // 3 cols
     } else {
-      maxTileW = width / 4;     // 4 cols
+      maxTileW = width / 4; // 4 cols
     }
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
@@ -666,10 +666,11 @@ class _FeedListState extends State<_FeedList>
   }
 }
 
-// Paging/feed model (unchanged)
+// Paging/feed model
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
   final String tab;
+
   final List<Story> _items = [];
   bool _initialLoading = false;
   bool _loadingMore = false;
@@ -683,6 +684,9 @@ class _PagedFeed extends ChangeNotifier {
   bool get hasError => _hasError;
   String? get errorMessage => _errorMessage;
   bool get canLoadMore => _canLoadMore;
+
+  // Effective timestamp for ordering and cursors.
+  DateTime? _eff(Story s) => s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
   DateTime? _sinceCursor;
 
@@ -709,6 +713,7 @@ class _PagedFeed extends ChangeNotifier {
     try {
       final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
+      // Merge by id (incoming wins), then sort.
       final byId = {for (final s in _items) s.id: s};
       for (final s in list) {
         byId[s.id] = s;
@@ -720,8 +725,10 @@ class _PagedFeed extends ChangeNotifier {
 
       _sortNewestFirst(_items);
 
-      final dates = _items.map((e) => e.publishedAt).whereType<DateTime>();
-      _sinceCursor = dates.isEmpty ? null : dates.reduce((a, b) => a.isBefore(b) ? a : b);
+      // Cursor should be the NEWEST effective date we have (for delta fetch).
+      final dates =
+          _items.map(_eff).whereType<DateTime>(); // normalizedAt → publishedAt → releaseDate
+      _sinceCursor = dates.isEmpty ? null : dates.reduce((a, b) => a.isAfter(b) ? a : b);
 
       _hasError = false;
       _errorMessage = null;
@@ -748,12 +755,15 @@ class _PagedFeed extends ChangeNotifier {
 
   void _sortNewestFirst(List<Story> list) {
     list.sort((a, b) {
-      final pa = a.publishedAt;
-      final pb = b.publishedAt;
-      if (pa == null && pb == null) return 0;
-      if (pa == null) return 1;
-      if (pb == null) return -1;
-      return pb.compareTo(pa);
+      final da = _eff(a);
+      final db = _eff(b);
+      if (da == null && db == null) return b.id.compareTo(a.id);
+      if (da == null) return 1; // nulls last
+      if (db == null) return -1;
+      final cmp = db.compareTo(da); // newest first
+      if (cmp != 0) return cmp;
+      // Deterministic tie-break by id to avoid UI shuffling when times equal.
+      return b.id.compareTo(a.id);
     });
   }
 }
