@@ -101,7 +101,7 @@ jobs:
             echo "::error::Remove package=\"...\" from AndroidManifest.xml <manifest>."
             exit 1
           fi
-          # minSdk check (your deps require >=24)
+          # minSdk line (should be 24)
           awk '/minSdk/ {print "minSdk =", $2}' android/app/build.gradle || true
 
       - name: Ensure Gradle wrapper (bootstrap if missing)
@@ -136,52 +136,80 @@ jobs:
           chmod +x android/gradlew
           echo "Wrapper ready."
 
-      - name: Flutter analyze (show Dart issues but do not fail build)
+      - name: Flutter analyze (log only)
         shell: bash
         run: |
           set -euo pipefail
           if ! flutter analyze; then
             echo "::warning::flutter analyze found issues (shown above). Continuing to build so logs are captured."
           fi
-          echo "Dependencies snapshot:"
-          flutter pub deps | sed -n '1,200p'
 
-      - name: Build APKs (Flutter → fallback to Gradle)
+      - name: Build (capture verbose logs) — Flutter first, Gradle fallback
         shell: bash
         run: |
           set -euo pipefail
+          # capture verbose output to a file we will upload
+          FL_LOG="flutter-verbose.log"
 
-          echo "== Try Flutter build (verbose) =="
+          # Try Flutter build (verbose)
           if ! flutter build apk --debug --split-per-abi -v \
               --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
-              --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"; then
-            echo "::warning::Flutter build failed. Will try Gradle."
+              --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}" \
+              2>&1 | tee "$FL_LOG"; then
+            echo "::warning::Flutter build failed. Trying Gradle wrapper…"
           fi
 
           have_flutter_apk() { find build/app/outputs/flutter-apk -maxdepth 1 -name "*.apk" | grep -q .; }
-
           if have_flutter_apk; then
             echo "Flutter produced APKs."
+            echo "APK list:"
+            find build/app/outputs/flutter-apk -name "*.apk" -print
+            echo "APK_PRESENT=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Gradle fallback (passes dart-defines via DART_DEFINES)
+          cd android
+          B64_API=$(printf '%s' "API_BASE_URL=${{ env.API_BASE_URL }}" | base64 | tr -d '\n')
+          B64_DEEP=$(printf '%s' "DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}" | base64 | tr -d '\n')
+          export DART_DEFINES="$B64_API,$B64_DEEP"
+
+          set +e
+          ./gradlew --no-daemon --stacktrace --warning-mode=all :app:assembleDebug
+          GRADLE_STATUS=$?
+          set -e
+
+          echo "GRADLE_STATUS=$GRADLE_STATUS" >> "$GITHUB_ENV"
+
+          echo "APK list (Gradle dirs):"
+          find app/build/outputs -name "*.apk" -print || true
+
+          if find app/build/outputs -name "*.apk" | grep -q .; then
+            echo "APK_PRESENT=1" >> "$GITHUB_ENV"
           else
-            echo "== Flutter did not produce APKs; try Gradle wrapper =="
-            cd android
-            B64_API=$(printf '%s' "API_BASE_URL=${{ env.API_BASE_URL }}" | base64 | tr -d '\n')
-            B64_DEEP=$(printf '%s' "DEEP_LINK_BASE=${{ env.DEEP_LINK_BASE }}" | base64 | tr -d '\n')
-            export DART_DEFINES="$B64_API,$B64_DEEP"
-            ./gradlew --no-daemon --stacktrace --warning-mode=all :app:assembleDebug
+            echo "APK_PRESENT=0" >> "$GITHUB_ENV"
           fi
 
-          echo "== Final outputs =="
-          find build/app/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
-          find android/app/build/outputs -type f -name "*.apk" -print | sed 's|^|  |' || true
+      - name: Upload verbose Flutter log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-verbose-log
+          path: flutter-verbose.log
+          if-no-files-found: warn
+          retention-days: 7
 
-          if ! find build/app/outputs -type f -name "*.apk" | grep -q . && \
-             ! find android/app/build/outputs -type f -name "*.apk" | grep -q .; then
-            echo "::error::No APKs were produced."
-            exit 1
-          fi
+      - name: Upload Gradle problems report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-problems-report
+          path: android/build/reports/problems/**
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload APK artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-apk-debug
@@ -189,5 +217,16 @@ jobs:
             build/app/outputs/flutter-apk/*.apk
             android/app/build/outputs/apk/debug/*.apk
             android/app/build/outputs/apk/*/debug/*.apk
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
+
+      - name: Fail if nothing produced
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "APK_PRESENT=${APK_PRESENT:-0}"
+          if [[ "${APK_PRESENT:-0}" != "1" ]]; then
+            echo "::error::No APKs were produced. See flutter-verbose-log and gradle-problems-report artifacts."
+            exit 1
+          fi
