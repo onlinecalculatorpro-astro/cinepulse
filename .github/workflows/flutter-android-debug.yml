@@ -20,7 +20,6 @@ env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
-  # Optional: raw JSON or base64, used only if the file isn't in repo
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -134,8 +133,7 @@ jobs:
         run: |
           flutter build apk --debug --split-per-abi \
             --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
-            --dart-define=DEEP_LINK_BASE="${{ env.DE
-EP_LINK_BASE }}"
+            --dart-define=DEEP_LINK_BASE="${{ env.DEEP_LINK_BASE }}"
 
       - name: List APKs
         run: ls -lh build/app/outputs/flutter-apk || true
