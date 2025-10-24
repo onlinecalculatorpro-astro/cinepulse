@@ -1,7 +1,7 @@
 // lib/core/fcm_bootstrap.dart
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -12,18 +12,20 @@ const _channelDesc = 'General updates';
 
 final FlutterLocalNotificationsPlugin _fln = FlutterLocalNotificationsPlugin();
 
+bool get _isAndroid =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
 int _nextId() => DateTime.now().millisecondsSinceEpoch.remainder(1 << 31);
 
 Future<void> _ensureFirebase() async {
-  // Web needs explicit options (firebase_options.dart). We only target Android here.
-  if (kIsWeb) return;
+  if (!_isAndroid) return;
   if (Firebase.apps.isEmpty) {
     await Firebase.initializeApp();
   }
 }
 
 Future<void> _ensureChannel() async {
-  if (kIsWeb) return;
+  if (!_isAndroid) return;
   const channel = AndroidNotificationChannel(
     _channelId,
     _channelName,
@@ -36,32 +38,40 @@ Future<void> _ensureChannel() async {
       ?.createNotificationChannel(channel);
 }
 
-NotificationDetails _androidHeadsUpDetails() => const NotificationDetails(
+NotificationDetails _headsUpDetails() => const NotificationDetails(
       android: AndroidNotificationDetails(
         _channelId,
         _channelName,
         importance: Importance.high,
         priority: Priority.high,
+        // icon: '@mipmap/ic_notification', // (optional) if you add one
       ),
     );
 
-/// Background handler (must be a top-level function).
+({String title, String body}) _titleBody(RemoteMessage msg) {
+  final title =
+      msg.data['title'] ?? msg.notification?.title ?? 'CinePulse';
+  final body =
+      msg.data['body'] ?? msg.notification?.body ?? 'New update';
+  return (title: title, body: body);
+}
+
+/// Background handler (must be top-level).
 @pragma('vm:entry-point')
 Future<void> cinepulseFcmBg(RemoteMessage message) async {
   await _ensureFirebase();
   await _ensureChannel();
 
-  await _fln.show(
-    _nextId(),
-    message.data['title'] ?? message.notification?.title ?? 'CinePulse',
-    message.data['body'] ?? message.notification?.body ?? 'New update',
-    _androidHeadsUpDetails(),
-  );
+  final tb = _titleBody(message);
+  await _fln.show(_nextId(), tb.title, tb.body, _headsUpDetails());
 }
 
-/// Call this once during app startup (Android only).
+bool _didInit = false;
+
+/// Call once during app startup (Android only).
 Future<void> initCinepulseFcm() async {
-  if (kIsWeb) return; // Web uses WS/SSE only in this app.
+  if (!_isAndroid || _didInit) return;
+  _didInit = true;
 
   await _ensureFirebase();
 
@@ -70,27 +80,23 @@ Future<void> initCinepulseFcm() async {
   await _fln.initialize(const InitializationSettings(android: androidInit));
   await _ensureChannel();
 
-  // Ensure FCM auto-init is on (usually true by default)
+  // Make sure FCM is on
   await FirebaseMessaging.instance.setAutoInitEnabled(true);
 
   // Background handler
   FirebaseMessaging.onBackgroundMessage(cinepulseFcmBg);
 
-  // Android 13+ runtime permission (no-op below 13)
+  // Android 13+ runtime permission
   await FirebaseMessaging.instance
       .requestPermission(alert: true, badge: true, sound: true);
 
-  // Foreground messages → show heads-up via local notifications
+  // Foreground messages → local heads-up
   FirebaseMessaging.onMessage.listen((msg) async {
-    await _fln.show(
-      _nextId(),
-      msg.data['title'] ?? msg.notification?.title ?? 'CinePulse',
-      msg.data['body'] ?? msg.notification?.body ?? 'New update',
-      _androidHeadsUpDetails(),
-    );
+    final tb = _titleBody(msg);
+    await _fln.show(_nextId(), tb.title, tb.body, _headsUpDetails());
   });
 
-  // Notification taps (cold/warm start + already-running)
+  // Notification taps
   final initial = await FirebaseMessaging.instance.getInitialMessage();
   if (initial != null) {
     // ignore: avoid_print
@@ -101,16 +107,18 @@ Future<void> initCinepulseFcm() async {
     print('FCM onMessageOpenedApp: ${msg.messageId} data=${msg.data}');
   });
 
-  // Optional topic
+  // Subscribe everyone to broadcast topic and keep it on token refresh
   await FirebaseMessaging.instance.subscribeToTopic('global-feed');
+  FirebaseMessaging.instance.onTokenRefresh.listen((_) {
+    FirebaseMessaging.instance.subscribeToTopic('global-feed');
+  });
 
-  // Debug: token + refresh logs
+  // Debug: token now + on refresh
   final token = await FirebaseMessaging.instance.getToken();
   // ignore: avoid_print
   print('FCM TOKEN => $token');
-
-  FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+  FirebaseMessaging.instance.onTokenRefresh.listen((t) {
     // ignore: avoid_print
-    print('FCM TOKEN (refreshed) => $newToken');
+    print('FCM TOKEN (refreshed) => $t');
   });
 }
