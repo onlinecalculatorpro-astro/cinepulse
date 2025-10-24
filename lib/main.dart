@@ -2,7 +2,8 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform, kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -48,7 +49,8 @@ Future<void> main() async {
 
   // Friendlier fallback widget when a build throws.
   ErrorWidget.builder = (FlutterErrorDetails details) {
-    final message = kReleaseMode ? 'Something went wrong.' : details.exceptionAsString();
+    final message =
+        kReleaseMode ? 'Something went wrong.' : details.exceptionAsString();
     return Material(
       color: Colors.transparent,
       child: Center(
