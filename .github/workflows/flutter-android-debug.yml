@@ -20,6 +20,8 @@ env:
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
   APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'api.onlinecalculatorpro.cinepulse' }}
+
+  # Optional: if provided, will be written to android/app/google-services.json (raw JSON or base64)
   FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
@@ -73,10 +75,8 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # 🔒 Do NOT overwrite the project – this is what caused the template screen
-      # (If you ever need to re-generate only Android scaffolding, run this LOCALLY, not in CI.)
-      # - name: Ensure Android platform exists (no overwrite)
-      #   run: flutter create --platforms=android .
+      # DO NOT regenerate Android on CI (this caused template main.dart before)
+      # If you ever need to refresh scaffolding, do it locally and commit.
 
       - name: Ensure Android local.properties
         shell: bash
@@ -87,7 +87,16 @@ jobs:
           FLUTTER_BIN="$(which flutter)"
           FLUTTER_SDK="$(dirname "$(dirname "$FLUTTER_BIN")")"
           echo "flutter.sdk=${FLUTTER_SDK}" >> android/local.properties
-          cat android/local.properties
+          echo "== android/local.properties ==" && cat android/local.properties
+
+      - name: Guard: no Kotlin DSL gradle files (Flutter expects Groovy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if compgen -G "android/*.gradle.kts" >/dev/null || compgen -G "android/app/*.gradle.kts" >/dev/null; then
+            echo "::error::Kotlin DSL Gradle files (*.gradle.kts) found. Convert to Groovy (build.gradle, settings.gradle)."
+            exit 1
+          fi
 
       - name: Ensure google-services.json
         shell: bash
@@ -108,8 +117,14 @@ jobs:
             exit 1
           fi
 
-      # (Optional) Guard: fail if the template main.dart got in somehow
-      - name: Verify app entrypoint
+          # Sanity: show package_name and compare with APPLICATION_ID
+          PKG=$(grep -o '"package_name":[[:space:]]*"[^"]*"' android/app/google-services.json | sed 's/.*"package_name":[[:space:]]*"\([^"]*\)".*/\1/' | head -n1 || true)
+          echo "google-services.json package_name = ${PKG:-<unknown>}"
+          if [[ -n "${PKG:-}" && -n "${APPLICATION_ID:-}" && "$PKG" != "$APPLICATION_ID" ]]; then
+            echo "::warning::APPLICATION_ID ($APPLICATION_ID) != google-services.json package_name ($PKG)"
+          fi
+
+      - name: Verify app entrypoint (optional)
         shell: bash
         run: |
           set -euo pipefail
