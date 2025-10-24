@@ -1,0 +1,47 @@
+// android/app/build.gradle (module)
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+    id "dev.flutter.flutter-gradle-plugin"
+    id "com.google.gms.google-services"
+}
+
+android {
+    namespace "api.onlinecalculatorpro.cinepulse"
+    compileSdk flutter.compileSdkVersion
+    ndkVersion flutter.ndkVersion
+
+    defaultConfig {
+        applicationId "api.onlinecalculatorpro.cinepulse"
+        minSdk 23
+        targetSdk flutter.targetSdkVersion
+        versionCode flutter.versionCode
+        versionName flutter.versionName
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.debug   // TODO: replace with real release signing
+            minifyEnabled false
+        }
+    }
+}
+
+flutter {
+    source "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"
+
+    implementation platform("com.google.firebase:firebase-bom:33.6.0")
+    implementation "com.google.firebase:firebase-messaging"
+    // implementation "com.google.firebase:firebase-analytics"
+}
