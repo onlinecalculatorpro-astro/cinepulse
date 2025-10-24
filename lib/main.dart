@@ -2,48 +2,48 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import 'app/app.dart';
 import 'app/app_settings.dart';
-import 'core/api.dart';   // for kApiBaseUrl, kDeepLinkBase
+import 'core/api.dart'; // kApiBaseUrl, kDeepLinkBase
 import 'core/cache.dart';
-import 'core/fcm_bootstrap.dart'; // <-- FCM init
+import 'core/fcm_bootstrap.dart'; // FCM init (Android only)
 
 Future<void> main() async {
-  // Ensure bindings for async init (prefs, caches, plugins, etc.)
+  // Ensure bindings for async init (prefs, plugins, channels).
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase/FCM (channel, permissions, handlers, topic, token log)
-  await initCinepulseFcm();
+  // Initialize Firebase/FCM ONLY on Android (skip web/others).
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    await initCinepulseFcm();
+  }
 
-  // Default locale (can be overridden by device/user settings later).
+  // Default locale (device/user settings can override later).
   Intl.defaultLocale = 'en_US';
 
   // App-wide settings & persistent stores.
   await AppSettings.instance.init();
   await SavedStore.instance.init();
 
-  // Log compiled-in config once (helps verify --dart-define on CI).
+  // Log compiled-in config (verifies --dart-define in CI).
   debugPrint('[CinePulse] API_BASE_URL = $kApiBaseUrl');
   debugPrint('[CinePulse] DEEP_LINK_BASE = $kDeepLinkBase');
 
   // ---------- Global error handling ----------
   // Framework errors
   FlutterError.onError = (FlutterErrorDetails details) {
-    // Keep Flutter's default red-screen in debug.
-    FlutterError.presentError(details);
+    FlutterError.presentError(details); // Keep red screen in debug.
     final stack = details.stack ?? StackTrace.current;
     Zone.current.handleUncaughtError(details.exception, stack);
   };
 
-  // Platform / engine errors (e.g., from plugins)
+  // Platform / engine errors (e.g., from plugins).
   ui.PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
     debugPrint('Unhandled platform error: $error\n$stack');
-    // Return true to indicate we've handled it.
-    return true;
+    return true; // We've handled it.
   };
 
   // Friendlier fallback widget when a build throws.
