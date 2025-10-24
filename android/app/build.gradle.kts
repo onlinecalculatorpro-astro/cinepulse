@@ -10,12 +10,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.cinepulse_app" // TODO: replace with your real package; must match google-services.json
+    // MUST match google-services.json
+    namespace = "api.onlinecalculatorpro.cinepulse"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     defaultConfig {
-        applicationId = "com.example.cinepulse_app" // TODO: keep in sync with namespace + Firebase project
+        applicationId = "api.onlinecalculatorpro.cinepulse" // keep in sync with namespace
         minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -32,16 +33,14 @@ android {
 
     buildTypes {
         release {
-            // TODO: replace with your real release signingConfig
+            // TODO: replace with your real release signing config when ready
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
         }
-        debug {
-            // keep defaults
-        }
+        debug { /* defaults */ }
     }
 
-    // (Optional) avoid occasional META-INF conflicts from transitive libs
+    // Avoid occasional META-INF conflicts from transitive libs
     packaging {
         resources {
             excludes += setOf(
@@ -67,6 +66,6 @@ dependencies {
     // Firebase BoM keeps all Firebase libs in sync; add messaging without version
     implementation(platform("com.google.firebase:firebase-bom:33.6.0"))
     implementation("com.google.firebase:firebase-messaging")
-    // (Optional) analytics if you need it:
+    // Optional analytics:
     // implementation("com.google.firebase:firebase-analytics")
 }
