@@ -1,69 +1,34 @@
-// android/app/build.gradle.kts (module-level)
+// android/build.gradle.kts (project-level)
 
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    // The Flutter Gradle Plugin must be applied after Android/Kotlin.
-    id("dev.flutter.flutter-gradle-plugin")
-    // Google Services for FCM (reads google-services.json)
-    id("com.google.gms.google-services")
+    id("com.android.application") version "8.9.1" apply false
+    id("com.android.library") version "8.9.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+    id("com.google.gms.google-services") version "4.4.2" apply false
+    // Flutter Gradle integration; applied in :app
+    id("dev.flutter.flutter-plugin-loader") version "1.0.0" apply false
 }
 
-android {
-    // MUST match google-services.json
-    namespace = "api.onlinecalculatorpro.cinepulse"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
-
-    defaultConfig {
-        applicationId = "api.onlinecalculatorpro.cinepulse" // keep in sync with namespace
-        minSdk = 23
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
-    }
-
-    // Required for flutter_local_notifications & modern Firebase libs
-    compileOptions {
-        isCoreLibraryDesugaringEnabled = true
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions { jvmTarget = "17" }
-
-    buildTypes {
-        release {
-            // TODO: replace with your real signing config for production
-            signingConfig = signingConfigs.getByName("debug")
-            isMinifyEnabled = false
-        }
-        debug { /* defaults */ }
-    }
-
-    // Avoid occasional META-INF conflicts from transitive libs
-    packaging {
-        resources {
-            excludes += setOf(
-                "META-INF/DEPENDENCIES",
-                "META-INF/NOTICE",
-                "META-INF/LICENSE",
-                "META-INF/LICENSE.txt",
-                "META-INF/NOTICE.txt",
-                "META-INF/ASL2.0"
-            )
-        }
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
     }
 }
 
-flutter { source = "../.." }
+// Put all Gradle outputs under the repo root /build (your custom layout)
+val newBuildDir = rootProject.layout.buildDirectory.dir("../../build").get()
+rootProject.layout.buildDirectory.set(newBuildDir)
 
-dependencies {
-    // Desugaring (when coreLibraryDesugaringEnabled = true)
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+subprojects {
+    // Each subproject writes into /build/<moduleName>
+    val newSubBuildDir = newBuildDir.dir(project.name)
+    layout.buildDirectory.set(newSubBuildDir)
 
-    // Firebase BoM keeps all Firebase libs in sync; add messaging without version
-    implementation(platform("com.google.firebase:firebase-bom:33.6.0"))
-    implementation("com.google.firebase:firebase-messaging")
-    // Optional analytics:
-    // implementation("com.google.firebase:firebase-analytics")
+    // Ensure :app is configured first (common in Flutter projects)
+    evaluationDependsOn(":app")
+}
+
+tasks.register<Delete>("clean") {
+    delete(rootProject.layout.buildDirectory)
 }
