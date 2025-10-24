@@ -1,11 +1,11 @@
 x-env: &defaults
-  ENV: "prod"
-  TZ: "Asia/Kolkata"
-  REDIS_URL: "redis://redis:6379/0"
-  FEED_KEY: "feed:items"
-  SEEN_KEY: "feed:seen"
-  SOURCES_FILE: "/app/infra/source.yml"
-  TMDB_API_KEY: "${TMDB_API_KEY:-}"
+  ENV: prod
+  TZ: Asia/Kolkata
+  REDIS_URL: redis://redis:6379/0
+  FEED_KEY: feed:items
+  SEEN_KEY: feed:seen
+  SOURCES_FILE: /app/infra/source.yml
+  TMDB_API_KEY: ${TMDB_API_KEY:-}
 
 services:
   redis:
@@ -21,6 +21,11 @@ services:
       - redis-data:/data
     ports:
       - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: sh -c 'redis-cli ping | grep -q PONG'
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   api:
     build:
@@ -29,9 +34,11 @@ services:
       target: api
     restart: unless-stopped
     env_file: ../.env
-    environment: *defaults
+    environment:
+      <<: *defaults
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     ports:
       - "127.0.0.1:18000:8000"
     command: >
@@ -40,6 +47,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      - /var/tmp
+    stop_grace_period: 20s
 
   workers:
     build:
@@ -50,16 +59,17 @@ services:
     env_file: ../.env
     environment:
       <<: *defaults
-      RQ_REDIS_URL: "${REDIS_URL}"
+      RQ_REDIS_URL: ${REDIS_URL}
     depends_on:
-      - redis
-    command: sh -lc 'rq worker -u "$${REDIS_URL:-redis://redis:6379/0}" events'
-      - sh
-      - -lc
-      - rq worker -u "$REDIS_URL" events
+      redis:
+        condition: service_healthy
+    command: >
+      sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" events'
     read_only: true
     tmpfs:
       - /tmp
+      - /var/tmp
+    stop_grace_period: 10s
 
   scheduler:
     build:
@@ -68,9 +78,11 @@ services:
       target: scheduler
     restart: unless-stopped
     env_file: ../.env
-    environment: *defaults
+    environment:
+      <<: *defaults
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     command:
       - python
       - -m
@@ -78,6 +90,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      - /var/tmp
+    stop_grace_period: 10s
 
   webhooks:
     build:
@@ -86,21 +100,19 @@ services:
       target: webhooks
     restart: unless-stopped
     env_file: ../.env
-    environment: *defaults
+    environment:
+      <<: *defaults
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     ports:
       - "127.0.0.1:18001:8000"
-    command:
-      - uvicorn
-      - apps.webhooks.main:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
+    command: uvicorn apps.webhooks.main:app --host 0.0.0.0 --port 8000
     read_only: true
     tmpfs:
       - /tmp
+      - /var/tmp
+    stop_grace_period: 10s
 
 volumes:
   redis-data: {}
