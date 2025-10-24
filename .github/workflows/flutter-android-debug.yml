@@ -1,5 +1,4 @@
-# .github/workflows/flutter-android-debug.yml
-name: Android Debug (APK - ROOT, manual)
+name: Android Debug (APK - manual)
 
 on:
   workflow_dispatch:
@@ -12,18 +11,27 @@ on:
         description: "Deep link base (e.g. https://cinepulse.netlify.app/#/s)"
         required: false
         default: ""
+      applicationId:
+        description: "Android applicationId / package (must match google-services.json)"
+        required: false
+        default: "com.example.cinepulse_app"
 
-# Prefer repo secrets → manual inputs → sensible defaults.
 env:
+  # Prefer repo secrets → workflow inputs → defaults
   API_BASE_URL: ${{ secrets.API_BASE_URL || inputs.apiBase || 'https://api.onlinecalculatorpro.org' }}
   DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE || inputs.deepLinkBase || 'https://cinepulse.netlify.app/#/s' }}
+  APPLICATION_ID: ${{ secrets.ANDROID_APPLICATION_ID || inputs.applicationId || 'com.example.cinepulse_app' }}
+
+  # If set, will be used to provision android/app/google-services.json.
+  # Accepts either raw JSON or base64-encoded JSON.
+  FIREBASE_GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
 
 jobs:
   build:
     name: Build debug APKs
     runs-on: ubuntu-latest
     concurrency:
-      group: android-debug-root-${{ github.ref_name }}
+      group: android-debug-${{ github.ref_name }}
       cancel-in-progress: false
 
     steps:
@@ -69,11 +77,49 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # Refresh Android scaffolding if templates drifted, fixes "unsupported Gradle project".
-      - name: Ensure Android platform exists (refresh if needed)
+      # Optional: fixes template drift / unsupported project on CI images
+      - name: Ensure Android platform exists
         run: flutter create --platforms=android .
 
-      - name: Build debug APKs (split per ABI)
+      - name: Provision google-services.json (secret or dummy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android/app
+          if [[ -n "${FIREBASE_GOOGLE_SERVICES_JSON:-}" ]]; then
+            echo "google-services.json provided via secret"
+            # Detect base64 vs raw JSON
+            if [[ "${FIREBASE_GOOGLE_SERVICES_JSON:0:1}" == "{" ]]; then
+              printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON" > android/app/google-services.json
+            else
+              printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON" | base64 -d > android/app/google-services.json
+            fi
+          else
+            echo "No google-services.json secret; writing a minimal dummy (debug-only)"
+            cat > android/app/google-services.json <<JSON
+            {
+              "project_info": {
+                "project_number": "0",
+                "project_id": "cinepulse-dummy",
+                "storage_bucket": "cinepulse-dummy.appspot.com"
+              },
+              "client": [{
+                "client_info": {
+                  "mobilesdk_app_id": "1:0:android:debugdummy",
+                  "android_client_info": { "package_name": "${APPLICATION_ID}" }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "DUMMY" }],
+                "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+              }],
+              "configuration_version": "1"
+            }
+            JSON
+          fi
+          echo "== google-services.json =="
+          head -n 5 android/app/google-services.json || true
+
+      - name: Build debug APKs (per ABI)
         run: |
           flutter build apk --debug --split-per-abi \
             --dart-define=API_BASE_URL="${{ env.API_BASE_URL }}" \
