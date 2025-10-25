@@ -1,5 +1,12 @@
 # =============================================================================
-# CinePulse Sources Catalog — BOLLYWOOD + HINDI TV/OTT ONLY
+# CinePulse Root Source Config
+# =============================================================================
+# This file defines global behavior and references per-vertical source lists.
+# The scheduler will:
+#   1. Load THIS file.
+#   2. Read each file in include_verticals (below).
+#   3. Merge all youtube channels + rss feeds/buckets + any throttle overrides
+#      into one in-memory config for polling.
 # =============================================================================
 
 meta:
@@ -8,8 +15,10 @@ meta:
   share_base_url: "https://cinepusle.netlify.app/#/s"
 
 # ----------------------------------------------------------------------------- 
-# Throttle / courtesy — set to 0 so one cycle can poll ALL sources
-# -----------------------------------------------------------------------------
+# Global throttle / courtesy
+# These are minimum seconds we wait before hitting the same domain again.
+# Vertical files can override/extend this map.
+# ----------------------------------------------------------------------------- 
 throttle:
   per_domain_min_seconds:
     default: 0
@@ -22,8 +31,8 @@ throttle:
     tellyupdates.com: 0
 
 # ----------------------------------------------------------------------------- 
-# YOUTUBE
-# -----------------------------------------------------------------------------
+# YouTube defaults (channels themselves are defined in vertical files)
+# ----------------------------------------------------------------------------- 
 youtube:
   defaults:
     enabled: true
@@ -32,136 +41,29 @@ youtube:
     published_after_hours: 72
     language: "en"
     region: "IN"
-  channels:
-    - name: "T-Series"
-      enabled: true
-      channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
-      industry: "bollywood"
-      kind_hint: "trailer"
-      region: "IN"
-    - name: "YRF"
-      enabled: true
-      channel_id: "UCI5q9xeOp2-1bV7xEtKgzA"
-      industry: "bollywood"
-      kind_hint: "trailer"
-      region: "IN"
-    - name: "Zee Studios"
-      enabled: true
-      channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"
-      industry: "bollywood"
-      kind_hint: "trailer"
-      region: "IN"
-    - name: "Dharma Productions"
-      enabled: true
-      channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
-      industry: "bollywood"
-      kind_hint: "trailer"
-      region: "IN"
+  channels: []   # actual channels come from infra/verticals/*.yml
 
 # ----------------------------------------------------------------------------- 
-# NEWS (RSS)
-# -----------------------------------------------------------------------------
+# RSS defaults (feeds themselves are defined in vertical files)
+# ----------------------------------------------------------------------------- 
 rss:
   defaults:
     enabled: true
     kind_hint: news
     max_items_per_poll: 20
-    include_keywords:
+    include_keywords: []
     ignore_keywords:
-      - behind the scenes
-      - interview
-      - live stream
+      - "behind the scenes"
+      - "interview"
+      - "live stream"
 
-  buckets:
-    news_hollywood:
-      enabled: false
-      feeds:
-
-    news_india:
-      enabled: true
-      feeds:
-        - name: "Bollywood Hungama"
-          enabled: true
-          url: "https://www.bollywoodhungama.com/rss/news.xml"
-          industry: "bollywood"
-        - name: "Film Companion"
-          enabled: true
-          url: "https://www.filmcompanion.in/feed"
-          industry: "bollywood"
-        - name: "Pinkvilla (Entertainment)"
-          enabled: true
-          url: "https://www.pinkvilla.com/entertainment/feed"
-          industry: "bollywood"
-        - name: "Koimoi"
-          enabled: true
-          url: "https://www.koimoi.com/feed/"
-          industry: "bollywood"
-
-    news_hindi_tv_ott:
-      enabled: true
-      feeds:
-        - name: "TellyUpdates"
-          enabled: true
-          url: "https://www.tellyupdates.com/feed/"
-          industry: "bollywood"
-        - name: "Bollywood Hungama — OTT/TV"
-          enabled: true
-          url: "https://www.bollywoodhungama.com/rss/news.xml"
-          industry: "bollywood"
-          include_keywords:
-            - OTT
-            - web series
-            - series
-            - season
-            - episode
-            - television
-            - TV
-            - Hotstar
-            - JioCinema
-            - Prime Video
-            - Netflix
-            - Sony LIV
-            - ZEE5
-        - name: "Pinkvilla — OTT/TV"
-          enabled: true
-          url: "https://www.pinkvilla.com/entertainment/feed"
-          industry: "bollywood"
-          include_keywords:
-            - OTT
-            - web series
-            - series
-            - season
-            - episode
-            - television
-            - TV
-            - Hotstar
-            - JioCinema
-            - Prime Video
-            - Netflix
-            - Sony LIV
-            - ZEE5
-        - name: "Film Companion — OTT/TV"
-          enabled: true
-          url: "https://www.filmcompanion.in/feed"
-          industry: "bollywood"
-          include_keywords:
-            - OTT
-            - web series
-            - series
-            - season
-            - episode
-            - television
-            - TV
-            - Hotstar
-            - JioCinema
-            - Prime Video
-            - Netflix
-            - Sony LIV
-            - ZEE5
+  # The scheduler merge step will union all buckets/feeds from each vertical file
+  feeds: []
+  buckets: {}
 
 # ----------------------------------------------------------------------------- 
-# TMDb
-# -----------------------------------------------------------------------------
+# TMDb enrichment / trending config (global)
+# ----------------------------------------------------------------------------- 
 tmdb:
   api_key_env: "TMDB_API_KEY"
   regions:
@@ -169,41 +71,44 @@ tmdb:
   enable_trending: true
   enable_upcoming: true
   ott_providers:
-    - Netflix
-    - Amazon Prime Video
-    - Disney Plus Hotstar
-    - JioCinema
-    - ZEE5
-    - Sony LIV
+    - "Netflix"
+    - "Amazon Prime Video"
+    - "Disney Plus Hotstar"
+    - "JioCinema"
+    - "ZEE5"
+    - "Sony LIV"
 
 # ----------------------------------------------------------------------------- 
-# Ranking & Scheduler
-# -----------------------------------------------------------------------------
+# Ranking model / heuristics (global)
+# ----------------------------------------------------------------------------- 
 rules:
   trailer_keywords:
-    - trailer
-    - teaser
-    - first look
-    - announcement
-    - promo
+    - "trailer"
+    - "teaser"
+    - "first look"
+    - "announcement"
+    - "promo"
+
   release_keywords:
-    - release
-    - in theatres
-    - coming soon
-    - on netflix
-    - on prime
-    - on hotstar
-    - on jiocinema
-    - on zee5
-    - on sonyliv
+    - "release"
+    - "in theatres"
+    - "coming soon"
+    - "on netflix"
+    - "on prime"
+    - "on hotstar"
+    - "on jiocinema"
+    - "on zee5"
+    - "on sonyliv"
+
   award_keywords:
-    - awards
-    - nominations
-    - winners
+    - "awards"
+    - "nominations"
+    - "winners"
+
   ignore_keywords:
-    - behind the scenes
-    - interview
-    - live stream
+    - "behind the scenes"
+    - "interview"
+    - "live stream"
 
 ranking_weights:
   recency_half_life_minutes: 360
@@ -217,13 +122,26 @@ ranking_weights:
   has_poster_bonus: 0.6
   trend_bonus: 1.2
 
+# ----------------------------------------------------------------------------- 
+# Scheduler / poller behavior (global)
+# ----------------------------------------------------------------------------- 
 scheduler:
-  poll_interval_min: 15
-  published_after_hours: 72
+  poll_interval_min: 15          # run a full poll loop every 15 minutes
+  published_after_hours: 72      # ignore stuff older than 72h
   use_sources_file: true
   rss_buckets_enabled:
     - news_india
     - news_hindi_tv_ott
   per_run_limits:
-    youtube_channels: 10
-    rss_feeds: 12
+    youtube_channels: 10         # max YT channels per loop
+    rss_feeds: 12                # max RSS feeds per loop
+  poll_spread_sec: 0             # optional: wait this long between individual polls
+  poll_jitter_sec: 0             # optional: add this much random jitter between loops
+
+# ----------------------------------------------------------------------------- 
+# NEW: which vertical config files to merge in
+# Add more vertical YAMLs here (sports, gaming, anime, etc.) over time.
+# Paths are relative to this root file unless you point to an absolute path.
+# ----------------------------------------------------------------------------- 
+include_verticals:
+  - verticals/entertainment.yml
