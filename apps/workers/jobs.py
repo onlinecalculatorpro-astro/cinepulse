@@ -83,8 +83,15 @@ RSS_MAX_ITEMS = int(os.getenv("RSS_MAX_ITEMS", "30"))
 # Vertical config
 # =====================================================================
 
+# Default vertical if nothing matches.
 FALLBACK_VERTICAL = os.getenv("FALLBACK_VERTICAL", "entertainment")
 
+# Rule structure:
+#   "vertical-slug": { "keywords": [ ...lowercase substrings... ] }
+#
+# We only match substrings in title/body/domain, super cheap.
+# We start with "entertainment" and "sports", but this format scales to
+# "tech", "travel", etc. with no changes to Redis or sanitizer.
 VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
     "entertainment": {
         "keywords": [
@@ -95,8 +102,8 @@ VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
             "box office", "box-office", "collection", "opening weekend",
             "in theatres", "theatrical release", "released in cinemas",
             "bollywood", "hollywood", "tollywood", "kollywood",
-            "film", "movie",
-            "star cast", "cast announced", "actor", "actress", "director",
+            "film", "movie", "movie review", "film review",
+            "cast announced", "actor", "actress", "director",
         ]
     },
 
@@ -113,6 +120,7 @@ VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+# stable order to emit verticals
 _VERTICAL_ORDER = [FALLBACK_VERTICAL] + [
     v for v in VERTICAL_RULES.keys() if v != FALLBACK_VERTICAL
 ]
@@ -646,8 +654,8 @@ def _same_origin_bonus(img_url: str, page_url: str) -> int:
 
 def _score_image_for_card(img_url: str, page_url: str) -> int:
     """
-    NEW: score candidates so we PREFER real article/inline photos
-    (like that James Gunn headshot) and AVOID branded social cards
+    Score candidates so we PREFER real article/inline photos
+    (like celebrity/still images) and AVOID branded social cards
     (like KOIMOI's orange logo tile).
     """
     score = 0
@@ -687,11 +695,10 @@ def _score_image_for_card(img_url: str, page_url: str) -> int:
 
 def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
-    UPDATED: we now score ALL candidates and choose the best,
-    instead of blindly trusting the first OG image.
+    Score ALL candidates and choose the best, instead of blindly trusting og:image.
 
-    This fixes cases like Koimoi where og:image is a branded KOIMOI
-    card but the article body has a real celebrity/photo we actually want.
+    This fixes cases where og:image is a branded badge but the article body has
+    a real photo (the thing we actually want in the card).
     """
     def _norm_one(u: Optional[str]) -> Optional[str]:
         if not u:
@@ -739,7 +746,7 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
     if not normed_unique:
         return None
 
-    # Score each normalized candidate with article-aware heuristics.
+    # Score each normalized candidate.
     scored: List[Tuple[int, str]] = []
     for u in normed_unique.keys():
         s = _score_image_for_card(u, page_url or "")
@@ -777,7 +784,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
       4. Build kind_meta.
       5. Classify verticals (["entertainment"], ["sports"], ...).
       6. Build tags.
-      7. Pick image using improved scoring (fixes KOIMOI social-card issue).
+      7. Pick image using improved scoring.
       8. Enqueue to sanitizer.
     """
     conn = _redis()
@@ -826,7 +833,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
     link = to_https(abs_url(link, payload.get("feed") or link or "")) or ""
     page_for_imgs = link or (payload.get("feed") or "")
 
-    # --- IMAGE PICK with new scoring --------------------------------
+    # --- IMAGE PICK with scoring ------------------------------------
     image_url = _pick_image_from_payload(payload, page_for_imgs, thumb_hint)
     if not image_url and source == "youtube":
         image_url = _youtube_thumb(link)
