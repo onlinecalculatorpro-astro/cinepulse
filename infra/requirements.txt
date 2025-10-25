@@ -1,22 +1,26 @@
-# === Web/API ===
+# --- FastAPI app + ASGI servers ---
 fastapi==0.115.5
 uvicorn[standard]==0.32.0
 gunicorn==22.0.0
 
-# === DB / ORM (optional in current flow) ===
-SQLAlchemy==2.0.36
-psycopg[binary]==3.2.3
-
-# === Queue / Redis ===
+# --- Queue / Redis / background jobs ---
 rq==1.15.1
 redis==5.0.6
 
-# === Feeds / HTTP ===
+# --- Feeds / HTTP clients / webhooks ---
 feedparser==6.0.11
 httpx==0.27.2
 requests==2.32.3
 
-# === Utils ===
-python-dotenv==1.0.1
+# --- Pydantic models & env settings ---
 pydantic==2.9.2
+pydantic-settings==2.4.0
+python-dotenv==1.0.1
 PyYAML>=6.0
+
+# --- Image utils for renderer (kept so renderer can work) ---
+Pillow==10.4.0
+
+# --- (Optional) Postgres / ORM: not currently used in hot path ---
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.3
