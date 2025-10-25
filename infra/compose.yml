@@ -1,11 +1,9 @@
 # CinePulse pipeline in runtime order:
 #
 # 1. scheduler  + webhooks  -> put "fetch/ingest this source" jobs into Redis (queue: events)
-# 2. workers                       consume "events", pull external sources, normalize each story,
-#                                   then enqueue each normalized story to Redis (queue: sanitize)
-# 3. sanitizer                     consumes "sanitize", dedup + publish to public feed list in Redis,
-#                                   fanout realtime, (optional) enqueue push
-# 4. api                            serves the final deduped feed to the app / cron push
+# 2. workers                 -> consume "events", normalize each story, enqueue to "sanitize"
+# 3. sanitizer               -> consume "sanitize", dedupe + publish to Redis feed, fanout, push
+# 4. api                     -> serve final deduped feed to app / cron push
 #
 # redis backs all queues and also stores feed data
 
@@ -57,6 +55,7 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      target: scheduler
     restart: unless-stopped
     env_file: ../.env
     environment:
@@ -120,8 +119,8 @@ services:
     env_file: ../.env
     environment:
       <<: *defaults
-      # rq uses REDIS_URL; expose it explicitly too for libs that read RQ_REDIS_URL
-      RQ_REDIS_URL: ${REDIS_URL}
+      # rq also looks at RQ_REDIS_URL; set explicitly (don't rely on ${...} expansion)
+      RQ_REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
@@ -170,8 +169,8 @@ services:
       # Whether sanitizer should enqueue push jobs for accepted stories
       ENABLE_PUSH_NOTIFICATIONS: "0"
 
-      # rq (sanitizer listens on its own queue)
-      RQ_REDIS_URL: ${REDIS_URL}
+      # rq also looks at RQ_REDIS_URL; set explicitly
+      RQ_REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
