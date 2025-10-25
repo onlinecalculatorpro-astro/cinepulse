@@ -1,16 +1,18 @@
 // lib/core/api.dart
 //
 // CinePulse HTTP client & endpoints
-// - Public API: fetchFeed / searchStories / fetchStory / fetchApproxFeedLength
-// - Persistent http.Client with tiny retry/backoff
-// - SAFE base URL resolution (prod by default; no implicit localhost)
-// - Optional dev knobs via --dart-define
 //
-// Dev flags you can pass when you WANT localhost:
-//   --dart-define=USE_LOCAL_DEV=true                 → http://10.0.2.2:8000 (Android emulator)
-//   --dart-define=DEV_SERVER=http://192.168.1.50:8000 → explicit dev server URL
+// What this file does:
+// - Figures out which backend URL to talk to (prod by default).
+// - Wraps HTTP with retry/backoff and friendly error messages.
+// - Exposes high-level helpers like fetchFeed(), fetchStory(), etc.
+// - Now supports cursor pagination from /v1/feed.
 //
-// CI already injects API_BASE_URL/DEEP_LINK_BASE for release-like builds.
+// New in this version:
+// - Safe storyId URL-encoding in fetchStory()
+// - Cursor-aware fetchFeedPage()
+// - ApiPage model { items, nextCursor }
+// - Debug-friendly "flavor" string
 
 import 'dart:async';
 import 'dart:convert';
@@ -20,45 +22,61 @@ import 'package:http/http.dart' as http;
 
 import 'models.dart';
 
-/// ------------------------------------
-/// Base URLs (prod by default; NO implicit localhost)
-/// ------------------------------------
+/// ------------------------------------------------------------
+/// Base URLs (prod by default; NO implicit localhost unless asked)
+/// ------------------------------------------------------------
 
 String _resolveApiBase() {
-  // 1) Strongest: --dart-define=API_BASE_URL=https://...
+  // Highest priority: explicit build-time override
+  //   --dart-define=API_BASE_URL=https://api.my-prod.com
   const fromDefine = String.fromEnvironment('API_BASE_URL');
   if (fromDefine.isNotEmpty) return fromDefine;
 
-  // 2) Explicit dev server override (e.g. --dart-define=DEV_SERVER=http://192.168.1.50:8000)
+  // Dev override:
+  //   --dart-define=DEV_SERVER=http://192.168.1.50:8000
   const devServer = String.fromEnvironment('DEV_SERVER');
   if (devServer.isNotEmpty) {
     return devServer.startsWith('http') ? devServer : 'http://$devServer';
   }
 
-  // 3) Opt-in localhost for emulator ONLY if requested
+  // Opt-in local mode:
+  //   --dart-define=USE_LOCAL_DEV=true
+  //
+  // We default Android emulator style (10.0.2.2). If you're on iOS sim,
+  // just use DEV_SERVER above instead.
   const useLocal = String.fromEnvironment('USE_LOCAL_DEV');
   if (useLocal.toLowerCase() == 'true' || useLocal == '1') {
-    // Android emulator host loopback
     return 'http://10.0.2.2:8000';
   }
 
-  // 4) Default to production
+  // Default: production API
   return 'https://api.onlinecalculatorpro.org';
 }
 
 String _resolveDeepBase() {
-  // --dart-define=DEEP_LINK_BASE=https://.../#/s
+  // You can override deep link base at build time if needed:
+  //   --dart-define=DEEP_LINK_BASE=https://cinepulse.app/#/s
   const fromDefine = String.fromEnvironment('DEEP_LINK_BASE');
   if (fromDefine.isNotEmpty) return fromDefine;
 
-  // Reasonable defaults
+  // Web builds can just reuse their current origin.
   if (kIsWeb) return '${Uri.base.origin}/#/s';
+
+  // Fallback for mobile builds.
   return 'https://cinepulse.netlify.app/#/s';
 }
 
-/// Public constants you can import elsewhere.
+/// Public constants: most of the app should refer to these.
 final String kApiBaseUrl = _resolveApiBase();
 final String kDeepLinkBase = _resolveDeepBase();
+
+/// Optional helper that's nice in debug UIs.
+String get currentApiFlavor {
+  if (kApiBaseUrl.contains('10.0.2.2')) return 'local-dev';
+  if (kApiBaseUrl.contains('192.168.')) return 'lan-dev';
+  if (kApiBaseUrl.contains('staging')) return 'staging';
+  return 'prod';
+}
 
 /// Build a CinePulse deep link to open a story inside the app.
 Uri deepLinkForStoryId(String storyId) {
@@ -66,10 +84,22 @@ Uri deepLinkForStoryId(String storyId) {
   return Uri.parse('$kDeepLinkBase/$encoded');
 }
 
-/// ------------------------------------
-/// Low-level client with retry/backoff
-/// ------------------------------------
+/// ------------------------------------------------------------
+/// ApiPage: page of feed results w/ cursor for "load more"
+/// ------------------------------------------------------------
+class ApiPage {
+  final List<Story> items;
+  final String? nextCursor;
 
+  const ApiPage({
+    required this.items,
+    required this.nextCursor,
+  });
+}
+
+/// ------------------------------------------------------------
+/// Low-level API client w/ retry & helpers
+/// ------------------------------------------------------------
 const _timeout = Duration(seconds: 12);
 
 class ApiClient {
@@ -82,10 +112,11 @@ class ApiClient {
         'Accept': 'application/json',
         'Accept-Encoding': 'gzip',
         'Content-Type': 'application/json',
-        'X-CinePulse-Client': 'app/1.0',
+        'X-CinePulse-Client': 'app/1.0', // bump this if you ever need server logic per app version
       };
 
-  bool _isRetriableStatus(int code) => code == 502 || code == 503 || code == 504;
+  bool _isRetriableStatus(int code) =>
+      code == 502 || code == 503 || code == 504;
 
   Future<http.Response> _withRetry(
     Future<http.Response> Function() op, {
@@ -97,6 +128,7 @@ class ApiClient {
       try {
         final r = await op().timeout(_timeout);
         if (_isRetriableStatus(r.statusCode) && i < attempts) {
+          // brief backoff, then try again
           await Future<void>.delayed(backoff * (i + 1));
           continue;
         }
@@ -126,26 +158,40 @@ class ApiClient {
   Never _fail(http.Response r) {
     final path = r.request?.url.path ?? '';
     var body = r.body;
-    if (body.length > 400) body = '${body.substring(0, 400)}…';
+    if (body.length > 400) {
+      body = '${body.substring(0, 400)}…';
+    }
 
     if (r.statusCode == 429) {
-      throw Exception('API $path rate limited (429). Please try again shortly.');
+      throw Exception(
+        'API $path rate limited (429). Please try again shortly.',
+      );
     }
     if (r.statusCode >= 500) {
-      throw Exception('API $path failed (${r.statusCode}). Please try again.');
+      throw Exception(
+        'API $path failed (${r.statusCode}). Please try again.',
+      );
     }
     throw Exception('API $path failed (${r.statusCode}): $body');
   }
 
-  List<Story> _decodeFeed(String body) {
+  ApiPage _decodeFeedPage(String body) {
     final map = json.decode(body) as Map<String, dynamic>;
-    final raw = (map['items'] as List).cast<dynamic>();
-    return raw
+
+    final rawItems = (map['items'] as List).cast<dynamic>();
+    final items = rawItems
         .map((e) => Story.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
+
+    final cursor = map['next_cursor'];
+    final nextCursor =
+        (cursor is String && cursor.isNotEmpty) ? cursor : null;
+
+    return ApiPage(items: items, nextCursor: nextCursor);
   }
 
-  /// Normalize Flutter tab keys to server-understood categories (noop today).
+  /// Normalize Flutter tab keys to server-understood categories.
+  /// (Right now it's basically pass-through with sanity fallback.)
   String _normalizeTab(String tab) {
     switch (tab) {
       case 'all':
@@ -159,7 +205,7 @@ class ApiClient {
     }
   }
 
-  /// Safe path join that respects an existing base path.
+  /// Safe path join that won't accidentally drop base path segments.
   Uri _build(String path, [Map<String, String>? q]) {
     final pieces = <String>[
       if (_base.path.isNotEmpty && _base.path != '/') _base.path,
@@ -169,24 +215,45 @@ class ApiClient {
     return _base.replace(path: '/$pieces', queryParameters: q);
   }
 
-  // -------- Endpoints (instance) --------
+  // ------------------------------------------------------------
+  // Public instance methods
+  // ------------------------------------------------------------
 
-  Future<List<Story>> fetchFeed({
+  /// Get 1 page of feed items (with cursor).
+  ///
+  /// `cursor` = opaque string from previous page's `next_cursor`.
+  /// `since`  = only include items newer than this timestamp (UTC).
+  /// `tab`    = category filter ("all", "trailers", ...).
+  ///
+  /// Returns ApiPage(items, nextCursor).
+  Future<ApiPage> fetchFeedPage({
     String tab = 'all',
     DateTime? since,
+    String? cursor,
     int limit = 30,
   }) async {
-    final norm = _normalizeTab(tab);
-    final uri = _build('/v1/feed', {
-      'tab': norm,
+    final normTab = _normalizeTab(tab);
+
+    final params = <String, String>{
+      'tab': normTab,
       'limit': '$limit',
-      if (since != null) 'since': since.toUtc().toIso8601String(),
-    });
+    };
+
+    if (since != null) {
+      // API accepts RFC3339 with offset or Z.
+      params['since'] = since.toUtc().toIso8601String();
+    }
+
+    if (cursor != null && cursor.isNotEmpty) {
+      params['cursor'] = cursor;
+    }
+
+    final uri = _build('/v1/feed', params);
 
     try {
       final r = await _withRetry(() => _client.get(uri, headers: _headers()));
       if (r.statusCode != 200) _fail(r);
-      return _decodeFeed(r.body);
+      return _decodeFeedPage(r.body);
     } on TimeoutException {
       throw Exception('Network timeout. Please try again.');
     } on FormatException {
@@ -194,11 +261,28 @@ class ApiClient {
     }
   }
 
-  Future<List<Story>> searchStories(String query, {int limit = 10}) async {
+  /// Back-compat helper:
+  /// returns just `items` from the first page, ignores cursor.
+  /// Your existing UI code that expects `List<Story>` can keep using this.
+  Future<List<Story>> fetchFeed({
+    String tab = 'all',
+    DateTime? since,
+    int limit = 30,
+  }) async {
+    final page =
+        await fetchFeedPage(tab: tab, since: since, limit: limit);
+    return page.items;
+  }
+
+  Future<List<Story>> searchStories(
+    String query, {
+    int limit = 10,
+  }) async {
     final uri = _build('/v1/search', {'q': query, 'limit': '$limit'});
     try {
       final r = await _withRetry(() => _client.get(uri, headers: _headers()));
       if (r.statusCode != 200) _fail(r);
+
       final map = json.decode(r.body) as Map<String, dynamic>;
       final raw = (map['items'] as List).cast<dynamic>();
       return raw
@@ -212,10 +296,14 @@ class ApiClient {
   }
 
   Future<Story> fetchStory(String storyId) async {
-    final uri = _build('/v1/story/$storyId');
+    // IMPORTANT: encode storyId so colons / slashes don't break the URL.
+    final safeId = Uri.encodeComponent(storyId);
+    final uri = _build('/v1/story/$safeId');
+
     try {
       final r = await _withRetry(() => _client.get(uri, headers: _headers()));
       if (r.statusCode != 200) _fail(r);
+
       final map = json.decode(r.body) as Map<String, dynamic>;
       return Story.fromJson(map);
     } on TimeoutException {
@@ -226,10 +314,12 @@ class ApiClient {
   }
 
   Future<int> fetchApproxFeedLength() async {
+    // /health returns { feed_len: <int>, ... } from the API container.
     final uri = _build('/health');
     try {
       final r = await _withRetry(() => _client.get(uri, headers: _headers()));
       if (r.statusCode != 200) _fail(r);
+
       final map = json.decode(r.body) as Map<String, dynamic>;
       return (map['feed_len'] as num?)?.toInt() ?? 0;
     } on TimeoutException {
@@ -242,12 +332,13 @@ class ApiClient {
   void dispose() => _client.close();
 }
 
-/// Global client (keeps your top-level function API intact).
+/// A shared singleton client for convenience.
+/// Most code should just call the top-level helpers below.
 final ApiClient _api = ApiClient(baseUrl: kApiBaseUrl);
 
-/// ------------------------------------
-/// Top-level functions (back-compat)
-/// ------------------------------------
+/// ------------------------------------------------------------
+/// Top-level functions (back-compat for your existing widgets)
+/// ------------------------------------------------------------
 
 Future<List<Story>> fetchFeed({
   String tab = 'all',
@@ -256,7 +347,23 @@ Future<List<Story>> fetchFeed({
 }) =>
     _api.fetchFeed(tab: tab, since: since, limit: limit);
 
-Future<List<Story>> searchStories(String query, {int limit = 10}) =>
+Future<ApiPage> fetchFeedPage({
+  String tab = 'all',
+  DateTime? since,
+  String? cursor,
+  int limit = 30,
+}) =>
+    _api.fetchFeedPage(
+      tab: tab,
+      since: since,
+      cursor: cursor,
+      limit: limit,
+    );
+
+Future<List<Story>> searchStories(
+  String query, {
+  int limit = 10,
+}) =>
     _api.searchStories(query, limit: limit);
 
 Future<Story> fetchStory(String storyId) => _api.fetchStory(storyId);
