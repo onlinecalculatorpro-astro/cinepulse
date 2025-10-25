@@ -23,9 +23,6 @@ from apps.workers.extractors import (
     to_https,
 )
 
-# NEW: sanitizer is now the only gatekeeper for publishing into the public feed
-from apps.sanitizer.sanitizer import sanitize_and_publish
-
 __all__ = [
     "youtube_rss_poll",
     "rss_poll",
@@ -36,27 +33,24 @@ __all__ = [
 # ============================ Redis / keys ============================
 
 def _redis() -> Redis:
-    # redis://host:port/db
+    """
+    Return a Redis client using REDIS_URL.
+    Redis is used for:
+    - RQ queues ("events" and "sanitize")
+    - reading/writing feed list during maintenance helpers
+    - ETag/If-Modified-Since state for pollers
+    """
     return Redis.from_url(
         os.getenv("REDIS_URL", "redis://redis:6379/0"),
         decode_responses=True,
     )
 
-# Public feed list (Redis LIST) that infra-api-1 serves through /v1/feed.
-# IMPORTANT:
-#   - After sanitizer integration, workers DO NOT push directly to this list.
-#   - Only sanitizer writes new stories into this list.
+# Public feed list (Redis LIST) that the API serves via /v1/feed.
+# NOTE: In live ingest, ONLY the sanitizer container writes to this list.
+# Workers only read it for maintenance/backfill.
 FEED_KEY = os.getenv("FEED_KEY", "feed:items")
 
-# Realtime fanout channels/streams so other services can react to NEW (accepted) stories.
-FEED_PUBSUB = os.getenv("FEED_PUBSUB", "feed:pub")
-FEED_STREAM = os.getenv("FEED_STREAM", "feed:stream")
-FEED_STREAM_MAXLEN = int(os.getenv("FEED_STREAM_MAXLEN", "5000"))
-
-# Whether to enqueue async push notification jobs when a NEW story is accepted.
-ENABLE_PUSH_NOTIFICATIONS = os.getenv("ENABLE_PUSH_NOTIFICATIONS", "0").lower() not in ("0", "", "false", "no")
-
-# Repair/patch settings (manual cleanup helpers)
+# Backfill / repair settings (manual maintenance helpers)
 REPAIR_IF_MISSING_IMAGE = os.getenv("REPAIR_IF_MISSING_IMAGE", "1").lower() not in ("0", "", "false", "no")
 REPAIR_SCAN = int(os.getenv("REPAIR_SCAN", "250"))  # how many recent items to scan to patch
 REPAIR_BY_URL = os.getenv("REPAIR_BY_URL", "1").lower() not in ("0", "", "false", "no")
@@ -64,6 +58,13 @@ REPAIR_BY_URL = os.getenv("REPAIR_BY_URL", "1").lower() not in ("0", "", "false"
 # Per-poller defaults
 YT_MAX_ITEMS = int(os.getenv("YT_MAX_ITEMS", "50"))
 RSS_MAX_ITEMS = int(os.getenv("RSS_MAX_ITEMS", "30"))
+
+# Summary generation tuning
+SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "85"))
+SUMMARY_MIN    = int(os.getenv("SUMMARY_MIN_WORDS", "60"))
+SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "110"))
+PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "120"))
+PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "900"))
 
 # =============================== Types ===============================
 
@@ -80,7 +81,7 @@ class AdapterEventDict(TypedDict, total=False):
 
 TRAILER_RE = re.compile(r"\b(trailer|teaser)\b", re.I)
 
-# OTT providers (used in title classification and body detection)
+# OTT providers (used to classify OTT release stories)
 _OTT_PROVIDERS = [
     "Netflix", "Prime Video", "Amazon Prime Video", "Disney\\+ Hotstar", "Hotstar",
     "JioCinema", "ZEE5", "Zee5", "SonyLIV", "Sony LIV", "Hulu", "Max",
@@ -93,12 +94,12 @@ OTT_RE = re.compile(
 
 THEATRE_RE = re.compile(
     r"\b(in\s+(?:theatres|theaters|cinemas?)|theatrical(?:\s+release)?)\b",
-    re.I
+    re.I,
 )
 
 RELEASE_VERBS_RE = re.compile(
     r"\b(release[sd]?|releasing|releases|to\s+release|set\s+to\s+release|slated\s+to\s+release|opens?|opening|hits?)\b",
-    re.I
+    re.I,
 )
 COMING_SOON_RE = re.compile(r"\bcoming\s+soon\b", re.I)
 
@@ -112,12 +113,6 @@ _MN = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:
 DAY_MON_YR = re.compile(rf"\b(\d{{1,2}})\s+({_MN})\s*(\d{{2,4}})?\b", re.I)
 MON_DAY_YR = re.compile(rf"\b({_MN})\s+(\d{{1,2}})(?:,\s*(\d{{2,4}}))?\b", re.I)
 MON_YR     = re.compile(rf"\b({_MN})\s+(\d{{4}})\b", re.I)
-
-SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "85"))
-SUMMARY_MIN    = int(os.getenv("SUMMARY_MIN_WORDS", "60"))
-SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "110"))
-PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "120"))
-PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "900"))
 
 _BOILERPLATE_RE = re.compile(
     r"^\s*(subscribe|follow|like|comment|share|credits?:|cast:|music by|original score|prod(?:uction)? by|"
@@ -139,43 +134,53 @@ _BAD_END_WORD = re.compile(r"\b(?:and|but|or|so|because|since|although|though|wh
 _AUX_TAIL_RE = re.compile(r"\b(?:has|have|had|is|are|was|were|will|can|could|should|may|might|do|does|did)\b[\.…]*\s*$", re.I)
 _SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
 
+
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
     """
     Normalize various datetime-like inputs to RFC3339 UTC (YYYY-MM-DDTHH:MM:SSZ).
-    - datetime: treat naive as UTC; convert any tz-aware to UTC
-    - struct_time: treat as UTC (use calendar.timegm, NOT mktime)
-    - str: parse common RFC822/RFC3339 formats (respects embedded tz)
+
+    - datetime: naive -> assume UTC; tz-aware -> convert to UTC
+    - struct_time: treat as UTC
+    - str: parse common RFC822/RFC3339-ish formats (respects offset)
     """
     if value is None:
         return None
+
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     if isinstance(value, _time.struct_time):
-        epoch = calendar.timegm(value)  # struct_time from feedparser is UTC
+        epoch = calendar.timegm(value)  # struct_time from feedparser is already UTC-ish
         dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
     s = str(value).strip()
     if not s:
         return None
+
     try:
-        dt = parsedate_to_datetime(s)  # respects offset if present
+        dt = parsedate_to_datetime(s)  # respects embedded offset if present
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
-        # Last resort: pass through unchanged (already ISO-like)
+        # If it's already ISO-like UTC text, just return it.
         return s
+
 
 def _extract_video_id(entry: dict) -> Optional[str]:
     vid = entry.get("yt_videoid") or entry.get("yt:videoid")
     if vid:
         return vid
+
     link = (entry.get("link") or "") + " "
     if "watch?v=" in link:
         return link.split("watch?v=", 1)[1].split("&", 1)[0]
+
     return None
+
 
 def _safe_job_id(prefix: str, *parts: str) -> str:
     def clean(s: str) -> str:
@@ -183,46 +188,71 @@ def _safe_job_id(prefix: str, *parts: str) -> str:
     jid = "-".join([clean(prefix), *(clean(p) for p in parts if p)]).strip("-")
     return (jid or clean(prefix))[:200]
 
+
 def _domain(url: str) -> str:
     try:
         return urlparse(url).netloc.replace("www.", "")
     except Exception:
         return "rss"
 
+
 def _hash_link(link: str) -> str:
     return hashlib.sha1(link.encode("utf-8", "ignore")).hexdigest()
 
+
 def _nearest_future(year: int, month: int, day: int | None) -> datetime:
+    """
+    Best-effort interpretation of a release date mention in the title.
+    If day/month/year looks in the past, bump year forward in some cases.
+    """
     now = datetime.now(timezone.utc)
     d = 1 if day is None else max(1, min(28, day))
+
     if year < 100:
+        # heuristic for 2-digit years
         year = 1900 + year if year >= 70 else 2000 + year
+
     candidate = datetime(year, month, d, tzinfo=timezone.utc)
+
     if candidate < now:
+        # e.g. "releasing July 15" but that date already passed this year,
+        # assume next year
         if day is None or len(str(year)) <= 2:
             try:
                 candidate = datetime(year + 1, month, d, tzinfo=timezone.utc)
             except ValueError:
                 candidate = datetime(year + 1, month, 1, tzinfo=timezone.utc)
+
     return candidate
+
 
 def _month_to_num(m: str) -> int | None:
     return _MONTHS.get(m.lower()[:3]) or _MONTHS.get(m.lower())
 
+
 def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
+    """
+    Try to pull a specific release date or 'coming soon' signal out of the title.
+    Returns:
+      (release_date_iso, is_theatrical, is_upcoming_flag)
+    """
     t = title or ""
     if not t:
         return (None, False, False)
+
     now = datetime.now(timezone.utc)
     is_theatrical = bool(THEATRE_RE.search(t))
     rd: Optional[datetime] = None
 
+    # 12 Jan 2025 / 12 January 2025
     m = DAY_MON_YR.search(t)
     if m:
         day = int(m.group(1))
         mon = _month_to_num(m.group(2)) or 1
         yr  = int(m.group(3)) if m.group(3) else now.year
         rd = _nearest_future(yr, mon, day)
+
+    # Jan 12, 2025
     if not rd:
         m = MON_DAY_YR.search(t)
         if m:
@@ -230,6 +260,8 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
             day = int(m.group(2))
             yr  = int(m.group(3)) if m.group(3) else now.year
             rd = _nearest_future(yr, mon, day)
+
+    # Jan 2025
     if not rd:
         m = MON_YR.search(t)
         if m:
@@ -239,29 +271,49 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
 
     verb_release = bool(RELEASE_VERBS_RE.search(t))
     coming_flag  = bool(COMING_SOON_RE.search(t))
+
     is_upcoming = rd > now if rd else (coming_flag or verb_release)
+
     iso = rd.strftime("%Y-%m-%dT%H:%M:%SZ") if rd else None
     return (iso, is_theatrical, is_upcoming)
 
+
 def _classify(title: str, fallback: str = "news") -> Tuple[str, Optional[str], Optional[str], bool, bool]:
+    """
+    Decide story.kind:
+      - "trailer" if trailer/teaser keywords
+      - "ott" if streaming/platform mentions
+      - "release" if theatrical/OTT release timing info is present
+      - else fallback (usually "news")
+    """
     t = title or ""
     if TRAILER_RE.search(t):
         return ("trailer", None, None, False, False)
+
     m = OTT_RE.search(t)
     if m:
         provider = m.group(1)
         return ("ott", None, provider, False, False)
+
     rd_iso, is_theatrical, is_upcoming = _parse_release_from_title(t)
     if rd_iso or is_theatrical or is_upcoming:
         return ("release", rd_iso, None, is_theatrical, is_upcoming)
+
     return (fallback, None, None, False, False)
 
+
 def _strip_html(s: str) -> str:
+    """
+    Clean up raw HTML/description text into plain text content,
+    removing boilerplate "follow us / buy tickets now" junk etc.
+    """
     if not s:
         return ""
+
     s = html.unescape(s)
     s = _TAG_RE.sub(" ", s)
     s = _TIMESTAMP_RE.sub(" ", s)
+
     lines = [ln.strip() for ln in s.splitlines()]
     keep: list[str] = []
     for ln in lines:
@@ -270,6 +322,7 @@ def _strip_html(s: str) -> str:
         if _BOILERPLATE_RE.search(ln) or _CTA_NOISE_RE.search(ln):
             continue
         keep.append(ln)
+
     s2 = " ".join(keep)
     s2 = _URL_INLINE_RE.sub(" ", s2)
     s2 = _HASHTAG_INLINE_RE.sub(" ", s2)
@@ -277,32 +330,58 @@ def _strip_html(s: str) -> str:
     s2 = _DANGLING_ELLIPSIS_RE.sub("", s2)
     return _WS_RE.sub(" ", s2).strip()
 
+
 def _score_sentence(title_kw: set[str], s: str) -> int:
+    """
+    Heuristic score for a candidate summary sentence:
+    - overlap with title keywords
+    - presence of "action" verbs like 'announced', 'releasing', etc.
+    """
     overlap = len(title_kw.intersection(w.lower() for w in re.findall(r"[A-Za-z0-9]+", s)))
-    verb_bonus = 1 if re.search(r"\b(is|are|was|were|has|have|had|will|to|set|announc\w+|releas\w+|premier\w+|exit\w+|walk\w+|cancel\w+|delay\w+)\b", s, re.I) else 0
+    verb_bonus = 1 if re.search(
+        r"\b(is|are|was|were|has|have|had|will|to|set|announc\w+|releas\w+|premier\w+|exit\w+|walk\w+|cancel\w+|delay\w+)\b",
+        s,
+        re.I,
+    ) else 0
     return overlap * 2 + verb_bonus
 
+
 def _tidy_end(s: str) -> str:
+    """
+    Make sure the summary ends cleanly with punctuation.
+    Avoid leaving dangling conjunctions like "but" / "and".
+    """
     s = _DANGLING_ELLIPSIS_RE.sub("", s).strip()
     s = _BAD_END_WORD.sub("", s).rstrip()
     if s and s[-1] not in ".!?":
         s += "."
     return s
 
+
 def _select_sentences_for_summary(title: str, body_text: str) -> str:
+    """
+    Build a summary paragraph:
+    - If body_text is short enough, use it directly (after cleanup).
+    - Otherwise, pick high-signal sentences that align with title keywords,
+      until we reach our target word count.
+    """
     body_text = (body_text or "").strip()
     if not body_text:
         return title.strip()
+
     words_all = body_text.split()
     if len(words_all) <= PASSTHROUGH_MAX_WORDS and len(body_text) <= PASSTHROUGH_MAX_CHARS:
         return _tidy_end(body_text)
+
     title_kw = set(w.lower() for w in re.findall(r"[A-Za-z0-9]+", title))
     sentences = [x.strip() for x in _SENT_SPLIT_RE.split(body_text) if x.strip()]
     if not sentences:
         return _tidy_end(body_text)
+
     scored = [(_score_sentence(title_kw, s), i, s) for i, s in enumerate(sentences)]
     scored.sort(key=lambda x: (-x[0], x[1]))
     pool_idx = {i for _, i, _ in scored[:10]}
+
     chosen: list[tuple[int, str]] = []
     count = 0
     for i, s in enumerate(sentences):
@@ -316,27 +395,41 @@ def _select_sentences_for_summary(title: str, body_text: str) -> str:
             count += wc
         if count >= SUMMARY_MIN and count >= SUMMARY_TARGET:
             break
+
     if not chosen:
+        # fallback: just take the first somewhat-long sentence
         for s in sentences:
             if len(s.split()) >= 6:
                 chosen = [(0, s)]
                 break
+
     chosen.sort(key=lambda x: x[0])
+
+    # Trim weak trailing sentence
     while len(chosen) > 1:
         tail = chosen[-1][1]
         if len(tail.split()) < 8 or _AUX_TAIL_RE.search(tail):
             chosen.pop()
         else:
             break
+
     summary = " ".join(s for _, s in chosen).strip()
+
+    # If still too long, drop last blocks until we're in range
     while len(summary.split()) > SUMMARY_MAX and len(chosen) > 1:
         chosen.pop()
         summary = " ".join(s for _, s in chosen).strip()
+
     return _tidy_end(summary)
 
+
 def _detect_ott_provider(text: str) -> Optional[str]:
+    """
+    Extract OTT platform mention (Netflix, Hotstar, etc.) from combined text.
+    """
     m = OTT_RE.search(text or "")
     return m.group(1) if m else None
+
 
 # -------------------------- Industry tagging --------------------------
 
@@ -350,20 +443,25 @@ DOMAIN_TO_INDUSTRY = {
     "slashfilm.com": "hollywood",
     "collider.com": "hollywood",
     "vulture.com": "hollywood",
+
     "bollywoodhungama.com": "bollywood",
     "koimoi.com": "bollywood",
     "filmfare.com": "bollywood",
     "pinkvilla.com": "bollywood",
+
     "123telugu.com": "tollywood",
     "telugu360.com": "tollywood",
     "greatandhra.com": "tollywood",
     "gulte.com": "tollywood",
     "cinejosh.com": "tollywood",
+
     "onlykollywood.com": "kollywood",
     "behindwoods.com": "kollywood",
     "galatta.com": "kollywood",
+
     "onmanorama.com": "mollywood",
     "manoramaonline.com": "mollywood",
+
     "chitraloka.com": "sandalwood",
 }
 
@@ -380,26 +478,39 @@ YOUTUBE_CHANNEL_TAG: dict[str, str] = {
     # "UCWOA1ZGywLbqmigxE4Qlvuw": "hollywood",
 }
 
+
 def _industry_tags(source: str, source_domain: Optional[str], title: str, body_text: str, payload: dict) -> list[str]:
+    """
+    Infer industry tags (bollywood, hollywood, etc.) from:
+    - known domains (pinkvilla.com → bollywood)
+    - keywords in title/body ("tollywood", "telugu", etc.)
+    - known YouTube channels
+    """
     cand = set()
+
     dom = (source_domain or "").lower()
     for suffix, tag in DOMAIN_TO_INDUSTRY.items():
         if dom.endswith(suffix):
             cand.add(tag)
             break
+
     hay = f"{title}\n{body_text or ''}"
     for rx, t in KEYWORD_TO_INDUSTRY:
         if rx.search(hay):
             cand.add(t)
+
     if source == "youtube":
         ch = (payload or {}).get("channelId")
         if ch and ch in YOUTUBE_CHANNEL_TAG:
             cand.add(YOUTUBE_CHANNEL_TAG[ch])
+
     return [t for t in INDUSTRY_ORDER if t in cand]
+
 
 # ------------------- Image/link normalization helpers -----------------
 
 _YT_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
+
 
 def _youtube_thumb(link: str | None) -> str | None:
     if not link:
@@ -410,24 +521,39 @@ def _youtube_thumb(link: str | None) -> str | None:
     vid = m.group(1)
     return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
 
+
 def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tuple[str, int]]:
-    """Local thin wrapper around extractor internals."""
+    """
+    Small wrapper that calls the internal extractor helper to collect image URLs
+    and their approximate sizes.
+    """
     from apps.workers.extractors import _images_from_html_block as _imgs  # type: ignore
     return _imgs(html_str, base_url)
 
+
 def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
-    Prefer thumb_hint from extractor.
-    Else fall back to enclosures / inline images in the HTML blocks.
+    Choose a representative image for the story. Priority:
+    1. thumb_hint from extractor/poller
+    2. <enclosure> images in RSS
+    3. images found in content_html / description_html / summary
+    4. fallback to YouTube thumbnail if it's a YouTube story (handled separately)
     """
     cand: list[str] = []
+
     if thumb_hint:
         cand.append(thumb_hint)
 
     for enc in (payload.get("enclosures") or []):
         url = enc.get("href") or enc.get("url")
         typ = (enc.get("type") or "").lower()
-        if url and (typ.startswith("image/") or url.lower().split("?", 1)[0].endswith((".jpg",".jpeg",".png",".webp",".gif",".avif",".bmp",".jfif",".pjpeg"))):
+        if url and (
+            typ.startswith("image/")
+            or url.lower().split("?", 1)[0].endswith((
+                ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif",
+                ".bmp", ".jfif", ".pjpeg"
+            ))
+        ):
             cand.append(url)
 
     for key in ("content_html", "description_html", "summary"):
@@ -438,131 +564,54 @@ def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]
         u = to_https(abs_url(u, base))
         if u:
             return u
+
     return None
 
+
 def _has_any_image(obj: Dict[str, Any]) -> bool:
-    return bool(obj.get("image") or obj.get("thumb_url") or obj.get("thumbnail") or obj.get("poster") or obj.get("media"))
-
-# ===================== Normalizer (calls sanitizer) ====================
-
-def _publish_realtime(conn: Redis, story: dict, kind: str) -> None:
     """
-    Emit light-weight realtime signals so other services / dashboards
-    can react when a NEW story is ACCEPTED by sanitizer.
+    Check if the object already has any usable image field set.
     """
-    try:
-        payload = {
-            "id": story.get("id"),
-            "kind": kind,
-            "normalized_at": story.get("normalized_at"),
-            "ingested_at": story.get("ingested_at"),
-            "title": story.get("title"),
-            "source": story.get("source"),
-            "source_domain": story.get("source_domain"),
-            "url": story.get("url"),
-            "thumb_url": story.get("thumb_url"),
-        }
-        # Pub/Sub notify
-        conn.publish(FEED_PUBSUB, json.dumps(payload, ensure_ascii=False))
+    return bool(
+        obj.get("image")
+        or obj.get("thumb_url")
+        or obj.get("thumbnail")
+        or obj.get("poster")
+        or obj.get("media")
+    )
 
-        # Stream append (capped)
-        try:
-            conn.xadd(
-                FEED_STREAM,
-                {"id": payload["id"] or "", "kind": kind, "ts": payload["normalized_at"] or ""},
-                maxlen=FEED_STREAM_MAXLEN,
-                approximate=True,
-            )
-        except Exception:
-            pass
-    except Exception as e:
-        print(f"[realtime] publish error: {e}")
 
-def _enqueue_push(conn: Redis, story: dict) -> None:
-    """
-    Optionally enqueue a push notification job for NEW stories.
-    This just schedules; actual push worker can talk to FCM.
-    """
-    if not ENABLE_PUSH_NOTIFICATIONS:
-        return
-    try:
-        Queue("push", connection=conn).enqueue(
-            "apps.workers.push.send_story_push",   # implement separately
-            story,
-            ttl=600,
-            result_ttl=60,
-            failure_ttl=600,
-            job_timeout=30,
-        )
-    except Exception as e:
-        print(f"[push] enqueue error: {e}")
-
-def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
-    """
-    Legacy helper:
-    Try to patch recent feed items that had missing images by updating them in-place.
-    NOTE:
-    - After sanitizer integration and "first one wins / no upgrade" rule,
-      we are NO LONGER auto-calling this during duplicates. We're keeping
-      the function around for manual/maintenance flows only.
-    """
-    if not REPAIR_IF_MISSING_IMAGE:
-        return False
-    if not _has_any_image(story_new):
-        return False
-
-    new_id = story_new.get("id")
-    new_url = story_new.get("url")
-
-    window = conn.lrange(FEED_KEY, 0, max(REPAIR_SCAN - 1, 0))
-
-    for idx, raw in enumerate(window):
-        try:
-            obj = json.loads(raw)
-        except Exception:
-            continue
-
-        same = (new_id and obj.get("id") == new_id)
-        if not same and REPAIR_BY_URL and new_url and obj.get("url") == new_url:
-            same = True
-
-        if not same:
-            continue
-
-        if _has_any_image(obj):
-            return False  # already has an image
-
-        patched = obj.copy()
-        # keep earliest ingested_at if present
-        patched["ingested_at"] = obj.get("ingested_at") or story_new.get("ingested_at") or obj.get("normalized_at")
-
-        for k in ("image", "thumb_url", "thumbnail", "poster", "media", "image_candidates", "inline_images"):
-            if story_new.get(k) is not None:
-                patched[k] = story_new[k]
-
-        # refresh normalized_at to mark repair time
-        patched["normalized_at"] = story_new.get("normalized_at") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        conn.lset(FEED_KEY, idx, json.dumps(patched, ensure_ascii=False))
-        print(f"[normalize_event] REPAIR -> {new_id or new_url} (added image, preserved ingested_at={patched.get('ingested_at')})")
-        return True
-
-    return False
+# ========================= Normalizer (worker) =========================
 
 def normalize_event(event: AdapterEventDict) -> dict:
     """
-    Convert an adapter event (YouTube/RSS/etc.) into the canonical story shape,
-    then hand it to the sanitizer.
+    Worker-side normalization.
+    This runs in the "events" queue (infra-workers-1 container).
 
-    Flow:
-    - Build `story` dict (title, summary, thumb, timestamps, etc.)
-    - Call sanitizer.sanitize_and_publish(story)
-        * "accepted": sanitizer deduped and inserted into the public feed list
-        * "duplicate": sanitizer dropped it (we've already covered this event)
-        * "invalid": sanitizer couldn't classify (no usable title/summary)
-    - If accepted -> emit realtime pubsub/stream + enqueue optional push job
-    - We DO NOT try to "upgrade" or "replace" earlier stories.
-      First accepted version wins. Later versions just skip.
+    Responsibilities here:
+    - Take raw adapter event (RSS entry / YouTube entry).
+    - Classify it (kind, release_date, ott platform, etc.).
+    - Extract clean text, summary, canonical image, timestamps.
+    - Build a full `story` dict in the final CinePulse shape.
+
+    IMPORTANT ARCHITECTURE POINT:
+    - We DO NOT write this story into the public feed Redis list here.
+    - We DO NOT dedupe here.
+    - We DO NOT fanout realtime or enqueue push here.
+
+    Instead:
+    - We enqueue a new job to the "sanitize" queue, passing the `story`.
+      The sanitizer container will:
+        * generate signature
+        * dedupe across sources
+        * if it's the first time for this event:
+            - push to FEED_KEY
+            - trim FEED_KEY
+            - publish realtime
+            - enqueue optional push
+          else drop it.
+
+    So this worker is now purely "normalize and forward".
     """
 
     conn = _redis()
@@ -573,42 +622,51 @@ def normalize_event(event: AdapterEventDict) -> dict:
     title = (event.get("title") or "").strip()
 
     base_fallback = (event.get("kind") or "news").strip()
-    kind, rd_iso, provider_from_title, is_theatrical, is_upcoming = _classify(title, fallback=base_fallback)
+    kind, rd_iso, provider_from_title, is_theatrical, is_upcoming = _classify(
+        title,
+        fallback=base_fallback,
+    )
 
     published_at = _to_rfc3339(event.get("published_at"))
     payload = event.get("payload") or {}
 
     # Build canonical link / domain / body text / thumb hint
     if source == "youtube":
-        link = payload.get("watch_url") or (f"https://www.youtube.com/watch?v={src_id}" if src_id else None)
+        link = payload.get("watch_url") or (
+            f"https://www.youtube.com/watch?v={src_id}" if src_id else None
+        )
         source_domain = "youtube.com"
+
         desc = payload.get("description") or ""
         raw_text = _strip_html(desc)
+
         ott_platform = provider_from_title or _detect_ott_provider(f"{title}\n{desc}")
         thumb_hint = event.get("thumb_url") or _youtube_thumb(link)
     else:
         link = payload.get("url")
         source_domain = _domain(link or source.replace("rss:", ""))
-        raw_html = payload.get("content_html") or payload.get("description_html") or ""
-        raw_sum = payload.get("summary") or ""
-        body = raw_html or raw_sum
-        raw_text = _strip_html(body)
-        ott_platform = provider_from_title
-        thumb_hint = event.get("thumb_url")
 
-    # Normalize link/base
+        raw_html = payload.get("content_html") or payload.get("description_html") or ""
+        raw_sum  = payload.get("summary") or ""
+        body     = raw_html or raw_sum
+        raw_text = _strip_html(body)
+
+        ott_platform = provider_from_title
+        thumb_hint   = event.get("thumb_url")
+
+    # Normalize link -> https absolute
     link = to_https(abs_url(link, payload.get("feed") or link or "")) or ""
     base_for_imgs = link or (payload.get("feed") or "")
 
-    # Resolve image
+    # Pick best image thumbnail/poster
     image_url = _pick_image_from_payload(payload, base_for_imgs, thumb_hint)
     if not image_url and source == "youtube":
         image_url = _youtube_thumb(link)
 
-    # Summarize body
+    # Build summary
     summary_text = _select_sentences_for_summary(title, raw_text)
 
-    # Tags
+    # Industry tags
     tags = _industry_tags(source, source_domain, title, raw_text, payload)
 
     now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -625,7 +683,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "is_theatrical": True if is_theatrical else None,
         "is_upcoming": True if is_upcoming else None,
 
-        # first-seen timestamp + normalization timestamp
+        # first-seen by pipeline + normalization timestamp (both now)
         "ingested_at": now_ts,
         "normalized_at": now_ts,
 
@@ -634,38 +692,44 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "ott_platform": ott_platform,
         "tags": tags or None,
 
-        # canonical image fields
+        # canonical image-ish fields
         "image": image_url,
         "thumbnail": image_url,
         "poster": image_url,
         "media": image_url,
 
-        # transparency/debug fields
+        # transparency/debug extras
         "enclosures": payload.get("enclosures") or None,
         "image_candidates": payload.get("image_candidates") or None,
         "inline_images": payload.get("inline_images") or None,
-        "payload": payload,  # keeping payload around can help with repair/backfill
+        "payload": payload,
     }
 
-    # Hand off to sanitizer. This is the ONLY path that can insert into FEED_KEY.
-    status = sanitize_and_publish(story)
+    # ------------------------------
+    # HANDOFF TO SANITIZER QUEUE
+    # ------------------------------
+    # We do not decide acceptance here. We just enqueue the job.
+    # The sanitizer container (infra-sanitizer-1) is running:
+    #   rq worker sanitize
+    #
+    # That worker will run apps.sanitizer.sanitizer.sanitize_story(story)
+    #
+    q_sanitize = Queue("sanitize", connection=conn)
 
-    if status == "accepted":
-        print(f"[normalize_event] NEW       -> {story_id} | {title}")
-        _publish_realtime(conn, story, kind)
-        _enqueue_push(conn, story)
-        return story
+    sanitize_job_id = _safe_job_id("sanitize", story_id)
+    q_sanitize.enqueue(
+        "apps.sanitizer.sanitizer.sanitize_story",  # run in sanitizer container
+        story,
+        job_id=sanitize_job_id,
+        ttl=600,
+        result_ttl=60,
+        failure_ttl=600,
+        job_timeout=30,
+    )
 
-    if status == "duplicate":
-        # We do NOT attempt to upgrade/replace the original story.
-        # We are intentionally NOT calling _repair_recent_list() here anymore,
-        # to respect the "first one wins, later ones are ignored" rule.
-        print(f"[normalize_event] SKIP DUP  -> {story_id} | {title}")
-        return story
-
-    # invalid
-    print(f"[normalize_event] SKIP INV  -> {story_id} | {title}")
+    print(f"[normalize_event] QUEUED sanitize -> {story_id} | {title}")
     return story
+
 
 # ========================== YouTube poller ===========================
 
@@ -679,6 +743,10 @@ def youtube_rss_poll(
     published_after: Optional[Union[str, datetime]] = None,
     max_items: int = YT_MAX_ITEMS,
 ) -> int:
+    """
+    Poll a YouTube channel's Atom feed and enqueue normalize_event jobs
+    in the "events" queue.
+    """
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
     conn = _redis()
@@ -700,6 +768,7 @@ def youtube_rss_poll(
         print(f"[youtube_rss_poll] channel={channel_id} no changes (304)")
         return 0
 
+    # store new etag / modified for conditional requests next poll
     if getattr(parsed, "etag", None):
         conn.setex(etag_key, 7 * 24 * 3600, parsed.etag)
     if getattr(parsed, "modified_parsed", None):
@@ -715,20 +784,29 @@ def youtube_rss_poll(
             continue
 
         title = entry.get("title", "") or ""
+
         pub_norm = _to_rfc3339(
             entry.get("published_parsed")
             or entry.get("updated_parsed")
             or entry.get("published")
             or entry.get("updated")
         )
+
+        # respect cutoff if provided
         if cutoff and pub_norm and pub_norm <= cutoff:
             continue
 
+        # override kind for some known channels, or guess from title
         ch_kind = YOUTUBE_CHANNEL_KIND.get(channel_id)
         if ch_kind:
             kind = ch_kind
         else:
-            kind = "trailer" if TRAILER_RE.search(title) else "ott" if OTT_RE.search(title) else "news"
+            if TRAILER_RE.search(title):
+                kind = "trailer"
+            elif OTT_RE.search(title):
+                kind = "ott"
+            else:
+                kind = "news"
 
         yt_desc = (
             entry.get("media_description")
@@ -745,7 +823,7 @@ def youtube_rss_poll(
             "title": title,
             "kind": kind,
             "published_at": pub_norm,
-            "thumb_url": None,  # normalizer (later) figures out final thumb
+            "thumb_url": None,  # we'll compute final thumb in normalize_event
             "payload": {
                 "channelId": channel_id,
                 "videoId": vid,
@@ -769,6 +847,7 @@ def youtube_rss_poll(
     print(f"[youtube_rss_poll] channel={channel_id} emitted={emitted}")
     return emitted
 
+
 # ========================== Generic RSS poller =======================
 
 def rss_poll(
@@ -776,6 +855,10 @@ def rss_poll(
     kind_hint: str = "news",
     max_items: int = RSS_MAX_ITEMS,
 ) -> int:
+    """
+    Poll a generic RSS/Atom feed and enqueue normalize_event jobs
+    in the "events" queue.
+    """
     conn = _redis()
     etag_key = f"rss:etag:{url}"
     mod_key  = f"rss:mod:{url}"
@@ -795,12 +878,14 @@ def rss_poll(
         print(f"[rss_poll] url={url} no changes (304)")
         return 0
 
+    # save etag / modified for conditional GET next time
     if getattr(parsed, "etag", None):
         conn.setex(etag_key, 7 * 24 * 3600, parsed.etag)
     if getattr(parsed, "modified_parsed", None):
         conn.setex(mod_key, 7 * 24 * 3600, str(calendar.timegm(parsed.modified_parsed)))
 
     source_domain = _domain(parsed.feed.get("link") or url)
+
     q = Queue("events", connection=conn)
     emitted = 0
 
@@ -810,7 +895,7 @@ def rss_poll(
         if not raw_link:
             continue
 
-        # Normalize link before hashing to unify duplicates
+        # normalize link (absolute, https) before hashing so duplicates merge
         norm_link = to_https(abs_url(raw_link, url)) or raw_link
         src_id = _hash_link(norm_link)
 
@@ -824,7 +909,7 @@ def rss_poll(
         # classify with hint as fallback
         kind, _, _, _, _ = _classify(title, fallback=kind_hint)
 
-        # Comprehensive extraction (payload + thumb_hint)
+        # Comprehensive extraction from this RSS item
         payload, thumb_hint, _cands = build_rss_payload(entry, url)
 
         ev: AdapterEventDict = {
@@ -833,7 +918,7 @@ def rss_poll(
             "title": title,
             "kind": kind,
             "published_at": pub_norm,
-            "thumb_url": thumb_hint,  # normalizer prefers this first
+            "thumb_url": thumb_hint,  # normalize_event will pick final image
             "payload": payload,
         }
 
@@ -852,21 +937,30 @@ def rss_poll(
     print(f"[rss_poll] url={url} domain={source_domain} emitted={emitted}")
     return emitted
 
+
 # ======================= Backfill/repair helper ======================
 
 def backfill_repair_recent(scan: int = None) -> int:
     """
-    Manual maintenance pass over recent FEED_KEY items:
-    - Ensure 'ingested_at' exists.
-    - For entries missing an image, try to rebuild an image and patch in place.
+    Manual maintenance tool.
+    This is NOT part of live ingest. Use it if you want to
+    clean up older feed items to improve quality.
 
-    NOTE: This function CAN edit existing feed entries (lset),
-    which is something we specifically do NOT do in the live ingest path
-    anymore. Use this sparingly / manually if you really want to clean
-    old items for UI quality.
+    What it does:
+    - Walk the most recent N items in FEED_KEY (Redis LIST).
+    - Ensure each item has:
+        * ingested_at (first-seen timestamp)
+    - If an item has no image at all, try to reconstruct a thumbnail
+      from stored payload data and patch that entry in-place.
+
+    NOTE:
+    - This mutates existing feed items via LSET.
+    - Live ingest does NOT do this anymore.
+    - We're keeping it for "manual repair" / admin tooling.
     """
     conn = _redis()
     window = int(scan or REPAIR_SCAN)
+
     items = conn.lrange(FEED_KEY, 0, max(window - 1, 0))
     patched = 0
 
@@ -880,35 +974,46 @@ def backfill_repair_recent(scan: int = None) -> int:
 
         need_save = False
 
-        # Ensure a stable first-seen timestamp
+        # Ensure first-seen timestamp is stable
         if not obj.get("ingested_at"):
             obj["ingested_at"] = obj.get("normalized_at") or now_ts
             need_save = True
 
+        # Try to backfill image if missing
         if not _has_any_image(obj):
             payload = obj.get("payload") or {}
             link = obj.get("url") or (payload.get("url") if isinstance(payload, dict) else None)
             base = link or (payload.get("feed") if isinstance(payload, dict) else "")
 
-            # Try extractor again with whatever we have
+            # Try candidates already in payload
             if isinstance(payload, dict) and payload:
                 thumb = _pick_image_from_payload(
                     payload,
                     base,
-                    payload.get("image_candidates", [None])[0] if isinstance(payload.get("image_candidates"), list) else None
+                    payload.get("image_candidates", [None])[0]
+                    if isinstance(payload.get("image_candidates"), list)
+                    else None,
                 )
             else:
                 thumb = None
 
             if not thumb and link:
-                # construct minimal entry to re-extract (may probe OG/AMP)
+                # Build a tiny "fake entry" to re-run extractor heuristics
                 dummy_entry = {
                     "link": link,
                     "summary": obj.get("summary") or "",
                     "description": payload.get("description_html") if isinstance(payload, dict) else "",
-                    "content": [{"type": "text/html", "value": payload.get("content_html") if isinstance(payload, dict) else ""}],
+                    "content": [
+                        {
+                            "type": "text/html",
+                            "value": payload.get("content_html") if isinstance(payload, dict) else "",
+                        }
+                    ],
                 }
-                new_payload, thumb_hint, _ = build_rss_payload(dummy_entry, payload.get("feed") if isinstance(payload, dict) else "")
+                new_payload, thumb_hint, _ = build_rss_payload(
+                    dummy_entry,
+                    payload.get("feed") if isinstance(payload, dict) else "",
+                )
                 payload = {**payload, **new_payload} if isinstance(payload, dict) else new_payload
                 thumb = _pick_image_from_payload(payload, base, thumb_hint)
 
@@ -918,6 +1023,7 @@ def backfill_repair_recent(scan: int = None) -> int:
                 obj["normalized_at"] = now_ts
                 need_save = True
 
+        # If we changed anything, write it back
         if need_save:
             conn.lset(FEED_KEY, idx, json.dumps(obj, ensure_ascii=False))
             patched += 1
