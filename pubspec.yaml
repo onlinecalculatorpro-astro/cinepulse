@@ -4,19 +4,20 @@ publish_to: "none"
 version: 0.1.0+1
 
 environment:
-  # Project runs on Flutter 3.35.x / Dart 3.9
+  # Dart SDK and Flutter SDK constraints.
+  # Lock Flutter to 3.35.x+ so all dev machines are on the same toolchain.
   sdk: ">=3.9.0 <4.0.0"
-  flutter: ">=3.27.0"
+  flutter: ">=3.35.0"
 
 dependencies:
   flutter:
     sdk: flutter
 
-  # UI & icons
+  # UI / Fonts / Icons
   cupertino_icons: ^1.0.6
   google_fonts: ^6.3.2
 
-  # Networking & utils
+  # Networking / local data / platform utils
   http: ^1.5.0
   intl: ^0.20.2
   shared_preferences: ^2.5.3
@@ -24,43 +25,56 @@ dependencies:
   url_launcher: ^6.3.2
   share_plus: ^12.0.0
 
-  # Realtime updates (server push)
+  # Realtime (WebSocket connection to /v1/realtime/ws)
   web_socket_channel: ^3.0.0
 
-  # Notifications (FCM + local display)
+  # Push notifications
   firebase_core: ^3.15.0
   firebase_messaging: ^15.1.2
-  flutter_local_notifications: ^18.0.1   # fixes several Android 14/15 quirks
-  permission_handler: ^11.3.1            # Android 13+ notification permission
+  flutter_local_notifications: ^18.0.1
+  permission_handler: ^11.3.1
 
-  # Images & shimmer
+  # Images / media UI
   cached_network_image: ^3.4.1
   carousel_slider: ^4.2.1
   shimmer: ^3.0.0
 
-  # --- Video playback (in-app) ---
+  # Video playback (trailers, clips)
   youtube_player_iframe: ^5.1.2
   video_player: ^2.9.1
   chewie: ^1.7.5
-  # -------------------------------
+
+  # Data models / JSON mapping
+  # We generate Story / FeedResponse / etc. from backend JSON.
+  json_annotation: ^4.9.0
+  equatable: ^2.0.5
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
   flutter_lints: ^4.0.0
+
+  # App icon generator ("dart run flutter_launcher_icons")
   flutter_launcher_icons: ^0.14.1
 
-# Ensure the latest Intl is used everywhere (avoids legacy text segmentation on web).
+  # Codegen for models:
+  #   dart run build_runner build --delete-conflicting-outputs
+  build_runner: ^2.4.9
+  json_serializable: ^6.8.0
+
+# Force newest intl everywhere (prevents older transitive intl pulling in).
 dependency_overrides:
   intl: ^0.20.2
 
 flutter:
   uses-material-design: true
+
   assets:
     - assets/logo.png
 
-# Launcher icon config — regenerate with:
-#   dart run flutter_launcher_icons
+# Launcher icon config (Android adaptive icon).
+# Regenerate with: dart run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: false
