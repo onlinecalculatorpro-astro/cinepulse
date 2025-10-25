@@ -1,13 +1,34 @@
+# CinePulse pipeline in runtime order:
+#
+# 1. scheduler  + webhooks  -> put "fetch/ingest this source" jobs into Redis (queue: events)
+# 2. workers                       consume "events", pull external sources, normalize each story,
+#                                   then enqueue each normalized story to Redis (queue: sanitize)
+# 3. sanitizer                     consumes "sanitize", dedup + publish to public feed list in Redis,
+#                                   fanout realtime, (optional) enqueue push
+# 4. api                            serves the final deduped feed to the app / cron push
+#
+# redis backs all queues and also stores feed data
+
 x-env: &defaults
   ENV: prod
   TZ: Asia/Kolkata
+
+  # Shared Redis (also used as RQ broker)
   REDIS_URL: redis://redis:6379/0
+
+  # Public feed list key (Redis LIST). The sanitizer writes into this.
   FEED_KEY: feed:items
-  SEEN_KEY: feed:seen
+
+  # Source config for scheduler / webhooks to know what to poll
   SOURCES_FILE: /app/infra/source.yml
+
+  # External API creds that some jobs may use
   TMDB_API_KEY: ${TMDB_API_KEY:-}
 
 services:
+  # --------------------------------------------------
+  # Redis: single backing store for queues + feed data
+  # --------------------------------------------------
   redis:
     image: redis:7-alpine
     command:
@@ -27,55 +48,15 @@ services:
       timeout: 3s
       retries: 5
 
-  api:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-      target: api
-    restart: unless-stopped
-    env_file: ../.env
-    environment:
-      <<: *defaults
-    depends_on:
-      redis:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:18000:8000"
-    command: >
-      gunicorn -w 2 -k uvicorn.workers.UvicornWorker
-      -b 0.0.0.0:8000 apps.api.app.main:app
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
-    stop_grace_period: 20s
-
-  workers:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-      target: worker
-    restart: unless-stopped
-    env_file: ../.env
-    environment:
-      <<: *defaults
-      RQ_REDIS_URL: ${REDIS_URL}
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: >
-      sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" events'
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
-    stop_grace_period: 10s
-
+  # --------------------------------------------------
+  # SCHEDULER:
+  # periodically enqueues poll jobs into "events"
+  # (example: poll RSS / poll YouTube / etc.)
+  # --------------------------------------------------
   scheduler:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-      target: scheduler
     restart: unless-stopped
     env_file: ../.env
     environment:
@@ -93,6 +74,11 @@ services:
       - /var/tmp
     stop_grace_period: 10s
 
+  # --------------------------------------------------
+  # WEBHOOKS:
+  # on-demand triggers (HTTP in) that can enqueue work
+  # into the same "events" queue (manual refresh, etc.)
+  # --------------------------------------------------
   webhooks:
     build:
       context: ..
@@ -113,6 +99,120 @@ services:
       - /tmp
       - /var/tmp
     stop_grace_period: 10s
+
+  # --------------------------------------------------
+  # WORKERS:
+  # consume "events" queue
+  # - pull external source (RSS / YouTube / etc.)
+  # - normalize each story (title, summary, image, timestamps...)
+  # - enqueue sanitized-ready story into "sanitize" queue
+  #
+  # IMPORTANT:
+  # workers DO NOT write to the public feed list anymore.
+  # they just forward normalized stories for sanitizer to judge.
+  # --------------------------------------------------
+  workers:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: worker
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      <<: *defaults
+      # rq uses REDIS_URL; expose it explicitly too for libs that read RQ_REDIS_URL
+      RQ_REDIS_URL: ${REDIS_URL}
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" events'
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    stop_grace_period: 10s
+
+  # --------------------------------------------------
+  # SANITIZER:
+  # consume "sanitize" queue
+  # - dedupe using title+summary signature
+  # - first one wins, later dupes dropped
+  # - if ACCEPTED:
+  #     * LPUSH into FEED_KEY (Redis LIST)
+  #     * LTRIM to MAX_FEED_LEN
+  #     * publish realtime fanout (pub/sub + stream)
+  #     * optionally enqueue push notification job
+  #
+  # sanitizer is the ONLY writer to FEED_KEY.
+  # --------------------------------------------------
+  sanitizer:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: worker
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      <<: *defaults
+
+      # Signature memory: Redis SET storing "we already covered this event"
+      SEEN_KEY: feed:seen_signatures
+
+      # Hard cap for FEED_KEY list length
+      MAX_FEED_LEN: "200"
+
+      # Realtime fanout targets for accepted stories
+      FEED_PUBSUB: feed:pub
+      FEED_STREAM: feed:stream
+      FEED_STREAM_MAXLEN: "5000"
+
+      # Whether sanitizer should enqueue push jobs for accepted stories
+      ENABLE_PUSH_NOTIFICATIONS: "0"
+
+      # rq (sanitizer listens on its own queue)
+      RQ_REDIS_URL: ${REDIS_URL}
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" sanitize'
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    stop_grace_period: 10s
+
+  # --------------------------------------------------
+  # API:
+  # read-only public surface
+  # - reads FEED_KEY from Redis (which sanitizer maintains)
+  # - exposed to the app and also used by your cron push script
+  # --------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: api
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      <<: *defaults
+    depends_on:
+      redis:
+        condition: service_healthy
+      sanitizer:
+        condition: service_started
+    ports:
+      - "127.0.0.1:18000:8000"
+    command: >
+      gunicorn -w 2 -k uvicorn.workers.UvicornWorker
+      -b 0.0.0.0:8000 apps.api.app.main:app
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    stop_grace_period: 20s
 
 volumes:
   redis-data: {}
