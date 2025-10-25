@@ -126,8 +126,8 @@ ranking_weights:
 # Scheduler / poller behavior (global)
 # ----------------------------------------------------------------------------- 
 scheduler:
-  poll_interval_min: 15          # run a full poll loop every 15 minutes
-  published_after_hours: 72      # ignore stuff older than 72h
+  poll_interval_min: 5          # run a full poll loop every 15 minutes
+  published_after_hours: 36      # ignore stuff older than 72h
   use_sources_file: true
   rss_buckets_enabled:
     - news_india
