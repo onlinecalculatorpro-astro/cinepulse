@@ -29,28 +29,24 @@
 #   - acts as RQ broker ("events", "sanitize", etc.)
 #   - stores the feed list and dedupe signature set
 #
-# NOTE:
-#   - We DO NOT do any DB writes elsewhere.
-#   - We keep Redis data in a named volume (redis-data:) so container restarts
-#     don't wipe feed history or dedupe memory.
-
+# We persist Redis data in a named volume (redis-data:) so restarts don't wipe
+# feed history or seen-signature memory.
 
 x-env: &defaults
   ENV: prod
   TZ: Asia/Kolkata
 
-  # Shared Redis URL (used by everything: scheduler, workers, sanitizer, api)
+  # Shared Redis URL (everything uses this)
   REDIS_URL: redis://redis:6379/0
 
-  # Public feed list key in Redis. Only sanitizer writes here.
+  # Public feed list key in Redis. ONLY sanitizer writes here.
   FEED_KEY: feed:items
 
-  # Path to YAML source config consumed by scheduler/webhooks
+  # YAML source config used by scheduler / webhooks
   SOURCES_FILE: /app/infra/source.yml
 
-  # External API keys for certain jobs (optional)
+  # External API keys if needed by jobs (safe to leave blank in dev)
   TMDB_API_KEY: ${TMDB_API_KEY:-}
-
 
 services:
   # --------------------------------------------------
@@ -78,9 +74,9 @@ services:
   # --------------------------------------------------
   # SCHEDULER
   # --------------------------------------------------
-  # Periodically decides "go poll X now" and enqueues work into the
-  # "events" queue. It uses SOURCES_FILE (or env fallbacks) for which
-  # RSS feeds / YouTube channels to poll, plus throttling rules.
+  # Periodically schedules ingestion work:
+  #   - figures out which feeds/channels to poll
+  #   - enqueues poll jobs into the "events" queue
   scheduler:
     build:
       context: ..
@@ -106,8 +102,8 @@ services:
   # --------------------------------------------------
   # WEBHOOKS
   # --------------------------------------------------
-  # On-demand triggers (HTTP -> enqueue work into "events").
-  # Useful for manual refresh, ad-hoc ingestion, etc.
+  # HTTP entrypoint for manual / on-demand ingestion triggers.
+  # It can enqueue new work into "events" immediately.
   webhooks:
     build:
       context: ..
@@ -132,14 +128,12 @@ services:
   # --------------------------------------------------
   # WORKERS
   # --------------------------------------------------
-  # rq worker that consumes the "events" queue:
-  #   - fetches each source item (RSS entry, YT video, etc.)
-  #   - normalizes it into our standard story dict
-  #   - enqueues that story to the "sanitize" queue
+  # rq worker for the "events" queue:
+  #   - fetches raw items (RSS entry, YT upload, etc.)
+  #   - cleans + normalizes into our canonical "story" dict
+  #   - enqueues that story into the "sanitize" queue
   #
-  # CRITICAL:
-  # workers DO NOT mutate the public feed list. They never push
-  # into FEED_KEY.
+  # workers do NOT touch FEED_KEY directly.
   workers:
     build:
       context: ..
@@ -149,7 +143,7 @@ services:
     env_file: ../.env
     environment:
       <<: *defaults
-      # rq also checks RQ_REDIS_URL explicitly
+      # rq also reads RQ_REDIS_URL explicitly
       RQ_REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
@@ -165,16 +159,16 @@ services:
   # --------------------------------------------------
   # SANITIZER
   # --------------------------------------------------
-  # rq worker that consumes the "sanitize" queue:
-  #   - builds canonical signature (title+summary)
-  #   - drops duplicates (same event already covered)
-  #   - if first time:
-  #       * LPUSH story JSON into FEED_KEY
-  #       * LTRIM feed list to MAX_FEED_LEN
-  #       * publish realtime fanout (pub/sub + stream)
-  #       * optionally enqueue push notif
+  # rq worker for the "sanitize" queue:
+  #   - dedupes stories by meaning (title+summary signature)
+  #   - first version of an event wins
+  #   - if accepted:
+  #       * LPUSH into FEED_KEY
+  #       * LTRIM to MAX_FEED_LEN
+  #       * publish realtime fanout
+  #       * optional push notifications
   #
-  # This is the ONLY service that is allowed to write/trim FEED_KEY.
+  # ONLY sanitizer is allowed to mutate FEED_KEY.
   sanitizer:
     build:
       context: ..
@@ -185,18 +179,18 @@ services:
     environment:
       <<: *defaults
 
-      # Dedup memory: Redis SET of "we already covered this event"
+      # Redis SET of seen signatures (prevents dup stories)
       SEEN_KEY: feed:seen_signatures
 
-      # Feed list size ceiling (sanitizer enforces via LTRIM)
+      # Max feed list length that sanitizer enforces
       MAX_FEED_LEN: "200"
 
-      # Realtime fanout config (pub/sub + Redis stream)
+      # Realtime pub/sub + stream fanout targets
       FEED_PUBSUB: feed:pub
       FEED_STREAM: feed:stream
       FEED_STREAM_MAXLEN: "5000"
 
-      # Push notifications toggle
+      # Whether sanitizer should enqueue push jobs for accepted stories
       ENABLE_PUSH_NOTIFICATIONS: "0"
 
       # rq connection var
@@ -215,8 +209,8 @@ services:
   # --------------------------------------------------
   # API
   # --------------------------------------------------
-  # Read-only service that exposes the final feed as HTTP.
-  # It reads FEED_KEY straight out of Redis (maintained by sanitizer).
+  # Purely read-only.
+  # Serves the final, deduped feed from Redis (which sanitizer maintains).
   api:
     build:
       context: ..
@@ -241,7 +235,6 @@ services:
       - /tmp
       - /var/tmp
     stop_grace_period: 20s
-
 
 volumes:
   redis-data: {}
