@@ -1,39 +1,44 @@
 # apps/scheduler/main.py
 #
-# ROLE IN PIPELINE (runtime order):
+# PIPELINE OVERVIEW (runtime order):
 #
-#   1. scheduler (this file, running in infra-scheduler-1)
-#        - figures out which sources to poll (YouTube channels, RSS feeds)
-#        - rate-limits them, staggers them, respects freshness window
+#   1. scheduler  (this file, runs in infra-scheduler-1)
+#        - decides WHICH sources to poll (YouTube channels, RSS feeds)
+#        - enforces throttling / staggering / freshness window
 #        - calls youtube_rss_poll(...) / rss_poll(...)
 #
 #      ↓ those pollers enqueue AdapterEvents into the "events" RQ queue
 #
-#   2. workers (infra-workers-1, rq worker events)
+#   2. workers    (infra-workers-1, rq worker "events")
 #        - consume "events"
 #        - normalize each event into a canonical story dict
-#        - enqueue the story to the "sanitize" queue
+#        - enqueue that story into the "sanitize" RQ queue
 #
-#   3. sanitizer (infra-sanitizer-1, rq worker sanitize)
-#        - dedupe, first-one-wins
-#        - if new: writes story into Redis feed list, fanout, optional push
+#   3. sanitizer  (infra-sanitizer-1, rq worker "sanitize")
+#        - dedupe by semantic signature ("first one wins")
+#        - if brand new:
+#             * LPUSH into Redis public feed list
+#             * trim list
+#             * publish realtime fanout
+#             * enqueue optional push
+#          else drop as duplicate
 #
-#   4. api (infra-api-1)
-#        - reads Redis feed list and serves /v1/feed to clients
+#   4. api        (infra-api-1)
+#        - serves /v1/feed by reading the Redis list
 #
-# IMPORTANT:
-# - scheduler does NOT push anything to the public feed.
-# - scheduler does NOT dedupe.
-# - scheduler just keeps adding poll work into the pipeline forever (or once,
-#   if ONE_SHOT is set).
+# IMPORTANT CONTRACTS:
+# - scheduler NEVER writes to the public feed list.
+# - scheduler NEVER dedupes.
+# - scheduler just keeps feeding poll work into the pipeline forever
+#   (or once if ONE_SHOT=true).
 #
-# Config comes from:
-#   - env vars
-#   - YAML file pointed at by $SOURCES_FILE (default /app/infra/source.yml)
+# CONFIG SOURCES:
+# - Environment variables (.env / compose)
+# - YAML file pointed at by $SOURCES_FILE (default /app/infra/source.yml)
 #
-# We do not hardcode operational cadence defaults in code. Required timing
-# values must be provided in env/YAML. That keeps prod behavior controlled
-# by config, not code.
+# We don't silently invent timing defaults in code. Critical cadence knobs
+# like POLL_INTERVAL_MIN and PUBLISHED_AFTER_HOURS must be provided by config,
+# so ops controls prod behavior without touching code.
 
 
 import os
@@ -46,31 +51,38 @@ from urllib.parse import urlparse
 
 from apps.workers.jobs import youtube_rss_poll, rss_poll
 
-# Optional YAML support
+# Optional YAML support. It's okay if YAML is missing; we'll fall back to env.
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
     yaml = None
 
 
-# ------------------------------------------------------------------------------
-# basic helpers
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# small helpers
+# ---------------------------------------------------------------------------
 
 def _utc_now() -> datetime:
+    """Current time in UTC as an aware datetime."""
     return datetime.now(timezone.utc)
 
 
 def _log(msg: str) -> None:
-    # We log in UTC for consistency across containers.
+    """
+    Log with a UTC timestamp so all containers (scheduler/workers/sanitizer/api)
+    can be correlated easily in logs.
+    """
     print(f"[scheduler] {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}Z  {msg}")
 
 
 def _env_list(name: str) -> List[str]:
     """
-    Parse a comma/newline-separated env var into a list of strings, skipping blanks/#comments.
+    Parse a comma/newline-separated env var into a list, skipping blank lines
+    and comments starting with '#'.
+
     Example:
         RSS_FEEDS="https://site.com/rss|news, https://other.com/feed|release"
+    -> ["https://site.com/rss|news", "https://other.com/feed|release"]
     """
     raw = os.getenv(name, "")
     items: List[str] = []
@@ -85,11 +97,10 @@ def _env_list(name: str) -> List[str]:
 
 def _parse_rss_specs(specs: Iterable[str]) -> List[Tuple[str, str]]:
     """
-    Each spec can be:
-      "<url>|<kind_hint>"
-    or just
-      "<url>"
-    where kind_hint falls back to "news".
+    Turn env-style RSS specs into (url, kind_hint) pairs.
+
+    "<url>|<kind_hint>" -> (url, kind_hint)
+    "<url>"             -> (url, "news")
     """
     out: List[Tuple[str, str]] = []
     for s in specs:
@@ -102,6 +113,10 @@ def _parse_rss_specs(specs: Iterable[str]) -> List[Tuple[str, str]]:
 
 
 def _domain_from_url(url: str) -> str:
+    """
+    Extract host from URL ("https://www.pinkvilla.com/x" -> "pinkvilla.com").
+    Used for per-domain throttling.
+    """
     try:
         d = urlparse(url).netloc.lower()
         return d[4:] if d.startswith("www.") else d
@@ -109,54 +124,62 @@ def _domain_from_url(url: str) -> str:
         return ""
 
 
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # config dataclasses
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class YTSpec:
     channel_id: str
-    max_items: Optional[int] = None  # optional per-channel poll cap override
+    max_items: Optional[int] = None  # per-channel poll cap override
 
 
 @dataclass(frozen=True)
 class RSSSpec:
     url: str
     kind_hint: str = "news"
-    max_items: Optional[int] = None  # optional per-feed poll cap override
+    max_items: Optional[int] = None  # per-feed poll cap override
 
 
 @dataclass(frozen=True)
 class Config:
+    # which sources to poll
     yt: List[YTSpec]
     rss: List[RSSSpec]
 
-    poll_every_min: int                 # required: how often we loop
-    published_after_hours: float        # required: "freshness" cutoff
-    spread_seconds: float               # optional: delay between polls in a single loop
-    jitter_seconds: float               # optional: random pad added to sleep between loops
-    one_shot: bool                      # exit after one cycle if True
+    # cadence / pacing
+    poll_every_min: int          # REQUIRED: how often we run a full loop
+    published_after_hours: float # REQUIRED: freshness cutoff for stories
+    spread_seconds: float        # OPTIONAL: delay between polls inside one loop
+    jitter_seconds: float        # OPTIONAL: random pad added to sleep between loops
+    one_shot: bool               # if True: do exactly one poll cycle then exit
 
-    yt_global_max_items: Optional[int]  # global cap per-channel if not overridden
-    rss_global_max_items: Optional[int] # global cap per-feed if not overridden
+    # global caps for each source type
+    yt_global_max_items: Optional[int]
+    rss_global_max_items: Optional[int]
 
-    per_run_limit_yt: Optional[int]     # how many YT channels we poll per cycle
-    per_run_limit_rss: Optional[int]    # how many RSS feeds we poll per cycle
+    # per-run source limits to avoid hammering everything every loop
+    per_run_limit_yt: Optional[int]
+    per_run_limit_rss: Optional[int]
 
-    throttle_per_domain: Dict[str, int] # { "pinkvilla.com": 30, "default": 5 }
+    # throttle map { "pinkvilla.com": 20, "default": 5, ... }
+    throttle_per_domain: Dict[str, int]
 
-    enable_youtube: bool                # feature flag
-    enable_rss: bool                    # feature flag
+    # feature toggles
+    enable_youtube: bool
+    enable_rss: bool
 
 
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # config loader
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-def _require_number(val: Optional[str] | Optional[float] | Optional[int], name: str) -> float:
+def _require_number(val: object | None, name: str) -> float:
     """
-    Helper to enforce required numeric settings come from config.
-    We don't silently invent defaults here because cadence in prod is important.
+    Enforce that critical timing knobs are explicitly configured.
+    We don't silently invent defaults here because prod cadence matters.
+
+    If it's not provided (None or ""), we raise so ops notices.
     """
     if val is None or val == "":
         raise RuntimeError(
@@ -168,15 +191,18 @@ def _require_number(val: Optional[str] | Optional[float] | Optional[int], name: 
 
 def _read_config() -> Config:
     """
-    Merge environment + sources YAML into a unified Config object.
+    Merge environment variables + YAML (SOURCES_FILE) into a single Config.
+
     Priority:
       - env overrides
       - YAML defaults
-    The idea: ops tweaks poll cadence / sources without code changes.
-    """
 
-    # Compose sets SOURCES_FILE=/app/infra/source.yml
+    This allows changing poll cadence, source lists, throttling, etc.
+    without rebuilding code.
+    """
+    # Compose normally sets SOURCES_FILE=/app/infra/source.yml
     sources_path = os.getenv("SOURCES_FILE") or "/app/infra/source.yml"
+
     S: Dict[str, Any] = {}
     if yaml and os.path.exists(sources_path):
         try:
@@ -187,7 +213,7 @@ def _read_config() -> Config:
 
     sched_yaml = (S.get("scheduler") or {}) if isinstance(S, dict) else {}
 
-    # --- core cadence / freshness window (REQUIRED) ---
+    # --- required cadence / freshness window ---
     poll_every_min = int(
         _require_number(
             os.getenv("POLL_INTERVAL_MIN", sched_yaml.get("poll_interval_min")),
@@ -200,8 +226,8 @@ def _read_config() -> Config:
         "PUBLISHED_AFTER_HOURS / scheduler.published_after_hours",
     )
 
-    # --- spread/jitter (OPTIONAL) ---
-    # If not provided, default them to 0.0 (explicit here, not hidden magic in logic).
+    # --- optional pacing knobs ---
+    # If not provided, explicitly default to 0.0 (we don't hide defaults in logic).
     spread_env = os.getenv("POLL_SPREAD_SEC")
     jitter_env = os.getenv("POLL_JITTER_SEC")
 
@@ -211,27 +237,28 @@ def _read_config() -> Config:
     jitter_seconds = float(jitter_env) if jitter_env not in (None, "") \
         else float(sched_yaml.get("poll_jitter_sec") or 0)
 
-    # --- run mode toggle ---
+    # --- run mode ---
     one_shot = os.getenv("ONE_SHOT", "").lower() in ("1", "true", "yes")
 
-    # --- global caps (OPTIONAL) ---
+    # --- global caps (optional) ---
     yt_global_max_items = int(os.getenv("YT_MAX_ITEMS")) if os.getenv("YT_MAX_ITEMS") else None
     rss_global_max_items = int(os.getenv("RSS_MAX_ITEMS")) if os.getenv("RSS_MAX_ITEMS") else None
 
-    # --- ingestion toggles ---
+    # --- feature toggles ---
     enable_youtube = os.getenv("ENABLE_YOUTUBE_INGEST", "true").lower() not in ("0", "false", "no")
     enable_rss     = os.getenv("ENABLE_RSS_INGEST", "true").lower()     not in ("0", "false", "no")
 
-    # --- per-run source limits (OPTIONAL, usually set in YAML) ---
+    # --- per-run source limits ---
     per_run_yaml = (sched_yaml.get("per_run_limits") or {})
     per_run_limit_yt  = int(per_run_yaml["youtube_channels"]) if "youtube_channels" in per_run_yaml else None
     per_run_limit_rss = int(per_run_yaml["rss_feeds"])        if "rss_feeds"        in per_run_yaml else None
 
-    # --- throttle map (OPTIONAL) ---
-    # throttle.per_domain_min_seconds:
-    #   default: 5
-    #   pinkvilla.com: 20
-    # etc.
+    # --- throttle map ---
+    # Example YAML:
+    # throttle:
+    #   per_domain_min_seconds:
+    #     default: 5
+    #     pinkvilla.com: 20
     throttle: Dict[str, int] = {}
     th = ((S.get("throttle") or {}).get("per_domain_min_seconds") or {}) if isinstance(S, dict) else {}
     for host, secs in (th.items() if isinstance(th, dict) else []):
@@ -240,7 +267,7 @@ def _read_config() -> Config:
         except Exception:
             pass
 
-    # --- YouTube channel list ---
+    # --- YouTube channel specs ---
     yt_specs: List[YTSpec] = []
     yt_cfg = S.get("youtube") or {}
     channels = (yt_cfg.get("channels") or []) if isinstance(yt_cfg, dict) else []
@@ -260,33 +287,43 @@ def _read_config() -> Config:
             )
         )
 
-    # Fallback to env if YAML was empty
+    # fallback to env if YAML had no channels
     if not yt_specs:
         yt_specs = [YTSpec(ch) for ch in _env_list("YT_CHANNELS")]
 
-    # --- RSS feed list ---
-    # We support both a flat "rss" block and multiple logical groups/buckets with their own defaults.
+    # --- RSS feed specs ---
+    # We support:
+    #   rss:
+    #     defaults: { kind_hint: "news", max_items_per_poll: 10 }
+    #     feeds:
+    #       - { url: "...", kind_hint: "release", enabled: true }
+    #
+    # or:
+    #   rss:
+    #     defaults: ...
+    #     buckets:
+    #       bollywood:
+    #         enabled: true
+    #         feeds:
+    #           - { url: "...", kind_hint: "news", enabled: true }
+    #
+    # Optionally scheduler.rss_buckets_enabled can whitelist certain buckets.
     def _collect_group_feeds(top: Dict[str, Any], block_key: str, default_kind: str) -> List[RSSSpec]:
         out: List[RSSSpec] = []
         block = top.get(block_key)
         if not isinstance(block, dict):
             return out
 
-        # Bucketed form:
-        #   rss:
-        #     defaults: { kind_hint: "news", max_items_per_poll: 10 }
-        #     buckets:
-        #       bollywood:
-        #         enabled: true
-        #         feeds:
-        #           - { url: "https://...", kind_hint: "news", enabled: true }
-        # scheduler.rss_buckets_enabled controls which buckets are allowed this run.
+        # bucketed mode
         if "buckets" in block and isinstance(block.get("buckets"), dict):
             defaults = block.get("defaults") or {}
             def_kind = str(defaults.get("kind_hint") or default_kind or "news")
             def_max  = defaults.get("max_items_per_poll")
 
             buckets = block.get("buckets") or {}
+
+            # if scheduler.rss_buckets_enabled exists, only poll those buckets;
+            # else poll all enabled buckets
             enabled_list = (sched_yaml.get("rss_buckets_enabled") or None)
             enabled_names = set(enabled_list) if enabled_list else set(buckets.keys())
 
@@ -315,11 +352,7 @@ def _read_config() -> Config:
                     )
             return out
 
-        # Simple form:
-        #   rss:
-        #     defaults: { kind_hint: "news", max_items_per_poll: 10 }
-        #     feeds:
-        #       - { url: "...", kind_hint: "release", enabled: true }
+        # flat mode
         defaults = block.get("defaults") or {}
         def_kind = str(defaults.get("kind_hint") or default_kind or "news")
         def_max  = defaults.get("max_items_per_poll")
@@ -346,17 +379,17 @@ def _read_config() -> Config:
 
     rss_specs: List[RSSSpec] = []
     if isinstance(S, dict):
-        # "rss" block:
+        # main "rss" block, if present
         rss_specs.extend(_collect_group_feeds(S, "rss", default_kind="news"))
 
-        # Any other top-level keys that look like feed groups:
+        # any other top-level block that looks like an rss group / bucket set
         for key, val in S.items():
             if key in ("youtube", "scheduler", "throttle", "rss"):
                 continue
             if isinstance(val, dict) and ("feeds" in val or "buckets" in val):
                 rss_specs.extend(_collect_group_feeds(S, key, default_kind="news"))
 
-    # Fallback to env if YAML was empty
+    # fallback to env if YAML had no feeds
     if not rss_specs:
         rss_specs = [
             RSSSpec(url=u, kind_hint=k)
@@ -381,14 +414,19 @@ def _read_config() -> Config:
     )
 
 
-# ------------------------------------------------------------------------------
-# throttling controller
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# throttling
+# ---------------------------------------------------------------------------
 
 class _Throttle:
     """
-    Tracks minimum delay per domain so we don't hammer the same site
-    too aggressively within a single poll loop.
+    Per-domain throttle guard.
+
+    Example throttle map:
+        { "default": 5, "pinkvilla.com": 20 }
+    means:
+        - wait at least 5s before hitting any domain not explicitly listed
+        - wait at least 20s between consecutive polls to pinkvilla.com
     """
     def __init__(self, per_domain: Dict[str, int]):
         self.rules = per_domain or {}
@@ -397,6 +435,7 @@ class _Throttle:
     def wait_for(self, host: str) -> None:
         if not host:
             return
+
         min_gap = self.rules.get(host) or self.rules.get("default")
         if not min_gap:
             return
@@ -404,6 +443,7 @@ class _Throttle:
         now = time.monotonic()
         last = self.last.get(host)
 
+        # first time hitting this host -> just record timestamp
         if last is None:
             self.last[host] = now
             return
@@ -413,32 +453,34 @@ class _Throttle:
             _log(f"Throttle: sleeping {delay:.1f}s before hitting {host}")
             time.sleep(delay)
 
+        # record the hit time (fresh monotonic after sleep)
         self.last[host] = time.monotonic()
 
 
-# ------------------------------------------------------------------------------
-# single polling cycle
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# one polling cycle
+# ---------------------------------------------------------------------------
 
 def _poll_once(cfg: Config) -> None:
     """
-    Run one poll cycle:
-    - For each allowed YouTube channel / RSS feed:
-        * apply throttle
-        * call youtube_rss_poll(...) / rss_poll(...)
-          (those will enqueue normalize_event jobs on "events")
-    - Honor per-run limits to avoid hammering too many sources in one cycle.
-    - Sleep spread_seconds between polls if configured.
+    Run a single poll cycle:
 
-    NOTE:
-    We do NOT call sanitizer here.
-    We do NOT write to Redis feed here.
+    - Shuffle sources for fairness.
+    - Respect per_run_limit_* so we don't hit everything every loop.
+    - Throttle per domain.
+    - Call youtube_rss_poll(...) / rss_poll(...).
+      Those pollers enqueue AdapterEvents into the "events" RQ queue.
+
+    CRITICAL:
+    We do NOT write anything directly to the public feed list here.
+    We do NOT dedupe here.
+    That is sanitizer's job downstream.
     """
-
     if not cfg.enable_youtube and not cfg.enable_rss:
         _log("All ingestion toggles disabled; nothing to poll.")
         return
 
+    # Freshness cutoff (e.g. 'only consider videos newer than the last X hours')
     since: Optional[datetime] = (
         _utc_now() - timedelta(hours=cfg.published_after_hours)
         if cfg.published_after_hours and cfg.published_after_hours > 0
@@ -448,11 +490,11 @@ def _poll_once(cfg: Config) -> None:
     yt_list = list(cfg.yt) if cfg.enable_youtube else []
     rss_list = list(cfg.rss) if cfg.enable_rss else []
 
-    # randomize order per cycle for fairness
+    # Randomize poll order each cycle so we don't starve the same tail every time.
     random.shuffle(yt_list)
     random.shuffle(rss_list)
 
-    # enforce per-run caps, if any
+    # Per-cycle caps (helps spread load across cycles)
     if cfg.per_run_limit_yt is not None:
         yt_list = yt_list[: max(0, int(cfg.per_run_limit_yt))]
     if cfg.per_run_limit_rss is not None:
@@ -460,7 +502,7 @@ def _poll_once(cfg: Config) -> None:
 
     throttle = _Throttle(cfg.throttle_per_domain)
 
-    # --- poll YouTube channels ---
+    # --- YouTube poll loop ---
     for ch in yt_list:
         try:
             throttle.wait_for("youtube.com")
@@ -469,15 +511,20 @@ def _poll_once(cfg: Config) -> None:
             if max_items is None:
                 youtube_rss_poll(ch.channel_id, published_after=since)
             else:
-                youtube_rss_poll(ch.channel_id, published_after=since, max_items=int(max_items))
+                youtube_rss_poll(
+                    ch.channel_id,
+                    published_after=since,
+                    max_items=int(max_items),
+                )
 
         except Exception as e:
             _log(f"ERROR polling YouTube channel={ch.channel_id}: {e!r}")
 
+        # Stagger calls within one poll cycle if configured
         if cfg.spread_seconds and cfg.spread_seconds > 0:
             time.sleep(cfg.spread_seconds)
 
-    # --- poll RSS feeds ---
+    # --- RSS poll loop ---
     for feed in rss_list:
         try:
             host = _domain_from_url(feed.url)
@@ -487,18 +534,23 @@ def _poll_once(cfg: Config) -> None:
             if max_items is None:
                 rss_poll(feed.url, kind_hint=feed.kind_hint)
             else:
-                rss_poll(feed.url, kind_hint=feed.kind_hint, max_items=int(max_items))
+                rss_poll(
+                    feed.url,
+                    kind_hint=feed.kind_hint,
+                    max_items=int(max_items),
+                )
 
         except Exception as e:
             _log(f"ERROR polling RSS url={feed.url}: {e!r}")
 
+        # Stagger RSS calls too
         if cfg.spread_seconds and cfg.spread_seconds > 0:
             time.sleep(cfg.spread_seconds)
 
 
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # main loop
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     cfg = _read_config()
@@ -507,10 +559,11 @@ def main() -> None:
         "Start: "
         f"{len(cfg.yt)} YT channels, {len(cfg.rss)} RSS feeds; "
         f"every {cfg.poll_every_min}m (spread {cfg.spread_seconds}s, "
-        f"jitter ≤ {cfg.jitter_seconds}s, window {cfg.published_after_hours}h)."
+        f"jitter ≤ {cfg.jitter_seconds}s, "
+        f"window {cfg.published_after_hours}h)."
     )
 
-    # If nothing is enabled or configured, just idle.
+    # If everything is disabled or empty, just idle (don't crash-loop).
     if (not cfg.enable_youtube and not cfg.enable_rss) or (not cfg.yt and not cfg.rss):
         _log("Empty or disabled config; sleeping.")
         while True:
@@ -526,6 +579,8 @@ def main() -> None:
             return
 
         elapsed = time.monotonic() - started
+
+        # We want each cycle to START roughly every poll_every_min (+ optional jitter).
         base_sleep = float(cfg.poll_every_min) * 60.0
         jitter = random.uniform(
             0.0,
