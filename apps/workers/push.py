@@ -1,48 +1,97 @@
 # apps/workers/push.py
 #
-# ROLE:
-#   This file runs in the "push" RQ worker.
+# ROLE (push worker):
+#   - Runs in the dedicated RQ worker queue "push".
+#   - Called by sanitizer.sanitize_story() *after* a story is accepted
+#     into the public feed (only if ENABLE_PUSH_NOTIFICATIONS is on).
 #
-#   The sanitizer calls:
-#       Queue("push").enqueue("apps.workers.push.send_story_push", story, ...)
+#   The sanitizer does:
+#       Queue("push").enqueue(
+#           "apps.workers.push.send_story_push",
+#           story,
+#           ...
+#       )
 #
-#   We:
-#     - pick which topics should get this alert
-#     - collect device tokens subscribed to those topics
-#     - build a compact notification payload
-#     - deliver one push per token (stubbed: print/debug, ready for FCM wiring)
+#   This worker:
+#     1. Figures out which push "topics" this story is relevant to.
+#        Examples:
+#           story.verticals  -> ["entertainment"]
+#           story.tags       -> ["trailer", "now-streaming"]
+#           DEFAULT_TOPIC    -> "all"
 #
-# IMPORTANT:
-#   - If you don't run a push worker, nothing breaks in feed delivery.
-#   - ENABLE_PUSH_NOTIFICATIONS in sanitizer controls whether sanitize even
-#     enqueues us.
+#     2. Looks up all device tokens subscribed to ANY of those topics in Redis.
 #
-# REDIS KEYS (must match apps/api/app/push.py):
-#   PUSH_SET           -> SET of all known tokens
-#   PUSH_META          -> HASH   token -> JSON blob {platform, lang, topics, ts}
-#   PUSH_TOPIC_PREFIX  -> per-topic SET of tokens, e.g. "push:topic:entertainment"
-#   PUSH_DEFAULT_TOPIC -> fallback topic (usually "all")
+#     3. Builds a compact notification payload from the story
+#        (title, summary teaser, URL, image, etc.).
 #
-# TOPIC ROUTING:
-#   We generate candidate topics from:
-#     - story["verticals"]      (e.g. ["entertainment", "sports"])
-#     - story["tags"]           (e.g. ["trailer", "now-streaming"])
-#     - default "all"
+#     4. Sends a push per token using _send_platform_push().
 #
-#   Tokens that subscribe to any of those topics get pinged.
+# IMPORTANT BEHAVIOR:
+#   - If you never run the "push" worker, feed quality is still fine.
+#     You still ingest, dedupe, expose /v1/feed, etc.
 #
-# PAYLOAD SHAPE (example):
+#   - PUSH_ENABLED can hard-disable fanout even if sanitizer enqueues us.
+#
+#   - MAX_TOKENS_PER_STORY prevents a single story from blasting millions
+#     of pushes at once. Tweak with PUSH_MAX_TOKENS_PER_STORY.
+#
+#   - _send_platform_push() is the only part you need to replace to
+#     integrate FCM/APNs/Expo/OneSignal/etc. Everything else is vendor-agnostic.
+#
+# REDIS CONTRACT (same data model as apps/api/app/push.py):
+#
+#   PUSH_SET             (SET)
+#       all known tokens
+#
+#   PUSH_META            (HASH)
+#       key: <token>
+#       val: JSON like:
+#           {
+#             "platform": "android" | "ios" | "web",
+#             "lang": "en" | "hi" | ... | null,
+#             "topics": ["entertainment","trailer","all"],
+#             "ts": 1730000000  (last updated unix timestamp)
+#           }
+#
+#   PUSH_TOPIC_PREFIX + <topic>    (SET)
+#       every device token that opted into that topic
+#
+#   DEFAULT_TOPIC
+#       fallback broadcast bucket ("all")
+#
+# TOPIC SELECTION FOR A STORY:
+#   We'll push to union(topics from story.verticals, story.tags, DEFAULT_TOPIC).
+#
+#   Example story:
+#       {
+#          "id": "rss:koimoi.com:abcd123",
+#          "title": "James Gunn calls X best Spider-Man ever",
+#          "summary": "James Gunn once praised ...",
+#          "verticals": ["entertainment"],
+#          "tags": ["hollywood", "trailer"],
+#          "thumb_url": "https://api.../v1/img?u=...",
+#          "url": "https://www.koimoi.com/.../when-james-gunn-...",
+#          "kind": "news",
+#          ...
+#       }
+#
+#   -> topics_to_notify might become:
+#          ["entertainment", "hollywood", "trailer", "all"]
+#
+# NOTIFICATION PAYLOAD WE BUILD PER STORY:
 #   {
-#       "title": "Deadpool & Wolverine trailer drops",
-#       "body": "Ryan Reynolds and Hugh Jackman reunite in the MCU...",
-#       "url": "https://example.com/story",
-#       "image": "https://api.your/api/v1/img?u=...",
-#       "story_id": "rss:pinkvilla.com:abc123",
-#       "kind": "trailer"
+#     "title": "James Gunn calls X best Spider-Man ever",
+#     "body": "James Gunn once praised ...",
+#     "url": "https://www.koimoi.com/.../when-james-gunn-...",
+#     "image": "https://api.../v1/img?u=...",
+#     "story_id": "rss:koimoi.com:abcd123",
+#     "kind": "news",
+#     "ts": 1730000000
 #   }
 #
-#   Right now we just print the payload. You can replace _send_platform_push()
-#   to actually call FCM/APNs/Expo/etc.
+#   That dict is passed to _send_platform_push(platform, token, notif, meta)
+#   for each token. By default we just print it; replace that function to do
+#   actual delivery (FCM/APNs/etc.).
 #
 
 from __future__ import annotations
@@ -55,52 +104,73 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from redis import Redis
 
-# -------------------------------------------------------------------
-# Env / redis config
-# -------------------------------------------------------------------
+__all__ = ["send_story_push"]
+
+
+# =============================================================================
+# Environment / Redis config
+# =============================================================================
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-PUSH_SET = os.getenv("PUSH_SET", "push:tokens")
-PUSH_META = os.getenv("PUSH_META", "push:meta")
-PUSH_TOPIC_PREFIX = os.getenv("PUSH_TOPIC_PREFIX", "push:topic:")
-DEFAULT_TOPIC = os.getenv("PUSH_DEFAULT_TOPIC", "all")
+# MUST match apps/api/app/push.py
+PUSH_SET = os.getenv("PUSH_SET", "push:tokens")                  # SET of all tokens
+PUSH_META = os.getenv("PUSH_META", "push:meta")                  # HASH token -> json(meta)
+PUSH_TOPIC_PREFIX = os.getenv("PUSH_TOPIC_PREFIX", "push:topic:")# prefix for per-topic sets
+DEFAULT_TOPIC = os.getenv("PUSH_DEFAULT_TOPIC", "all")           # fallback broadcast topic
 
-# Safety valve: if you want an emergency kill-switch for pushes at runtime.
-PUSH_ENABLED = os.getenv("PUSH_ENABLED", "1").lower() not in ("0", "false", "no", "")
+# Runtime kill switch (lets you pause push fanout without redeploying sanitizer)
+PUSH_ENABLED = os.getenv("PUSH_ENABLED", "1").lower() not in (
+    "0",
+    "false",
+    "no",
+    "",
+)
 
-# Basic limits so one noisy story doesn't fan out to millions at once.
+# Safety cap: if a story routes to way too many tokens,
+# we only take the first N for this job run.
 MAX_TOKENS_PER_STORY = int(os.getenv("PUSH_MAX_TOKENS_PER_STORY", "5000"))
 
-# Truncate body text for notification preview.
+# The notification "body" is built from story["summary"] but clipped
+# so it fits common push preview lengths.
 PUSH_BODY_MAX_CHARS = int(os.getenv("PUSH_BODY_MAX_CHARS", "180"))
 
 
 def _redis() -> Redis:
+    """
+    Get a decode_responses=True Redis handle so we get str objects
+    not bytes.
+    """
     return Redis.from_url(
         REDIS_URL,
         decode_responses=True,
     )
 
 
-# -------------------------------------------------------------------
-# helpers: topic normalization & selection
-# -------------------------------------------------------------------
+# =============================================================================
+# Topic helpers
+# =============================================================================
 
-_valid_topic_char = re.compile(r"[a-z0-9_\-:\.]")
+# allowed chars for topics: lowercase alnum + _-:.
+_VALID_TOPIC_CHAR_RE = re.compile(r"[a-z0-9_\-:\.]")
 
-def _norm_topic(t: str) -> Optional[str]:
+def _norm_topic(topic: str) -> Optional[str]:
     """
-    Keep only safe lowercase chars [a-z0-9_-.:], match API behavior.
+    Normalize a single topic to safe lowercase: keep only [a-z0-9_\-:.].
+    Returns None if the result is empty.
     """
-    if not t:
+    if not topic:
         return None
-    t = t.strip().lower()
-    cleaned = "".join(ch for ch in t if _valid_topic_char.match(ch))
+    t = topic.strip().lower()
+    cleaned = "".join(ch for ch in t if _VALID_TOPIC_CHAR_RE.match(ch))
     return cleaned or None
 
 
 def _dedupe_norm_topics(values: Iterable[str]) -> List[str]:
+    """
+    Take a list of raw topics and return a unique, normalized list.
+    Order is stable: first time we see it wins.
+    """
     out: List[str] = []
     seen: Set[str] = set()
     for v in values:
@@ -113,12 +183,17 @@ def _dedupe_norm_topics(values: Iterable[str]) -> List[str]:
 
 def _topics_for_story(story: Dict[str, Any]) -> List[str]:
     """
-    Decide which push topic buckets this story should notify.
+    Decide which push-topic buckets get notified for this story.
 
     We include:
-      - verticals (entertainment, sports, etc.)
-      - tags      (trailer, now-streaming, box-office, match-result, etc.)
-      - DEFAULT_TOPIC ('all')
+      - story["verticals"] (e.g. ["entertainment", "sports"])
+      - story["tags"] (e.g. ["trailer", "box-office", "now-streaming"])
+      - DEFAULT_TOPIC (usually "all")
+
+    We do NOT include story["kind"] automatically because "kind"
+    (e.g. "release", "news", "trailer") is often already duplicated
+    inside tags like "trailer".
+    If you want to blast based on kind, add it here.
     """
     verts = story.get("verticals") or []
     tags = story.get("tags") or []
@@ -129,38 +204,41 @@ def _topics_for_story(story: Dict[str, Any]) -> List[str]:
     if isinstance(tags, list):
         raw_topics.extend(str(t) for t in tags)
 
-    # always include global/fallback
+    # Always include global broadcast bucket.
     raw_topics.append(DEFAULT_TOPIC)
 
     return _dedupe_norm_topics(raw_topics)
 
 
-# -------------------------------------------------------------------
-# helpers: build notification text
-# -------------------------------------------------------------------
+# =============================================================================
+# Notification shaping
+# =============================================================================
 
-def _truncate(s: str, limit: int) -> str:
-    if not s:
+def _truncate_preview(text: str, limit: int) -> str:
+    """
+    Cap text at 'limit' characters and add an ellipsis if truncated.
+    """
+    if not text:
         return ""
-    s = s.strip()
+    s = text.strip()
     if len(s) <= limit:
         return s
-    # basic ellipsis
     return (s[: max(0, limit - 1)].rstrip() + "…").strip()
 
 
 def _build_notification_payload(story: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Create a platform-agnostic notification blob.
-    You can adapt/transform this per-platform in _send_platform_push().
-    """
+    Convert a story dict (as produced by workers.jobs.normalize_event,
+    then lightly massaged by sanitizer) into a generic push payload.
 
+    This result is platform-agnostic. _send_platform_push() can adapt it
+    for iOS/Android/Web if you integrate a real push vendor.
+    """
     title = (story.get("title") or "").strip()
     body_raw = (story.get("summary") or "").strip()
+    body = _truncate_preview(body_raw, PUSH_BODY_MAX_CHARS)
 
-    body = _truncate(body_raw, PUSH_BODY_MAX_CHARS)
-
-    # choose a hero image if available
+    # Pick a hero image (the API will usually proxy this through /v1/img already).
     img = (
         story.get("thumb_url")
         or story.get("image")
@@ -181,28 +259,34 @@ def _build_notification_payload(story: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# -------------------------------------------------------------------
-# "send" stub
-# -------------------------------------------------------------------
+# =============================================================================
+# Delivery stub (replace this with FCM/APNs/etc.)
+# =============================================================================
 
 def _send_platform_push(platform: str, token: str, notif: Dict[str, Any], meta: Dict[str, Any]) -> bool:
     """
-    Deliver one push to one device token.
+    Send one push to one device token.
 
     RIGHT NOW:
-      - We just print() and return True.
-    HOW TO EXTEND:
-      - If you want real pushes, this is where you call FCM/APNs/etc.
-      - Use `platform` ("android" / "ios" / "web") to route.
-      - Use `meta["lang"]` if you want localized titles later.
+      - We just print() and pretend success.
+      - We mask most of the token so logs aren't full of secrets.
+
+    EXTEND FOR REAL PUSH:
+      - Use 'platform' to branch to the right provider:
+            "android" => FCM
+            "ios"     => APNs
+            "web"     => Web Push / VAPID
+      - The 'meta' dict includes 'lang' so you can localize.
+      - The 'notif' dict is the generic payload we built above.
     """
     try:
+        token_preview = token[:12] + "…" if len(token) > 12 else token
         print(
             "[push] deliver",
             json.dumps(
                 {
                     "platform": platform,
-                    "token": token[:12] + "…",  # don't spam full token
+                    "token": token_preview,
                     "notif": notif,
                 },
                 ensure_ascii=False,
@@ -214,26 +298,38 @@ def _send_platform_push(platform: str, token: str, notif: Dict[str, Any], meta: 
         return False
 
 
-# -------------------------------------------------------------------
-# main RQ entrypoint
-# -------------------------------------------------------------------
+# =============================================================================
+# RQ entrypoint
+# =============================================================================
 
 def send_story_push(story: Dict[str, Any]) -> Dict[str, Any]:
     """
-    RQ job entrypoint.
+    RQ job entrypoint called by sanitizer.
 
-    1. Figure out story topics.
-    2. Collect all tokens subscribed to ANY of those topics.
-    3. For each token:
-         - read its meta from PUSH_META
-         - send notification
-    4. Return stats for logging / debugging.
+    What we do:
+      1. Bail out early if PUSH_ENABLED is false (runtime kill switch).
+      2. Compute a set of relevant topics using _topics_for_story().
+      3. Union all subscriber tokens from those per-topic Redis sets.
+      4. Build a single notification payload for this story.
+      5. For each token:
+            - Look up device meta in PUSH_META
+            - Call _send_platform_push(platform, token, notif, meta)
+      6. Return stats for logs / debugging.
 
-    NOTE:
-    - If PUSH_ENABLED is false, we no-op (but still return a result).
-    - We hard-cap MAX_TOKENS_PER_STORY to avoid blast radius.
+    We *don't* raise exceptions for individual send failures.
+    We try everyone we can, then return summary stats.
+
+    Returns:
+        {
+          "ok": True,
+          "story_id": "...",
+          "topics": [...],
+          "tokens_considered": 123,
+          "sent": 120,
+          "skipped": 3,
+          "disabled": False,
+        }
     """
-
     stats = {
         "ok": True,
         "story_id": story.get("id"),
@@ -244,22 +340,25 @@ def send_story_push(story: Dict[str, Any]) -> Dict[str, Any]:
         "disabled": False,
     }
 
+    # Kill switch
     if not PUSH_ENABLED:
         stats["disabled"] = True
         print(f"[push] PUSH_ENABLED=0, skipping push for story {story.get('id')}")
         return stats
 
-    # figure out which topics we should broadcast to
+    # Figure out which topics get pinged
     topics = _topics_for_story(story)
     stats["topics"] = topics
 
     if not topics:
-        print(f"[push] no topics for story {story.get('id')}, skipping")
+        # It's valid for a story to have no tags/verticals, but then we still
+        # have DEFAULT_TOPIC so this shouldn't happen. If it does, abort cleanly.
+        print(f"[push] no topics for story {story.get('id')}, skipping fanout")
         return stats
 
     r = _redis()
     try:
-        # collect unique tokens from all topics
+        # Collect unique tokens across all topics
         tokens: Set[str] = set()
         for t in topics:
             try:
@@ -269,26 +368,24 @@ def send_story_push(story: Dict[str, Any]) -> Dict[str, Any]:
                     if tok:
                         tokens.add(tok)
             except Exception as e:
-                print(f"[push] WARN could not smembers({t}): {e}")
+                print(f"[push] WARN smembers({t}) failed: {e}")
 
-        # hard cap
+        # Enforce blast radius cap
         token_list = list(tokens)[:MAX_TOKENS_PER_STORY]
-
         stats["tokens_considered"] = len(token_list)
 
         if not token_list:
             print(f"[push] no subscribers for topics={topics}")
             return stats
 
-        # build push payload once per story
+        # Build the notification for this story once
         notif = _build_notification_payload(story)
 
-        # read all token metadata in one go (pipeline-ish)
-        # PUSH_META is a HASH: token -> json(meta)
+        # For each token, read its metadata from PUSH_META (HASH)
         for tok in token_list:
             raw_meta = r.hget(PUSH_META, tok)
             if not raw_meta:
-                # token known in topic set but no meta -> skip
+                # token appears in topic set but we have no metadata -> skip it
                 stats["skipped"] += 1
                 continue
 
@@ -299,11 +396,10 @@ def send_story_push(story: Dict[str, Any]) -> Dict[str, Any]:
 
             platform = (meta.get("platform") or "").strip().lower()
             if platform not in ("android", "ios", "web"):
-                # unknown platform -> skip
+                # ignore unknown platforms instead of crashing
                 stats["skipped"] += 1
                 continue
 
-            # send it
             delivered = _send_platform_push(platform, tok, notif, meta)
             if delivered:
                 stats["sent"] += 1
@@ -323,10 +419,11 @@ def send_story_push(story: Dict[str, Any]) -> Dict[str, Any]:
                 ensure_ascii=False,
             ),
         )
+
         return stats
 
     finally:
-        # nothing fancy, just clean close
+        # Don't leave hanging TCP connections in long-lived RQ workers
         try:
             r.close()
         except Exception:
