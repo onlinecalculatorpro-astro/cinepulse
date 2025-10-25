@@ -17,11 +17,14 @@ import feedparser
 from redis import Redis
 from rq import Queue
 
-# Use the comprehensive extractor
 from apps.workers.extractors import (
     build_rss_payload,   # (payload, thumb_hint, candidates)
-    abs_url, to_https,
+    abs_url,
+    to_https,
 )
+
+# NEW: sanitizer is now the only gatekeeper for publishing into the public feed
+from apps.sanitizer.sanitizer import sanitize_and_publish
 
 __all__ = [
     "youtube_rss_poll",
@@ -39,18 +42,21 @@ def _redis() -> Redis:
         decode_responses=True,
     )
 
-# Feed storage
-FEED_KEY = os.getenv("FEED_KEY", "feed:items")   # LIST, newest-first (LPUSH)
-SEEN_KEY = os.getenv("SEEN_KEY", "feed:seen")    # SET of story ids for dedupe
-FEED_MAX = int(os.getenv("FEED_MAX", "1200"))
+# Public feed list (Redis LIST) that infra-api-1 serves through /v1/feed.
+# IMPORTANT:
+#   - After sanitizer integration, workers DO NOT push directly to this list.
+#   - Only sanitizer writes new stories into this list.
+FEED_KEY = os.getenv("FEED_KEY", "feed:items")
 
-# Real-time fanout
-FEED_PUBSUB = os.getenv("FEED_PUBSUB", "feed:pub")       # Redis pub/sub channel
-FEED_STREAM = os.getenv("FEED_STREAM", "feed:stream")    # Redis stream key (XADD MAXLEN ~ 5k)
+# Realtime fanout channels/streams so other services can react to NEW (accepted) stories.
+FEED_PUBSUB = os.getenv("FEED_PUBSUB", "feed:pub")
+FEED_STREAM = os.getenv("FEED_STREAM", "feed:stream")
 FEED_STREAM_MAXLEN = int(os.getenv("FEED_STREAM_MAXLEN", "5000"))
+
+# Whether to enqueue async push notification jobs when a NEW story is accepted.
 ENABLE_PUSH_NOTIFICATIONS = os.getenv("ENABLE_PUSH_NOTIFICATIONS", "0").lower() not in ("0", "", "false", "no")
 
-# Repair/patch settings (for items inserted pre-image-extractor)
+# Repair/patch settings (manual cleanup helpers)
 REPAIR_IF_MISSING_IMAGE = os.getenv("REPAIR_IF_MISSING_IMAGE", "1").lower() not in ("0", "", "false", "no")
 REPAIR_SCAN = int(os.getenv("REPAIR_SCAN", "250"))  # how many recent items to scan to patch
 REPAIR_BY_URL = os.getenv("REPAIR_BY_URL", "1").lower() not in ("0", "", "false", "no")
@@ -405,15 +411,14 @@ def _youtube_thumb(link: str | None) -> str | None:
     return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
 
 def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tuple[str, int]]:
-    """Local thin wrapper to reuse extractor internals without exposing them in __all__."""
+    """Local thin wrapper around extractor internals."""
     from apps.workers.extractors import _images_from_html_block as _imgs  # type: ignore
     return _imgs(html_str, base_url)
 
 def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
-    Backward-compatible fallback:
-    - Prefer thumb_hint (from extractor)
-    - Else try feed enclosures / HTML blocks
+    Prefer thumb_hint from extractor.
+    Else fall back to enclosures / inline images in the HTML blocks.
     """
     cand: list[str] = []
     if thumb_hint:
@@ -438,12 +443,13 @@ def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]
 def _has_any_image(obj: Dict[str, Any]) -> bool:
     return bool(obj.get("image") or obj.get("thumb_url") or obj.get("thumbnail") or obj.get("poster") or obj.get("media"))
 
-# ===================== Normalizer (writes to feed) ====================
-
-_PATCH_FIELDS = ("image", "thumb_url", "thumbnail", "poster", "media", "image_candidates", "inline_images")
+# ===================== Normalizer (calls sanitizer) ====================
 
 def _publish_realtime(conn: Redis, story: dict, kind: str) -> None:
-    """Emit light-weight realtime signals so clients/servers can push immediately."""
+    """
+    Emit light-weight realtime signals so other services / dashboards
+    can react when a NEW story is ACCEPTED by sanitizer.
+    """
     try:
         payload = {
             "id": story.get("id"),
@@ -456,9 +462,10 @@ def _publish_realtime(conn: Redis, story: dict, kind: str) -> None:
             "url": story.get("url"),
             "thumb_url": story.get("thumb_url"),
         }
-        # Pub/Sub
+        # Pub/Sub notify
         conn.publish(FEED_PUBSUB, json.dumps(payload, ensure_ascii=False))
-        # Stream (capped)
+
+        # Stream append (capped)
         try:
             conn.xadd(
                 FEED_STREAM,
@@ -472,12 +479,15 @@ def _publish_realtime(conn: Redis, story: dict, kind: str) -> None:
         print(f"[realtime] publish error: {e}")
 
 def _enqueue_push(conn: Redis, story: dict) -> None:
-    """Optionally enqueue a push notification job (if you have a push worker)."""
+    """
+    Optionally enqueue a push notification job for NEW stories.
+    This just schedules; actual push worker can talk to FCM.
+    """
     if not ENABLE_PUSH_NOTIFICATIONS:
         return
     try:
         Queue("push", connection=conn).enqueue(
-            "apps.workers.push.send_story_push",   # implement this worker to call FCM/APNs
+            "apps.workers.push.send_story_push",   # implement separately
             story,
             ttl=600,
             result_ttl=60,
@@ -489,8 +499,12 @@ def _enqueue_push(conn: Redis, story: dict) -> None:
 
 def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
     """
-    If we already have a recent entry (matching id OR url) that lacks an image,
-    patch it in place. Returns True if a patch was performed.
+    Legacy helper:
+    Try to patch recent feed items that had missing images by updating them in-place.
+    NOTE:
+    - After sanitizer integration and "first one wins / no upgrade" rule,
+      we are NO LONGER auto-calling this during duplicates. We're keeping
+      the function around for manual/maintenance flows only.
     """
     if not REPAIR_IF_MISSING_IMAGE:
         return False
@@ -499,6 +513,7 @@ def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
 
     new_id = story_new.get("id")
     new_url = story_new.get("url")
+
     window = conn.lrange(FEED_KEY, 0, max(REPAIR_SCAN - 1, 0))
 
     for idx, raw in enumerate(window):
@@ -518,10 +533,10 @@ def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
             return False  # already has an image
 
         patched = obj.copy()
-        # keep existing ingested_at (first-seen) if present
+        # keep earliest ingested_at if present
         patched["ingested_at"] = obj.get("ingested_at") or story_new.get("ingested_at") or obj.get("normalized_at")
 
-        for k in _PATCH_FIELDS:
+        for k in ("image", "thumb_url", "thumbnail", "poster", "media", "image_candidates", "inline_images"):
             if story_new.get(k) is not None:
                 patched[k] = story_new[k]
 
@@ -536,10 +551,20 @@ def _repair_recent_list(conn: Redis, story_new: dict) -> bool:
 
 def normalize_event(event: AdapterEventDict) -> dict:
     """
-    Converts adapter events into the canonical feed shape and appends to the Redis LIST (newest-first).
-    Dedupes on <source>:<source_event_id>. Also attempts in-place patch of duplicates missing an image.
-    Emits realtime signals (pub/sub + stream) and optional push job for NEW items.
+    Convert an adapter event (YouTube/RSS/etc.) into the canonical story shape,
+    then hand it to the sanitizer.
+
+    Flow:
+    - Build `story` dict (title, summary, thumb, timestamps, etc.)
+    - Call sanitizer.sanitize_and_publish(story)
+        * "accepted": sanitizer deduped and inserted into the public feed list
+        * "duplicate": sanitizer dropped it (we've already covered this event)
+        * "invalid": sanitizer couldn't classify (no usable title/summary)
+    - If accepted -> emit realtime pubsub/stream + enqueue optional push job
+    - We DO NOT try to "upgrade" or "replace" earlier stories.
+      First accepted version wins. Later versions just skip.
     """
+
     conn = _redis()
 
     source = (event.get("source") or "src").strip()
@@ -553,7 +578,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
     published_at = _to_rfc3339(event.get("published_at"))
     payload = event.get("payload") or {}
 
-    # Build canonical link + domain + raw text
+    # Build canonical link / domain / body text / thumb hint
     if source == "youtube":
         link = payload.get("watch_url") or (f"https://www.youtube.com/watch?v={src_id}" if src_id else None)
         source_domain = "youtube.com"
@@ -575,12 +600,15 @@ def normalize_event(event: AdapterEventDict) -> dict:
     link = to_https(abs_url(link, payload.get("feed") or link or "")) or ""
     base_for_imgs = link or (payload.get("feed") or "")
 
-    # Resolve dependable image (prefer extractor's thumb_hint; then fallback)
+    # Resolve image
     image_url = _pick_image_from_payload(payload, base_for_imgs, thumb_hint)
     if not image_url and source == "youtube":
         image_url = _youtube_thumb(link)
 
+    # Summarize body
     summary_text = _select_sentences_for_summary(title, raw_text)
+
+    # Tags
     tags = _industry_tags(source, source_domain, title, raw_text, payload)
 
     now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -597,7 +625,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "is_theatrical": True if is_theatrical else None,
         "is_upcoming": True if is_upcoming else None,
 
-        # first-seen time (immutable on subsequent repairs) + current normalization time
+        # first-seen timestamp + normalization timestamp
         "ingested_at": now_ts,
         "normalized_at": now_ts,
 
@@ -605,35 +633,38 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "source_domain": source_domain,
         "ott_platform": ott_platform,
         "tags": tags or None,
+
         # canonical image fields
         "image": image_url,
         "thumbnail": image_url,
         "poster": image_url,
         "media": image_url,
-        # transparency
+
+        # transparency/debug fields
         "enclosures": payload.get("enclosures") or None,
         "image_candidates": payload.get("image_candidates") or None,
         "inline_images": payload.get("inline_images") or None,
+        "payload": payload,  # keeping payload around can help with repair/backfill
     }
 
-    # Deduplicate OR repair
-    if conn.sadd(SEEN_KEY, story_id):
-        pipe = conn.pipeline()
-        pipe.lpush(FEED_KEY, json.dumps(story, ensure_ascii=False))
-        pipe.ltrim(FEED_KEY, 0, FEED_MAX - 1)
-        pipe.execute()
-        print(f"[normalize_event] NEW  -> {story_id} | {title}")
+    # Hand off to sanitizer. This is the ONLY path that can insert into FEED_KEY.
+    status = sanitize_and_publish(story)
 
-        # Realtime fanout & optional push
+    if status == "accepted":
+        print(f"[normalize_event] NEW       -> {story_id} | {title}")
         _publish_realtime(conn, story, kind)
         _enqueue_push(conn, story)
         return story
 
-    # Duplicate: try to repair if existing lacks image (match by id or url)
-    if _repair_recent_list(conn, story):
+    if status == "duplicate":
+        # We do NOT attempt to upgrade/replace the original story.
+        # We are intentionally NOT calling _repair_recent_list() here anymore,
+        # to respect the "first one wins, later ones are ignored" rule.
+        print(f"[normalize_event] SKIP DUP  -> {story_id} | {title}")
         return story
 
-    print(f"[normalize_event] SKIP -> {story_id} (duplicate)")
+    # invalid
+    print(f"[normalize_event] SKIP INV  -> {story_id} | {title}")
     return story
 
 # ========================== YouTube poller ===========================
@@ -714,7 +745,7 @@ def youtube_rss_poll(
             "title": title,
             "kind": kind,
             "published_at": pub_norm,
-            "thumb_url": None,  # compute in normalize if missing
+            "thumb_url": None,  # normalizer (later) figures out final thumb
             "payload": {
                 "channelId": channel_id,
                 "videoId": vid,
@@ -793,7 +824,7 @@ def rss_poll(
         # classify with hint as fallback
         kind, _, _, _, _ = _classify(title, fallback=kind_hint)
 
-        # COMPREHENSIVE extraction (payload + thumb_hint)
+        # Comprehensive extraction (payload + thumb_hint)
         payload, thumb_hint, _cands = build_rss_payload(entry, url)
 
         ev: AdapterEventDict = {
@@ -825,10 +856,14 @@ def rss_poll(
 
 def backfill_repair_recent(scan: int = None) -> int:
     """
-    Best-effort pass over recent FEED_KEY items:
-    - Ensure 'ingested_at' exists (use prior normalized_at or now).
-    - For entries missing an image, try to rebuild image from stored payload using extractor and patch in place.
-    Returns number of patched items (image set and/or ingested_at added).
+    Manual maintenance pass over recent FEED_KEY items:
+    - Ensure 'ingested_at' exists.
+    - For entries missing an image, try to rebuild an image and patch in place.
+
+    NOTE: This function CAN edit existing feed entries (lset),
+    which is something we specifically do NOT do in the live ingest path
+    anymore. Use this sparingly / manually if you really want to clean
+    old items for UI quality.
     """
     conn = _redis()
     window = int(scan or REPAIR_SCAN)
