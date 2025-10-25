@@ -1,0 +1,165 @@
+# =============================================================================
+# Vertical Sources: ENTERTAINMENT (Bollywood + Hindi OTT/TV)
+# =============================================================================
+vertical: entertainment
+
+# Optional per-vertical throttle overrides.
+# These can override/extend the global throttle map.
+throttle:
+  per_domain_min_seconds:
+    default: 0
+    youtube.com: 0
+    googlevideo.com: 0
+    bollywoodhungama.com: 0
+    filmcompanion.in: 0
+    pinkvilla.com: 0
+    koimoi.com: 0
+    tellyupdates.com: 0
+
+# ----------------------------------------------------------------------------- 
+# YouTube sources for this vertical
+# ----------------------------------------------------------------------------- 
+youtube:
+  defaults:
+    enabled: true
+    kind_hint: trailer
+    max_items_per_poll: 20
+    published_after_hours: 72
+    language: "en"
+    region: "IN"
+
+  channels:
+    - name: "T-Series"
+      enabled: true
+      channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "YRF"
+      enabled: true
+      channel_id: "UCI5q9xeOp2-1bV7xEtKgzA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "Zee Studios"
+      enabled: true
+      channel_id: "UCQ7oCq4qjTLnkaW3r4U1H0g"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+    - name: "Dharma Productions"
+      enabled: true
+      channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+
+# ----------------------------------------------------------------------------- 
+# RSS / News sources for this vertical
+# ----------------------------------------------------------------------------- 
+rss:
+  defaults:
+    enabled: true
+    kind_hint: news
+    max_items_per_poll: 20
+    include_keywords: []
+    ignore_keywords:
+      - "behind the scenes"
+      - "interview"
+      - "live stream"
+
+  buckets:
+    news_hollywood:
+      enabled: false
+      feeds: []
+
+    news_india:
+      enabled: true
+      feeds:
+        - name: "Bollywood Hungama"
+          enabled: true
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+
+        - name: "Film Companion"
+          enabled: true
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+
+        - name: "Pinkvilla (Entertainment)"
+          enabled: true
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+
+        - name: "Koimoi"
+          enabled: true
+          url: "https://www.koimoi.com/feed/"
+          industry: "bollywood"
+
+    news_hindi_tv_ott:
+      enabled: true
+      feeds:
+        - name: "TellyUpdates"
+          enabled: true
+          url: "https://www.tellyupdates.com/feed/"
+          industry: "bollywood"
+
+        - name: "Bollywood Hungama — OTT/TV"
+          enabled: true
+          url: "https://www.bollywoodhungama.com/rss/news.xml"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+
+        - name: "Pinkvilla — OTT/TV"
+          enabled: true
+          url: "https://www.pinkvilla.com/entertainment/feed"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
+
+        - name: "Film Companion — OTT/TV"
+          enabled: true
+          url: "https://www.filmcompanion.in/feed"
+          industry: "bollywood"
+          include_keywords:
+            - "OTT"
+            - "web series"
+            - "series"
+            - "season"
+            - "episode"
+            - "television"
+            - "TV"
+            - "Hotstar"
+            - "JioCinema"
+            - "Prime Video"
+            - "Netflix"
+            - "Sony LIV"
+            - "ZEE5"
