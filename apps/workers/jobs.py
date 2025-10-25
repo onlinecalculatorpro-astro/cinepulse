@@ -593,43 +593,104 @@ def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tupl
     return _imgs(html_str, base_url)
 
 
+# --- NEW: heuristics to skip ugly social-card / watermark thumbs ---------
+
+_BAD_IMG_RE = re.compile(
+    r"(sprite|icon|favicon|logo|watermark|default[-_]?og|default[-_]?share|"
+    r"social[-_]?share|generic[-_]?share|breaking[-_]?news[-_]?card)",
+    re.I,
+)
+
+def _looks_bad_brand_card(u: str) -> bool:
+    """
+    Heuristic: skip obvious branding / watermark / social share cards.
+    These are the KOIMOI-style red-circle/logotype social cards,
+    generic "breaking news" slates, favicons, etc.
+    We still allow real photos / posters.
+    """
+    l = u.lower()
+
+    # If URL screams 'logo' / 'icon' / 'share-card' / 'default-og' etc.
+    if _BAD_IMG_RE.search(l):
+        return True
+
+    # Tiny squares / tracking pixels / low-res thumbs often look like junk:
+    # e.g. "...-150x150.jpg", "...1x1.png", etc.
+    if re.search(r"(\b|_)(1x1|64x64|100x100|150x150)(\b|_)", l):
+        return True
+
+    # Some sites serve "default social share" fallback images
+    if "default" in l and ("og" in l or "share" in l or "social" in l):
+        return True
+
+    return False
+
+
 def _pick_image_from_payload(payload: dict, base: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
-    Choose a representative image for the story:
+    Choose a representative hero image for the story.
 
-    Priority:
-    1. thumb_hint from extractor/poller
-    2. <enclosure> images in RSS
-    3. inline images pulled from HTML blocks
-    4. (for YouTube: we'll fall back separately to _youtube_thumb)
+    Priority with filtering:
+    1. payload["image_candidates"] (ranked by extractor) but SKIP obvious
+       watermark / logo / social share cards
+    2. thumb_hint (if not skipped)
+    3. <enclosure> images in RSS
+    4. Inline <img> candidates in content_html / description_html / summary
+    5. Fallback to first usable URL even if it's "meh"
 
     Returns first usable https URL, else None.
     """
-    cand: list[str] = []
 
+    def _norm_one(u: Optional[str]) -> Optional[str]:
+        if not u:
+            return None
+        return to_https(abs_url(u, base))
+
+    ordered: List[str] = []
+
+    # 1. Ranked candidates from extractor.build_rss_payload()
+    cand_list = payload.get("image_candidates")
+    if isinstance(cand_list, list):
+        for u in cand_list:
+            if isinstance(u, str):
+                ordered.append(u)
+
+    # 2. thumb_hint from poller (often same as first candidate anyway)
     if thumb_hint:
-        cand.append(thumb_hint)
+        ordered.insert(0, thumb_hint)
 
+    # 3. RSS enclosures (<enclosure type="image/..."> or ...jpg)
     for enc in (payload.get("enclosures") or []):
-        url = enc.get("href") or enc.get("url")
-        typ = (enc.get("type") or "").lower()
-        if url and (
-            typ.startswith("image/")
-            or url.lower().split("?", 1)[0].endswith((
-                ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif",
-                ".bmp", ".jfif", ".pjpeg",
-            ))
-        ):
-            cand.append(url)
+        if not isinstance(enc, dict):
+            continue
+        u = enc.get("href") or enc.get("url")
+        if not u:
+            continue
+        t = (enc.get("type") or "").lower()
+        if t.startswith("image/") or u.lower().split("?", 1)[0].endswith((
+            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif",
+            ".bmp", ".jfif", ".pjpeg",
+        )):
+            ordered.append(u)
 
+    # 4. Inline imgs from HTML blocks (content_html / description_html / summary)
     for key in ("content_html", "description_html", "summary"):
-        for u, _ in _images_from_html_block(payload.get(key), base):
-            cand.append(u)
+        for u, _bias in _images_from_html_block(payload.get(key), base):
+            ordered.append(u)
 
-    for u in cand:
-        u = to_https(abs_url(u, base))
-        if u:
-            return u
+    # PASS 1: return first *good* candidate (not a social-card / logo)
+    for raw in ordered:
+        normed = _norm_one(raw)
+        if not normed:
+            continue
+        if not _looks_bad_brand_card(normed):
+            return normed
+
+    # PASS 2: fallback to first valid URL at all
+    for raw in ordered:
+        normed = _norm_one(raw)
+        if normed:
+            return normed
 
     return None
 
@@ -696,6 +757,8 @@ def normalize_event(event: AdapterEventDict) -> dict:
         desc = payload.get("description") or ""
         raw_text = _strip_html(desc)
 
+        # NOTE: _detect_ott_provider referenced here in your original codebase;
+        # leaving call as-is since you already use it.
         ott_platform = provider_from_title or _detect_ott_provider(f"{title}\n{desc}")
         thumb_hint = event.get("thumb_url") or _youtube_thumb(link)
 
@@ -715,7 +778,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
     link = to_https(abs_url(link, payload.get("feed") or link or "")) or ""
     base_for_imgs = link or (payload.get("feed") or "")
 
-    # Choose image
+    # Choose image (now with brand-card filtering in _pick_image_from_payload)
     image_url = _pick_image_from_payload(payload, base_for_imgs, thumb_hint)
     if not image_url and source == "youtube":
         image_url = _youtube_thumb(link)
