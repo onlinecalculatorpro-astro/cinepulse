@@ -135,8 +135,8 @@ scheduler:
   per_run_limits:
     youtube_channels: 10         # max YT channels per loop
     rss_feeds: 12                # max RSS feeds per loop
-  poll_spread_sec: 0             # optional: wait this long between individual polls
-  poll_jitter_sec: 0             # optional: add this much random jitter between loops
+  poll_spread_sec: 2             # optional: wait this long between individual polls
+  poll_jitter_sec: 10             # optional: add this much random jitter between loops
 
 # ----------------------------------------------------------------------------- 
 # NEW: which vertical config files to merge in
