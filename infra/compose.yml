@@ -1,56 +1,86 @@
-# CinePulse ingestion pipeline (runtime order)
+# =============================================================================
+# CinePulse Ingestion / Delivery Stack
 #
-#   1. scheduler + webhooks
-#        - decide WHICH sources to poll (YouTube channels, RSS feeds, etc.)
-#        - enqueue poll / ingest work into Redis queue "events"
+# RUNTIME DATA FLOW (end-to-end)
 #
-#   2. workers
-#        - rq worker listening on "events"
-#        - fetch/parse each source item
-#        - normalize it into a canonical story object
-#        - enqueue that story into Redis queue "sanitize"
+#   ┌───────────────────────────────────────────────────────────────────┐
+#   │  scheduler + webhooks                                            │
+#   │    - scheduler: periodic poll of sources                        │
+#   │        * reads infra/source.yml                                  │
+#   │        * merges all vertical configs listed in include_verticals │
+#   │        * enqueues poll work into RQ queue "events"               │
+#   │    - webhooks: on-demand / push-trigger polling (YouTube WebSub, │
+#   │      RSS WebSub), also enqueues into "events"                    │
+#   └───────────────────────────────────────────────────────────────────┘
+#                                   │
+#                                   ▼
+#   ┌───────────────────────────────────────────────────────────────────┐
+#   │  workers (rq worker "events")                                     │
+#   │    - fetch raw item (RSS entry, YT upload, etc.)                  │
+#   │    - normalize → canonical story dict                             │
+#   │    - enqueue story into RQ queue "sanitize"                       │
+#   └───────────────────────────────────────────────────────────────────┘
+#                                   │
+#                                   ▼
+#   ┌───────────────────────────────────────────────────────────────────┐
+#   │  sanitizer (rq worker "sanitize")                                 │
+#   │    - dedupe by semantic signature (title+summary)                 │
+#   │    - first version of a "news event" wins                         │
+#   │    - if ACCEPTED:                                                 │
+#   │         * LPUSH story JSON into Redis FEED_KEY                    │
+#   │         * LTRIM FEED_KEY to MAX_FEED_LEN                          │
+#   │         * publish realtime fanout (pubsub + Redis stream)         │
+#   │         * optionally enqueue push jobs → "push" (notifications)   │
+#   │    - sanitizer is the ONLY writer to FEED_KEY                     │
+#   └───────────────────────────────────────────────────────────────────┘
+#                                   │
+#                                   ▼
+#   ┌───────────────────────────────────────────────────────────────────┐
+#   │  api                                                              │
+#   │    - pure read-only                                               │
+#   │    - serves /v1/feed, /v1/story/{id}, /v1/search from Redis       │
+#   │    - exposes /v1/realtime (SSE + WebSocket)                       │
+#   └───────────────────────────────────────────────────────────────────┘
 #
-#   3. sanitizer
-#        - rq worker listening on "sanitize"
-#        - dedupe by meaning (title+summary signature)
-#        - first story that covers an event wins; later dupes are dropped
-#        - if ACCEPTED:
-#             * LPUSH story JSON into FEED_KEY (Redis LIST)
-#             * LTRIM that list to MAX_FEED_LEN
-#             * publish realtime fanout (pub/sub + stream)
-#             * optionally queue push notifications
-#        - sanitizer is the ONLY writer that mutates the public feed list
+#   (optional)
+#                                   │
+#                                   ▼
+#   ┌───────────────────────────────────────────────────────────────────┐
+#   │  push (rq worker "push")                                          │
+#   │    - consumes push jobs from sanitizer                            │
+#   │    - finds device tokens per topic                               │
+#   │    - builds notification payload                                 │
+#   │    - (currently stub: print; can be wired to FCM/APNs later)      │
+#   └───────────────────────────────────────────────────────────────────┘
 #
-#   4. api
-#        - read-only service
-#        - serves the final deduped feed from Redis to the client / cron push
-#
-# Redis is shared by all services:
-#   - acts as RQ broker ("events", "sanitize", etc.)
-#   - stores the feed list and dedupe signature set
-#
-# We persist Redis data in a named volume (redis-data:) so restarts don't wipe
-# feed history or seen-signature memory.
+# Redis:
+#   - shared message bus (RQ queues: "events", "sanitize", "push")
+#   - shared state (feed list, dedupe sets, rate limit counters, etc.)
+#   - persisted via redis-data volume so restarts don't lose history.
+# =============================================================================
 
 x-env: &defaults
   ENV: prod
   TZ: Asia/Kolkata
 
-  # Shared Redis URL (everything uses this)
+  # Shared Redis URL
   REDIS_URL: redis://redis:6379/0
 
-  # Public feed list key in Redis. ONLY sanitizer writes here.
+  # Public feed list key in Redis (only sanitizer mutates this)
   FEED_KEY: feed:items
 
-  # YAML source config used by scheduler / webhooks
+  # Root source config.
+  # NOTE: infra/source.yml itself references per-vertical files, e.g.:
+  #   include_verticals:
+  #     - verticals/entertainment.yml
   SOURCES_FILE: /app/infra/source.yml
 
-  # External API keys if needed by jobs (safe to leave blank in dev)
+  # External API keys consumed downstream (like TMDB in workers)
   TMDB_API_KEY: ${TMDB_API_KEY:-}
 
 services:
   # --------------------------------------------------
-  # REDIS
+  # REDIS (state + queues)
   # --------------------------------------------------
   redis:
     image: redis:7-alpine
@@ -74,9 +104,10 @@ services:
   # --------------------------------------------------
   # SCHEDULER
   # --------------------------------------------------
-  # Periodically schedules ingestion work:
-  #   - figures out which feeds/channels to poll
-  #   - enqueues poll jobs into the "events" queue
+  # Periodic ingestion scheduler:
+  #   - reads infra/source.yml (which references vertical YAMLs)
+  #   - merges all enabled channels + feeds from those verticals
+  #   - enqueues poll work into RQ queue "events"
   scheduler:
     build:
       context: ..
@@ -102,8 +133,14 @@ services:
   # --------------------------------------------------
   # WEBHOOKS
   # --------------------------------------------------
-  # HTTP entrypoint for manual / on-demand ingestion triggers.
-  # It can enqueue new work into "events" immediately.
+  # HTTP-triggered ingestion:
+  #   - YouTube PubSubHubbub callbacks
+  #   - RSS WebSub callbacks
+  #   - manual /subscribe endpoints
+  #
+  # On notify:
+  #   - decides which channel/feed updated
+  #   - enqueues fresh poll into "events" immediately
   webhooks:
     build:
       context: ..
@@ -118,7 +155,10 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:18001:8000"
-    command: uvicorn apps.webhooks.main:app --host 0.0.0.0 --port 8000
+    command: >
+      uvicorn apps.webhooks.main:app
+      --host 0.0.0.0
+      --port 8000
     read_only: true
     tmpfs:
       - /tmp
@@ -128,12 +168,15 @@ services:
   # --------------------------------------------------
   # WORKERS
   # --------------------------------------------------
-  # rq worker for the "events" queue:
-  #   - fetches raw items (RSS entry, YT upload, etc.)
-  #   - cleans + normalizes into our canonical "story" dict
-  #   - enqueues that story into the "sanitize" queue
+  # RQ worker for queue "events":
+  #   - fetch raw source item (RSS entry, YT upload, etc.)
+  #   - run normalize_event() to build canonical `story`
+  #   - enqueue that story onto "sanitize"
   #
-  # workers do NOT touch FEED_KEY directly.
+  # Workers DO NOT:
+  #   - write to FEED_KEY
+  #   - dedupe
+  #   - send push
   workers:
     build:
       context: ..
@@ -143,7 +186,7 @@ services:
     env_file: ../.env
     environment:
       <<: *defaults
-      # rq also reads RQ_REDIS_URL explicitly
+      # rq also reads RQ_REDIS_URL
       RQ_REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
@@ -159,16 +202,18 @@ services:
   # --------------------------------------------------
   # SANITIZER
   # --------------------------------------------------
-  # rq worker for the "sanitize" queue:
-  #   - dedupes stories by meaning (title+summary signature)
-  #   - first version of an event wins
+  # RQ worker for queue "sanitize":
+  #   - dedupes by story_signature(title+summary)
+  #   - first story about an event wins forever
   #   - if accepted:
   #       * LPUSH into FEED_KEY
-  #       * LTRIM to MAX_FEED_LEN
-  #       * publish realtime fanout
-  #       * optional push notifications
+  #       * LTRIM feed length (MAX_FEED_LEN)
+  #       * publish realtime fanout via Redis:
+  #           - pub/sub channel FEED_PUBSUB
+  #           - XADD into FEED_STREAM
+  #       * OPTIONAL enqueue push job ("push" queue)
   #
-  # ONLY sanitizer is allowed to mutate FEED_KEY.
+  # ONLY sanitizer mutates FEED_KEY.
   sanitizer:
     build:
       context: ..
@@ -179,21 +224,21 @@ services:
     environment:
       <<: *defaults
 
-      # Redis SET of seen signatures (prevents dup stories)
+      # Dedup set of story signatures
       SEEN_KEY: feed:seen_signatures
 
-      # Max feed list length that sanitizer enforces
+      # Max feed list length retained in Redis
       MAX_FEED_LEN: "200"
 
-      # Realtime pub/sub + stream fanout targets
+      # Realtime fanout keys
       FEED_PUBSUB: feed:pub
       FEED_STREAM: feed:stream
       FEED_STREAM_MAXLEN: "5000"
 
-      # Whether sanitizer should enqueue push jobs for accepted stories
+      # Toggle this to "1" if you are running the push worker below
       ENABLE_PUSH_NOTIFICATIONS: "0"
 
-      # rq connection var
+      # rq connection
       RQ_REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
@@ -207,10 +252,56 @@ services:
     stop_grace_period: 10s
 
   # --------------------------------------------------
+  # PUSH (optional)
+  # --------------------------------------------------
+  # RQ worker for queue "push":
+  #   - consumes jobs created by sanitizer (if ENABLE_PUSH_NOTIFICATIONS=1)
+  #   - figures out which subscriber tokens to alert based on story.topics
+  #   - builds push payload (title, summary snippet, thumb_url)
+  #   - CURRENTLY logs to console (stub for FCM/APNs/etc.)
+  #
+  # If you don't want push right now:
+  #   - leave this service commented out
+  #   - keep ENABLE_PUSH_NOTIFICATIONS="0" in sanitizer
+  #
+  # push:
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile
+  #     target: worker
+  #   restart: unless-stopped
+  #   env_file: ../.env
+  #   environment:
+  #     <<: *defaults
+  #     RQ_REDIS_URL: redis://redis:6379/0
+  #     PUSH_ENABLED: "1"
+  #     PUSH_SET: "push:tokens"
+  #     PUSH_META: "push:meta"
+  #     PUSH_TOPIC_PREFIX: "push:topic:"
+  #     PUSH_DEFAULT_TOPIC: "all"
+  #     PUSH_MAX_TOKENS_PER_STORY: "5000"
+  #     PUSH_BODY_MAX_CHARS: "180"
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   command: >
+  #     sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" push'
+  #   read_only: true
+  #   tmpfs:
+  #     - /tmp
+  #     - /var/tmp
+  #   stop_grace_period: 10s
+
+  # --------------------------------------------------
   # API
   # --------------------------------------------------
-  # Purely read-only.
-  # Serves the final, deduped feed from Redis (which sanitizer maintains).
+  # Read-only/public API:
+  #   - /v1/feed, /v1/story/{id}, /v1/search
+  #   - /v1/realtime/stream (SSE)
+  #   - /v1/realtime/ws     (WebSocket)
+  #   - /v1/img?u=...       (image proxy)
+  #
+  # It never mutates feed data — only reads from Redis.
   api:
     build:
       context: ..
