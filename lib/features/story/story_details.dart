@@ -7,7 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart';           // deepLinkForStoryId, storyVideoUrl
+import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../widgets/kind_badge.dart';
@@ -127,6 +127,20 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     }
   }
 
+  /// 🔥 NEW: pick the same hero image we use in the feed card.
+  /// We ALWAYS prefer thumbUrl first (works in cards, not proxied),
+  /// and only fall back to posterUrl if thumbUrl is empty.
+  String _heroImageFor(Story s) {
+    final t = s.thumbUrl ?? '';
+    if (t.isNotEmpty) return t;
+
+    final p = s.posterUrl ?? '';
+    if (p.isNotEmpty) return p;
+
+    // final fallback if both are somehow empty
+    return '';
+  }
+
   /* --------------------------------- UI ------------------------------------ */
 
   @override
@@ -137,7 +151,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // **Fix**: ensure this is a double, not num (no compile error)
+    // ensure double for expandedHeight
     final double expandedHeight = _showPlayer
         ? (screenW * 9.0 / 16.0 + (isPhone ? 96.0 : 120.0))
         : (isPhone ? 260.0 : 340.0);
@@ -183,6 +197,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
               background: _HeaderHero(
                 key: _heroPlayerKey,
                 story: widget.story,
+                heroImageUrl: _heroImageFor(widget.story), // 👈 use same image as card
                 showPlayer: _showPlayer,
                 videoUrl: _videoUrl?.toString(),
                 onClosePlayer: () => _hidePlayer(),
@@ -252,9 +267,15 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           runSpacing: 8,
                           children: [
                             if (widget.story.languages.isNotEmpty)
-                              _Facet(label: 'Language', value: widget.story.languages.join(', ')),
+                              _Facet(
+                                label: 'Language',
+                                value: widget.story.languages.join(', '),
+                              ),
                             if (widget.story.genres.isNotEmpty)
-                              _Facet(label: 'Genre', value: widget.story.genres.join(', ')),
+                              _Facet(
+                                label: 'Genre',
+                                value: widget.story.genres.join(', '),
+                              ),
                           ],
                         ),
                       ],
@@ -324,6 +345,7 @@ class _HeaderHero extends StatelessWidget {
   const _HeaderHero({
     super.key,
     required this.story,
+    required this.heroImageUrl, // 👈 new
     required this.showPlayer,
     required this.videoUrl,
     required this.onClosePlayer,
@@ -332,6 +354,7 @@ class _HeaderHero extends StatelessWidget {
   });
 
   final Story story;
+  final String heroImageUrl;
   final bool showPlayer;
   final String? videoUrl;
   final VoidCallback onClosePlayer;
@@ -341,8 +364,9 @@ class _HeaderHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final imageUrl =
-        (story.posterUrl?.isNotEmpty == true) ? story.posterUrl! : (story.thumbUrl ?? '');
+
+    // Use the pre-picked hero image. This is now guaranteed to match the card.
+    final imageUrl = heroImageUrl;
 
     return Hero(
       tag: 'thumb-${story.id}',
