@@ -47,7 +47,7 @@ from apps.workers.extractors import (
     abs_url,
     to_https,
 )
-from apps.workers.summarizer import summarize_story
+from apps.workers.summarizer import summarize_story, generate_clean_title
 
 
 __all__ = [
@@ -932,6 +932,9 @@ def normalize_event(event: AdapterEventDict) -> dict:
     # --- SUMMARY for card body -------------------------------------
     summary_text = summarize_story(title, raw_text)
 
+    # --- CLEAN TITLE for card headline ------------------------------
+    clean_title = generate_clean_title(title, raw_text)
+
     # --- TAGS / VERTICALS / KIND_META ------------------------------
     industry_base = _industry_tags(source, source_domain, title, raw_text, payload)
     final_tags = _content_tags(industry_base, title, raw_text, kind, ott_platform)
@@ -955,7 +958,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "kind_meta":     kind_meta,
         "verticals":     verticals,
 
-        "title":         title,
+        "title":         clean_title,
         "summary":       summary_text or None,
 
         # timestamps:
