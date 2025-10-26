@@ -6,67 +6,75 @@
 #
 #   workers    → normalize_event() builds a canonical story dict and enqueues
 #                 sanitize_story(story) on the "sanitize" queue.
-#               worker story dict should ALREADY be safe:
-#                 - title (generate_safe_title)
-#                 - summary (summarize_story_safe)
-#                 - kind / kind_meta (trailer / release / ott / news)
-#                 - verticals (["entertainment"], ["sports"], ...)
-#                 - tags (industry, ott, box-office, match-result, etc.)
-#                 - hero image urls (thumb_url/image/...)
+#
+#               worker story dict SHOULD ALREADY BE SAFE:
+#                 - title            (generate_safe_title)
+#                 - summary          (summarize_story_safe)
+#                 - kind / kind_meta (trailer / release / ott / news / etc.)
+#                 - verticals        (["entertainment"], ["sports"], ...)
+#                 - tags             (["bollywood","box-office","ott","drama",...])
+#                 - hero art urls    (thumb_url/image/...)
 #                 - timestamps
 #                 - safety flags:
-#                       story["is_risky"]     -> True if legal/PR heat (raids, FIR, etc.)
-#                       story["gossip_only"]  -> True if it's only personal drama
+#                       story["is_risky"]        -> True if legal/PR heat
+#                       story["gossip_only"]     -> True if it's ONLY personal gossip
+#                                                  (breakup, "spotted with", leaked chat)
+#                                                  with NO work/release/box-office context
+#                       story["drama_signal"]    -> >0 if it's on-screen / show / match drama
+#                                                  (Bigg Boss fight, elimination drama,
+#                                                   "heated argument on live show")
 #
 #   sanitizer  → THIS FILE
 #               - final gatekeeper for the public feed:
-#                   * reject pure gossip ("gossip_only" True) so we don't publish
-#                     leaked DMs / breakup rumors with no business/release context
-#                   * dedupe: topic-level fuzzy dedupe (first win is canonical)
-#                     using a robust topic signature
+#                   * BLOCK pure gossip (personal-life / relationship / leaked DM)
+#                     unless it's clearly on-screen / professional context.
+#                     Rule:
+#                        if gossip_only == True AND drama_signal <= 0 → reject
+#
+#                   * fuzzy topic dedupe:
+#                        - first story about a topic gets published
+#                        - similar follow-ups get flagged "duplicate" and dropped
+#
 #                   * write accepted story to Redis FEED_KEY
 #                   * trim FEED_KEY
-#                   * broadcast realtime
-#                   * (optional) enqueue push notification
+#                   * publish realtime + (optional) push
 #
-#   api        → /v1/feed reads FEED_KEY (newest-first Redis LIST)
-#                and supports /v1/feed?vertical=sports, etc., using story["verticals"]
+#   api        → /v1/feed reads FEED_KEY (Redis LIST newest-first)
 #
-# HARD RULES:
+# HARD RULES (operational / legal):
 # - workers NEVER write to FEED_KEY
 # - workers NEVER dedupe
 # - sanitizer is the ONLY publisher to FEED_KEY
 #
+# - DO NOT rewrite title/summary here.
+#   They already include attribution like
+#   "According to <source> ..." or "YouTube video claims: ..."
+#   That attribution is legally important. We keep it.
+#
 # DEDUPE STRATEGY (topic signature):
-# 1. Canonicalize title+summary:
-#       - lowercase
-#       - strip hype like "BREAKING", "WATCH NOW"
-#       - strip punctuation/emojis
-#       - strip promo footers ("read more at ...")
-# 2. Token normalize:
-#       - stem verbs ("announced"/"announces"/"announcing" → "announce")
-#       - normalize common names ("srk" → "shahrukh", "salmankhan" → "salman")
-#       - map teaser/promo/sneak peek → "trailer"
-#       - collapse multi-word entities ("bigg boss 19" → "biggboss19")
-#       - keep "day5"/"day-5" tokens (so Day 5 BO != Day 6 BO)
-#       - drop noisy glue words ("the", "and", "to", ...)
-#       - drop raw money/number tokens ("120cr", "505cr") so hourly box office bumps
-#         don't spam new cards
-# 3. Sort + dedupe those normalized tokens → "topic_blob".
-# 4. Fuzzy match topic_blob against previous blobs from Redis:
-#       - if ≥ DUPLICATE_SIMILARITY_THRESHOLD (default 0.80), treat as duplicate
-#         and DO NOT publish again.
+#   We compute a normalized "topic_blob" from title+summary:
+#     1. lowercase, strip hype words, strip emojis/promo tails
+#     2. normalize verbs ("announced"/"announcing"→"announce")
+#     3. normalize actor/team aliases ("srk"→"shahrukh", "rcb"→"bangalore")
+#     4. unify teaser/promo/glimpse/sneak-peek → "trailer"
+#     5. collapse multi-word franchises ("bigg boss 19"→"biggboss19")
+#     6. drop throwaway glue words ("the","and","to",...)
+#     7. drop pure numeric money bumps ("120cr", "505cr") so every hourly
+#        box office update doesn't spam a new card
+#
+#   We then compare against Redis hash SEEN_KEY which stores topic blobs from
+#   previously accepted stories. If overlap similarity >= threshold, it's a dup.
 #
 # Redis keys:
-#   FEED_KEY  : Redis LIST (newest first). Each element is final story JSON dict.
+#   FEED_KEY  : Redis LIST (newest first). Each element is final story JSON.
 #   SEEN_KEY  : Redis HASH (sig -> topic_blob) of accepted stories for dedupe.
 #
 # sanitize_story() returns:
 #   "accepted"   -> published to feed
-#   "duplicate"  -> dropped as already covered
-#   "invalid"    -> dropped (gossip_only, or unusable/no canonical title)
+#   "duplicate"  -> dropped (already covered topic)
+#   "invalid"    -> dropped (gossip-only reject, or unusable/no canonical title)
 #
-# ENV VARS:
+# ENV:
 #   REDIS_URL
 #   FEED_KEY
 #   SEEN_KEY
@@ -75,8 +83,8 @@
 #   FEED_STREAM
 #   FEED_STREAM_MAXLEN
 #   ENABLE_PUSH_NOTIFICATIONS
-#   FALLBACK_VERTICAL (default "entertainment")
-#   DUPLICATE_SIMILARITY_THRESHOLD (default "0.80")
+#   FALLBACK_VERTICAL
+#   DUPLICATE_SIMILARITY_THRESHOLD
 
 from __future__ import annotations
 
@@ -106,7 +114,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 # Public feed LIST that /v1/feed reads newest-first.
 FEED_KEY = os.getenv("FEED_KEY", "feed:items")
 
-# Redis HASH of dedupe topic blobs for accepted stories (sig → topic_blob).
+# Redis HASH of dedupe topic blobs for accepted stories (sig -> topic_blob).
 SEEN_KEY = os.getenv("SEEN_KEY", "feed:seen_signatures")
 
 # Max number of stories we keep in FEED_KEY. <=0 means "no trim".
@@ -119,10 +127,7 @@ FEED_STREAM_MAXLEN = int(os.getenv("FEED_STREAM_MAXLEN", "5000"))
 
 # Optional push notifications toggle.
 ENABLE_PUSH_NOTIFICATIONS = os.getenv("ENABLE_PUSH_NOTIFICATIONS", "0").lower() not in (
-    "0",
-    "",
-    "false",
-    "no",
+    "0", "", "false", "no",
 )
 
 # Vertical fallback if workers forget. Keeps /v1/feed?vertical= working.
@@ -152,7 +157,7 @@ def _redis() -> Redis:
 # Canonicalization / topic-signature helpers for dedupe
 # =============================================================================
 
-# Words that are hypey / promo / repetitive noise and shouldn't define a new topic.
+# Words that are hypey / promo / repetitive noise and shouldn't define a topic.
 _STOPWORDS = {
     "breaking",
     "exclusive",
@@ -205,7 +210,7 @@ _STOPWORDS = {
     "weekend",
 }
 
-# High-frequency glue words we always toss.
+# Glue words we always toss.
 _COMMON_STOPWORDS = {
     "the", "a", "an", "this", "that", "and", "or", "but", "if", "so",
     "to", "for", "of", "on", "in", "at", "by", "with", "as", "from",
@@ -216,7 +221,7 @@ _COMMON_STOPWORDS = {
     "did", "not", "no", "yes",
 }
 
-# Footer-ish junk in summaries that we don't want in the signature.
+# Footer-ish junk in summaries we don't want in signature.
 _SUMMARY_FOOTER_PATTERNS = [
     r"read (the )?full story.*$",
     r"click here.*$",
@@ -226,17 +231,16 @@ _SUMMARY_FOOTER_PATTERNS = [
     r"all rights reserved.*$",
 ]
 
-# Anything not alphanumeric / dash / whitespace → space.
+# anything not [a-z0-9 -] → space
 _CLEAN_RE = re.compile(r"[^a-z0-9\s-]+", re.IGNORECASE)
 
-# Tokens like "day5", "day-5". We KEEP those so Day 5 BO != Day 6 BO.
+# Tokens like "day5", "day-5". KEEP (milestone context).
 _DAY_TOKEN_RE = re.compile(r"^day[-_]?(\d{1,2})$", re.I)
 
-# Numeric / money-ish tokens like "120cr", "505cr". We DROP them so
-# hourly box office bumps don't generate "new topic".
+# Raw numeric / money tokens like "120cr", "505cr". DROP so we don't explode topics.
 _NUMERICY_RE = re.compile(r"^\d+[a-z]*$", re.I)
 
-# Lightweight tense/plural stemming for verbs in our domain.
+# lightweight verb/tense/plural stemmer for our domain
 _VERB_STEMS = {
     "announcing": "announce",
     "announces": "announce",
@@ -294,7 +298,7 @@ _VERB_STEMS = {
     "shows": "show",
 }
 
-# Common name / team normalization.
+# map shorthand names / IPL team tags / etc. to canonical tokens
 _NAME_NORMALIZE = {
     # Bollywood
     "salmankhan": "salman",
@@ -323,17 +327,17 @@ _NAME_NORMALIZE = {
     "ajay": "ajay",
     "ajaydevgn": "ajay",
 
-    # Cricket etc.
-    "virat": "virat",
+    # cricket / sports
     "viratkohli": "virat",
-    "dhoni": "dhoni",
+    "virat": "virat",
     "msdhoni": "dhoni",
-    "rohit": "rohit",
+    "dhoni": "dhoni",
     "rohitsharma": "rohit",
-    "sachin": "sachin",
+    "rohit": "rohit",
     "sachintendulkar": "sachin",
+    "sachin": "sachin",
 
-    # IPL shorthand → city nicknames
+    # IPL shortcuts -> city nicknames
     "rcb": "bangalore",
     "csk": "chennai",
     "mi": "mumbai",
@@ -346,7 +350,7 @@ _NAME_NORMALIZE = {
     "lsg": "lucknow",
 }
 
-# Semantic equivalents we want to treat as the same.
+# semantic equivalence ("teaser" == "trailer", etc.)
 _SEMANTIC_EQUIV = {
     "teaser": "trailer",
     "promo": "trailer",
@@ -371,11 +375,13 @@ _SEMANTIC_EQUIV = {
     "gross": "collection",
 }
 
-# Known franchise / title buckets we treat as one token.
+# Franchise / recurring show buckets we want as single tokens.
 _KNOWN_ENTITIES = {
     "biggboss",
-    "lovewar",
+    "biggbosslive",
+    "biggbossvote",
     "pushpa",
+    "pushpa2",
     "kgf",
     "rrr",
     "pathaan",
@@ -383,67 +389,61 @@ _KNOWN_ENTITIES = {
     "dunki",
     "animal",
     "fighter",
-    "badeميyan",
-    "chhotemiyan",
     "singham",
     "golmaal",
     "housefull",
-    "racetrack",
     "boxoffice",
     "ottrelease",
-    "primeminister",
 }
 
 
-def _stem_token(word: str) -> str:
-    """Normalize tense/plural for domain verbs."""
-    return _VERB_STEMS.get(word.lower(), word.lower())
+def _stem_token(w: str) -> str:
+    return _VERB_STEMS.get(w.lower(), w.lower())
 
 
-def _normalize_name(word: str) -> str:
-    """Normalize shorthand for names/teams."""
-    return _NAME_NORMALIZE.get(word.lower(), word.lower())
+def _normalize_name(w: str) -> str:
+    return _NAME_NORMALIZE.get(w.lower(), w.lower())
 
 
-def _semantic_normalize(word: str) -> str:
-    """Unify teaser/promo/etc → trailer, OTT → streaming, etc."""
-    return _SEMANTIC_EQUIV.get(word.lower(), word.lower())
+def _semantic_normalize(w: str) -> str:
+    return _SEMANTIC_EQUIV.get(w.lower(), w.lower())
 
 
 def _collapse_multi_word_entities(tokens: List[str]) -> List[str]:
     """
-    Collapse known multi-word entities:
-      "bigg boss 19" → "biggboss19"
-      "love and war" → "lovewar"
-      "pushpa 2"     → "pushpa2"
+    Collapse stuff like:
+      "bigg boss 19"   -> "biggboss19"
+      "pushpa 2"       -> "pushpa2"
+      "bigg boss live" -> "biggbosslive"
     """
     out: List[str] = []
     i = 0
     while i < len(tokens):
-        # Try "<word1> <word2> <num>"
+        # try "<word1> <word2> <num>"
         if i + 2 < len(tokens) and tokens[i + 2].isdigit():
-            two_word = tokens[i] + tokens[i + 1]
-            if two_word in _KNOWN_ENTITIES:
-                out.append(two_word + tokens[i + 2])
+            combo = tokens[i] + tokens[i + 1]
+            if combo in _KNOWN_ENTITIES:
+                out.append(combo + tokens[i + 2])
                 i += 3
                 continue
 
-        # Try "<word1> <word2>"
+        # try "<word1> <word2>"
         if i + 1 < len(tokens):
-            two_word = tokens[i] + tokens[i + 1]
-            if two_word in _KNOWN_ENTITIES:
-                out.append(two_word)
+            combo = tokens[i] + tokens[i + 1]
+            if combo in _KNOWN_ENTITIES:
+                out.append(combo)
                 i += 2
                 continue
 
         out.append(tokens[i])
         i += 1
-
     return out
 
 
 def _strip_noise_words(words: List[str]) -> List[str]:
-    """Remove hype + filler tokens from a word list."""
+    """
+    Remove hype STOPWORDS like "breaking" / "watch now" and other filler.
+    """
     keep: List[str] = []
     for w in words:
         lw = w.strip().lower()
@@ -460,7 +460,7 @@ def canonical_title(raw_title: str) -> str:
     Canonicalize title for dedupe:
       - lowercase
       - strip punctuation/emojis
-      - drop hype STOPWORDS
+      - remove hype STOPWORDS
       - collapse whitespace
     Returns "" if nothing usable remains.
     """
@@ -476,10 +476,10 @@ def canonical_title(raw_title: str) -> str:
 def canonical_summary(raw_summary: Optional[str]) -> str:
     """
     Canonicalize summary for dedupe:
-      - strip "read full story..."-style footers
+      - cut promo footers ("read full story...")
       - lowercase
       - strip punctuation/emojis
-      - drop hype STOPWORDS
+      - remove hype STOPWORDS
       - collapse whitespace
     """
     if not raw_summary:
@@ -500,14 +500,15 @@ def canonical_summary(raw_summary: Optional[str]) -> str:
 
 def _keywords_for_signature(canon_title: str, canon_summary: str) -> List[str]:
     """
-    Convert cleaned title+summary → normalized keyword bag:
-      - drop COMMON_STOPWORDS ("the", "and", ...)
-      - keep "day5" style tokens
-      - drop raw numeric/money tokens
+    Convert cleaned title+summary → normalized keyword bag.
+    Steps:
+      - drop COMMON_STOPWORDS ("the","and","to"...)
+      - KEEP "day5" style tokens (milestone context)
+      - DROP raw numeric money tokens ("120cr") so hourly BO bumps don't fork topics
       - stem verbs ("announced"→"announce")
-      - normalize names ("srk"→"shahrukh")
-      - semantic unify ("teaser"/"promo"→"trailer")
-      - collapse multi-word entities ("bigg boss 19"→"biggboss19")
+      - normalize shorthand names / IPL teams ("srk"→"shahrukh", "rcb"→"bangalore")
+      - unify teaser/promo/glimpse/sneak-peek → "trailer"
+      - collapse known multi-word franchises ("bigg boss 19"→"biggboss19")
     """
     blob = f"{canon_title} {canon_summary}".strip()
     tokens = blob.split()
@@ -518,20 +519,20 @@ def _keywords_for_signature(canon_title: str, canon_summary: str) -> List[str]:
         if not t:
             continue
 
-        # Drop generic glue words.
+        # toss glue words
         if t in _COMMON_STOPWORDS:
             continue
 
-        # Keep "dayN" tokens (they indicate milestones like Day 5 BO).
+        # keep "day5" tokens, they matter ("Day 5 box office")
         if _DAY_TOKEN_RE.match(t):
             stage1.append(t)
             continue
 
-        # Drop raw numeric/money tokens so "120cr" updates don't fork new topics.
+        # dump raw numeric/money tokens so "120cr" vs "121cr" doesn't create spam topics
         if _NUMERICY_RE.match(t):
             continue
 
-        # Normalize verbs / names / semantics.
+        # normalize tense / names / semantics
         t = _stem_token(t)
         t = _normalize_name(t)
         t = _semantic_normalize(t)
@@ -544,14 +545,14 @@ def _keywords_for_signature(canon_title: str, canon_summary: str) -> List[str]:
 
 def _build_topic_signature_blob(canon_title: str, canon_summary: str) -> str:
     """
-    Build a deterministic "topic blob":
-      - turn canon title+summary → normalized keywords
+    Build deterministic "topic blob":
+      - turn canon title+summary → normalized keyword list
       - uniq + sort alphabetically (order-insensitive)
     """
     kw = _keywords_for_signature(canon_title, canon_summary)
 
     if not kw:
-        # fallback so we still have something to hash
+        # fallback so we still have something to hash/compare
         base = f"title:{canon_title}||summary:{canon_summary}".strip()
         return base
 
@@ -562,8 +563,8 @@ def _build_topic_signature_blob(canon_title: str, canon_summary: str) -> str:
 def _are_topics_similar(topic_blob1: str, topic_blob2: str) -> bool:
     """
     Fuzzy match two topics.
-    Similarity = overlap / min(len(tokens1), len(tokens2))
-    If >= DUPLICATE_SIMILARITY_THRESHOLD (default 0.80) → duplicate.
+    similarity = overlap / min(len(tokens1), len(tokens2))
+    If >= DUPLICATE_SIMILARITY_THRESHOLD → treat as duplicate.
     """
     tokens1 = set(topic_blob1.split())
     tokens2 = set(topic_blob2.split())
@@ -582,8 +583,8 @@ def _are_topics_similar(topic_blob1: str, topic_blob2: str) -> bool:
 
 def story_signature(title: str, summary: Optional[str]) -> str:
     """
-    Helpers / tests:
-    Produce a deterministic short digest for a story based on TOPIC,
+    Helper for tests / debugging:
+    Produce a short digest for a story based on TOPIC,
     not literal wording.
     """
     canon_t = canonical_title(title)
@@ -641,8 +642,8 @@ def _build_kind_meta_fallback(
     release_date: Optional[str],
 ) -> Dict[str, Any]:
     """
-    Workers should attach story["kind_meta"] already. If they didn't,
-    synthesize a minimal structure so the frontend can render badges.
+    Workers should pass story["kind_meta"] already.
+    If not, synthesize a minimal structure so the frontend can render badges.
     """
     if kind == "trailer":
         return {
@@ -688,8 +689,7 @@ def _ensure_kind_meta(story: Dict[str, Any]) -> None:
 
 def _ensure_timestamps(story: Dict[str, Any]) -> None:
     """
-    normalized_at and ingested_at are important for sorting,
-    realtime fanout, client UI.
+    normalized_at / ingested_at are important for sort, push, realtime.
     Patch if workers forgot.
     """
     if not story.get("normalized_at"):
@@ -700,8 +700,9 @@ def _ensure_timestamps(story: Dict[str, Any]) -> None:
 
 def _add_frontend_aliases(story: Dict[str, Any]) -> None:
     """
-    Add camelCase mirrors for Flutter/mobile so they don't
-    need their own mapping layer.
+    Add camelCase mirrors for Flutter/web so the client doesn't need
+    to rename fields.
+    Also include safety/debug flags so the app *could* surface badges later.
     """
     # timestamps
     if "published_at" in story and "publishedAt" not in story:
@@ -736,23 +737,20 @@ def _add_frontend_aliases(story: Dict[str, Any]) -> None:
     if "posterUrl" not in story and story.get("thumbUrl"):
         story["posterUrl"] = story["thumbUrl"]
 
-    # safety flags (useful for audit/debug)
+    # safety flags (debug / future UI badges)
     if "is_risky" in story and "isRisky" not in story:
         story["isRisky"] = story["is_risky"]
     if "gossip_only" in story and "gossipOnly" not in story:
         story["gossipOnly"] = story["gossip_only"]
+    if "drama_signal" in story and "dramaSignal" not in story:
+        story["dramaSignal"] = story["drama_signal"]
 
 
 def _finalize_story_shape(story: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Prepare the story object we actually LPUSH to the feed.
-
-    We do NOT rewrite story["title"] or story["summary"] here.
-    Workers already sanitized them via:
-      - generate_safe_title()
-      - summarize_story_safe()
-    Those functions stripped hype, attributed risky claims
-    ("According to <domain>: ..."), and neutralized tone.
+    Prepare the object we LPUSH to FEED_KEY.
+    We DO NOT touch story["title"] or story["summary"] content.
+    (Attribution text like "According to <source>:" must stay.)
     """
     _ensure_verticals(story)
     _ensure_thumb_url(story)
@@ -768,7 +766,7 @@ def _finalize_story_shape(story: Dict[str, Any]) -> Dict[str, Any]:
     else:
         story["tags"] = None
 
-    # expose camelCase mirrors for the client
+    # mirror camelCase keys for client convenience
     _add_frontend_aliases(story)
 
     return story
@@ -782,7 +780,7 @@ def _publish_realtime(conn: Redis, story: Dict[str, Any]) -> None:
     """
     Broadcast minimal info about a NEW story:
       - Publish to FEED_PUBSUB (JSON payload)
-      - XADD to FEED_STREAM (capped for dashboards / logs)
+      - XADD to FEED_STREAM (capped) for dashboards / ops
     """
     try:
         payload = {
@@ -823,7 +821,7 @@ def _publish_realtime(conn: Redis, story: Dict[str, Any]) -> None:
 
 def _enqueue_push(conn: Redis, story: Dict[str, Any]) -> None:
     """
-    Optionally enqueue a downstream push notification job.
+    Optionally enqueue downstream push notification job.
     """
     if not ENABLE_PUSH_NOTIFICATIONS:
         return
@@ -847,22 +845,23 @@ def _enqueue_push(conn: Redis, story: Dict[str, Any]) -> None:
 
 def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "invalid"]:
     """
-    The ONLY gate that writes to the public feed.
+    Final gate. This is the ONLY code path that writes to the public feed.
 
     Flow:
-      0. Hard safety gate:
-           - if story["gossip_only"] is True → "invalid"
-             We skip pure gossip / leaked-chat / breakup-drama posts that
-             have no work/box office/OTT/release context.
+      0. Gossip gate:
+           - If story["gossip_only"] is True AND drama_signal <= 0 → reject.
+             (Pure personal/relationship gossip, leaked chats, etc.)
+           - If drama_signal > 0 (on-screen / professional context / match
+             argument / reality-show fight), allow it. It's "content", not
+             paparazzi stalking.
       1. Build normalized topic_blob from (title, summary).
       2. Compare topic_blob to existing blobs in Redis (SEEN_KEY):
            - If fuzzy-similar (>= threshold) to any → "duplicate"
-             We DO NOT publish again.
       3. Else:
-           a. Record this topic blob in SEEN_KEY (so future dupes are caught)
-           b. Finalize shape (verticals, thumb, timestamps, camelCase aliases)
+           a. Record this topic blob in SEEN_KEY
+           b. Finalize story shape (verticals, artwork, timestamps, camelCase, etc.)
            c. LPUSH story JSON to FEED_KEY
-           d. LTRIM FEED_KEY to MAX_FEED_LEN
+           d. LTRIM FEED_KEY
            e. Broadcast realtime + maybe push
            f. Return "accepted"
     """
@@ -871,8 +870,15 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
     raw_title = (story.get("title") or "").strip()
     raw_summary = story.get("summary")
 
-    # 0. reject pure gossip with no business/release angle
-    if story.get("gossip_only"):
+    # 0. gossip filter with on-screen exception
+    gossip_only = bool(story.get("gossip_only"))
+    drama_signal = story.get("drama_signal")
+    try:
+        drama_val = float(drama_signal) if drama_signal is not None else 0.0
+    except Exception:
+        drama_val = 0.0
+
+    if gossip_only and drama_val <= 0.0:
         print(f"[sanitizer] GOSSIP_ONLY reject -> {story.get('id')} | {raw_title}")
         return "invalid"
 
@@ -881,6 +887,7 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
     canon_s = canonical_summary(raw_summary)
 
     if not canon_t:
+        # If we can't canonicalize the title at all, it's unusable.
         print(f"[sanitizer] INVALID (no canonical title) -> {story.get('id')} | {raw_title}")
         return "invalid"
 
@@ -894,6 +901,15 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
         print(f"[sanitizer] ERROR reading SEEN_KEY: {e}")
         existing_topics = {}
 
+    # fast path: exact sig already present
+    if sig in existing_topics:
+        print(
+            f"[sanitizer] DUPLICATE (same sig {sig}) "
+            f"-> {story.get('id')} | {raw_title}"
+        )
+        return "duplicate"
+
+    # fuzzy path: compare with all prior blobs
     for existing_sig, existing_blob in existing_topics.items():
         if _are_topics_similar(topic_blob, existing_blob):
             print(
@@ -902,13 +918,13 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
             )
             return "duplicate"
 
-    # 3a. Remember this topic so follow-ups get suppressed.
+    # 3a. remember this topic blob so later repeats get dropped
     try:
         conn.hset(SEEN_KEY, sig, topic_blob)
     except Exception as e:
         print(f"[sanitizer] ERROR storing signature {sig}: {e}")
 
-    # 3b. finalize story so feed/api/mobile get consistent, app-ready fields
+    # 3b. finalize story so the app gets consistent, app-ready fields
     story = _finalize_story_shape(story)
 
     # 3c. LPUSH newest-first into FEED_KEY
@@ -924,7 +940,7 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
         except Exception as e:
             print(f"[sanitizer] ERROR LTRIM feed: {e}")
 
-    # 4. broadcast + optional push
+    # 4. realtime fanout + optional push
     _publish_realtime(conn, story)
     _enqueue_push(conn, story)
 
