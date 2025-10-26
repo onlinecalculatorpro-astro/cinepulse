@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # =====================================================================
 # Config / knobs
@@ -190,6 +190,48 @@ _HEADLINE_SPLIT_RE = re.compile(r"\s+(--|—|–|-{2,}|\||:)\s+")
 
 # strip filler words in titles too (same filler list as summary)
 _HEADLINE_FILLER_RE = _FILLER_WORDS_RE
+
+# =====================================================================
+# LEGAL / DEFAMATION / GOSSIP RISK REGEX
+# =====================================================================
+
+# Anything that sounds like crime / raid / lawsuit / scandal / morality play.
+_RISKY_RE = re.compile(
+    r"\b("
+    r"accused|allegations?|allegedly|arrested|detained|custody|in\s+custody|"
+    r"police\s+custody|f\.?\s*i\.?\s*r\.?|FIR|police\s+complaint|police\s+case|"
+    r"raid(?:ed)?|income\s+tax\s+raid|it\s+raid|ed\s+raid|ncb\s+raid|"
+    r"drug\s+case|drugs?\s+case|narcotics|money\s+laundering|scam|fraud|"
+    r"cheating\s+case|cheated|extortion|tax\s+evasion|"
+    r"harass(?:ment|ed)?|abuse|misconduct|assault|violence|molestation|"
+    r"backlash|boycott|trolled|slammed|controversy|controversial|leaked\s+chat|"
+    r"leaked\s+video|leaked\s+audio|private\s+video|affair"
+    r")\b",
+    re.I,
+)
+
+# Pure gossip / personal-life / outrage bait
+_GOSSIP_RE = re.compile(
+    r"\b("
+    r"affair|relationship|dating|spotted\s+together|"
+    r"cheated\s+on|cheating\s+rumors?|split|break\s*up|divorce|"
+    r"leaked\s+chat|leaked\s+video|private\s+video|"
+    r"boycott|backlash|trolled|slammed|controversy|controversial"
+    r")\b",
+    re.I,
+)
+
+# Signals that this story is about work / release / business,
+# which lets us keep it even if there is some "backlash" language.
+_WORK_INFO_RE = re.compile(
+    r"(box\s*office|collection[s]?\b|opening\s+weekend|₹\s?\d|"
+    r"\b\d+(\.\d+)?\s*(crore|cr)\b|day\s+\d+\b|"
+    r"release(?:d|s|ing)?\s+on|now\s+streaming|"
+    r"\bon\s+(Netflix|Prime\s+Video|Jio\s*Cinema|Hotstar|Sony\s*LIV|Apple\s+TV\+|Max)\b|"
+    r"\btrailer\b|\bteaser\b|\bcast\b|\bdirector\b|\bbox\s+office\b|"
+    r"\bruntime\b|\bbudget\b|\bscreens\b|\bshowtimes?\b|\boccupancy\b)",
+    re.I,
+)
 
 # =====================================================================
 # Small helpers
@@ -777,3 +819,195 @@ def generate_clean_title(raw_title: str, body_text: str) -> str:
         base = base[0].upper() + base[1:]
 
     return base
+
+
+# =====================================================================
+# LEGAL / SAFETY WRAPPERS
+# =====================================================================
+
+def _detect_risk_flags(title: str, body_text: str) -> Tuple[bool, bool]:
+    """
+    Detect if the story has legal/PR heat and whether it's basically just gossip.
+
+    Returns:
+        (is_risky, gossip_only)
+
+        is_risky:
+            True if mentions arrests, raids, FIR, leaked chats, boycott, etc.
+            Any stuff that can get us in trouble if we assert it as fact.
+
+        gossip_only:
+            True if it's basically relationship/backlash/leaked-chat drama
+            AND there's no work/box-office/release/platform info to ground it
+            in professional reporting.
+    """
+    hay = f"{title or ''}\n{body_text or ''}"
+
+    is_risky = bool(_RISKY_RE.search(hay))
+
+    gossip_hit = bool(_GOSSIP_RE.search(hay))
+    has_work_info = bool(_WORK_INFO_RE.search(hay))
+
+    gossip_only = gossip_hit and not has_work_info
+
+    return (is_risky, gossip_only)
+
+
+def _soften_phrases(text: str) -> str:
+    """
+    Tone down language to avoid sounding like we're asserting guilt,
+    huge moral outrage, etc. We lean on 'reportedly', 'online reaction',
+    'dispute', 'criticized', etc.
+    """
+    if not text:
+        return text or ""
+
+    repls: List[Tuple[re.Pattern, str]] = [
+        (re.compile(r"\bwas\s+arrested\b", re.I), "was reportedly arrested"),
+        (re.compile(r"\bwere\s+arrested\b", re.I), "were reportedly arrested"),
+        (re.compile(r"\bwas\s+detained\b", re.I), "was reportedly detained"),
+        (re.compile(r"\bwere\s+detained\b", re.I), "were reportedly detained"),
+        (re.compile(r"\bin\s+custody\b", re.I), "in custody, according to reports"),
+        (re.compile(r"\bfacing\s+massive\s+backlash\b", re.I), "drew online reaction"),
+        (re.compile(r"\bfaces\s+massive\s+backlash\b", re.I), "drew online reaction"),
+        (re.compile(r"\bfaces\s+backlash\b", re.I), "drew online reaction"),
+        (re.compile(r"\bmassive\s+backlash\b", re.I), "online reaction"),
+        (re.compile(r"\bhuge\s+controversy\b", re.I), "a dispute"),
+        (re.compile(r"\bcontroversy\b", re.I), "a dispute"),
+        (re.compile(r"\bcontroversial\b", re.I), "disputed"),
+        (re.compile(r"\bslammed\b", re.I), "criticized"),
+        (re.compile(r"\bwent\s+viral\b", re.I), "was widely shared"),
+        (re.compile(r"\b(leaked\s+chat)\b", re.I), "what is described as a leaked chat"),
+        (re.compile(r"\b(leaked\s+video)\b", re.I), "what is described as a leaked video"),
+    ]
+
+    out = text
+    for rx, rep in repls:
+        out = rx.sub(rep, out)
+
+    # Collapse doubled spaces from replacements
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out
+
+
+def _summary_attribution_prefix(source_domain: Optional[str], source_type: Optional[str]) -> str:
+    """
+    Build a short prefix for risky stories so we attribute, not assert.
+    """
+    st = (source_type or "").lower()
+    dom = (source_domain or "").strip()
+
+    if st.startswith("youtube"):
+        return "A YouTube video claims:"
+    if dom:
+        return f"According to {dom}:"
+    return "According to the report:"
+
+
+def _headline_attribution_prefix(source_domain: Optional[str], source_type: Optional[str]) -> str:
+    """
+    Build an even shorter prefix for headlines (char budget matters).
+    We still try to indicate attribution instead of asserting.
+    """
+    st = (source_type or "").lower()
+    dom = (source_domain or "").strip()
+
+    if st.startswith("youtube"):
+        return "YouTube video claims:"
+    if dom:
+        # `example.com:` is short and clearly attributional
+        return f"{dom}:"
+    return "Report:"
+
+
+def summarize_story_safe(
+    title: str,
+    body_text: str,
+    source_domain: Optional[str] = None,
+    source_type: Optional[str] = None,
+) -> Tuple[str, bool, bool]:
+    """
+    Safer wrapper around summarize_story().
+
+    Steps:
+    - Build normal factual ~100-word paragraph.
+    - Detect 'is_risky' and 'gossip_only'.
+    - If is_risky, soften phrasing + prepend attribution
+      ("According to <domain>: ...", "A YouTube video claims: ...").
+
+    Returns:
+        (safe_summary, is_risky, gossip_only)
+    """
+    base_summary = summarize_story(title, body_text)
+    is_risky, gossip_only = _detect_risk_flags(title, body_text)
+
+    safe_summary = base_summary
+
+    if is_risky:
+        safe_summary = _soften_phrases(safe_summary)
+
+        prefix = _summary_attribution_prefix(source_domain, source_type)
+        # If base_summary already begins with "According to" etc.
+        # don't double-prefix. We'll detect a leading "According to".
+        if not re.match(r"^(According to|A YouTube video claims:)", safe_summary, re.I):
+            safe_summary = f"{prefix} {safe_summary}"
+
+    # Final whitespace cleanup
+    safe_summary = re.sub(r"\s{2,}", " ", safe_summary).strip()
+
+    return (safe_summary, bool(is_risky), bool(gossip_only))
+
+
+def generate_safe_title(
+    raw_title: str,
+    body_text: str,
+    source_domain: Optional[str] = None,
+    source_type: Optional[str] = None,
+) -> Tuple[str, bool, bool]:
+    """
+    Safer wrapper around generate_clean_title().
+
+    Steps:
+    - Build normal cleaned, professional headline.
+    - Detect 'is_risky' and 'gossip_only'.
+    - If is_risky, prefix attribution ("YouTube video claims:", "<domain>:")
+      so we don't assert the claim as our own.
+    - Enforce HEADLINE_MAX_CHARS after adding prefix.
+
+    Returns:
+        (safe_headline, is_risky, gossip_only)
+    """
+    base_headline = generate_clean_title(raw_title, body_text)
+
+    is_risky, gossip_only = _detect_risk_flags(raw_title, body_text)
+
+    safe_headline = base_headline
+
+    if is_risky:
+        prefix = _headline_attribution_prefix(source_domain, source_type)
+
+        # avoid double-prefix if the cleaned title already starts with that domain or "YouTube"
+        already_attr = False
+        if prefix.endswith(":"):
+            core_prefix = prefix[:-1].strip().lower()
+        else:
+            core_prefix = prefix.strip().lower()
+
+        first_words = " ".join(base_headline.lower().split()[:3])
+        if core_prefix and core_prefix in first_words:
+            already_attr = True
+        if base_headline.lower().startswith("according to"):
+            already_attr = True
+        if base_headline.lower().startswith("a youtube video claims"):
+            already_attr = True
+
+        if not already_attr:
+            safe_headline = f"{prefix} {base_headline}"
+
+        # length cap again after prefix
+        safe_headline = _shorten_title_chars(safe_headline, HEADLINE_MAX_CHARS)
+
+        # clean sloppy trailing punctuation again
+        safe_headline = re.sub(r"[.:;,\-–—]+$", "", safe_headline).strip()
+
+    return (safe_headline.strip(), bool(is_risky), bool(gossip_only))
