@@ -1,17 +1,19 @@
 // lib/features/story/story_card.dart
 //
-// Final layout:
+// FINAL LAYOUT:
 //
-// Row A: "<Kind> • <publishedAt timestamp>"
-// Row B: second timestamp (ingested/normalizedAt with +gap)
-// Row C: title
+// Row A: "<Kind>  [🕐 pill: publishedAt]"
+// Row B: [🕐 pill: addedAt (+gap)]
+// Row C: Title (3 lines max)
 // Row D: CTA row (Watch/Read + Save + Share)
-// Row E: tiny footer attribution ("Source: koimoi.com")
+// Row E: "Source: <sourceDomain OR source>"  (single value, no slash combo)
 //
-// We DO NOT show "Source:" in Row A anymore. Source only appears once,
-// in Row E (small, muted).
-//
-// No summary in card. Hero image logic unchanged.
+// Rules:
+// - Row A should SHOW the clock emoji pill again for the FIRST timestamp.
+// - Row B keeps the second timestamp pill like before.
+// - Bottom attribution should NOT combine both source + domain with "/".
+//   We show sourceDomain if present, else source.
+// - Everything else stays the same.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -30,7 +32,7 @@ import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
 import 'story_details.dart';
-import 'story_image_url.dart'; // normalized poster/thumbnail resolver
+import 'story_image_url.dart'; // hero/thumbnail resolver
 
 class StoryCard extends StatefulWidget {
   const StoryCard({super.key, required this.story});
@@ -59,9 +61,6 @@ class _StoryCardState extends State<StoryCard> {
     return u;
   }
 
-  // clean source string for comparisons
-  String _cleanSource(String? s) => (s ?? '').trim();
-
   bool get _isWatchCta {
     if (_videoUrl != null) return true;
 
@@ -70,7 +69,7 @@ class _StoryCardState extends State<StoryCard> {
 
     final byType = widget.story.kind.toLowerCase() == 'trailer';
 
-    final bySource = _cleanSource(widget.story.source).toLowerCase() == 'youtube';
+    final bySource = (widget.story.source ?? '').toLowerCase() == 'youtube';
 
     return byHost || byType || bySource;
   }
@@ -132,13 +131,12 @@ class _StoryCardState extends State<StoryCard> {
   // Formatting helpers
   // ------------------------------------------------------------------
 
-  // Month short names for timestamp formatting
   static const List<String> _mon = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
-  // 26 Oct 2025, 10:44 PM
+  // e.g. "26 Oct 2025, 11:36 PM"
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
@@ -151,7 +149,7 @@ class _StoryCardState extends State<StoryCard> {
     return '$day $m $y, $h:$mm $ap';
   }
 
-  // (+6h) / (+12h) etc
+  // "(+33h)" etc
   String _formatGap(Duration d) {
     final abs = d.isNegative ? -d : d;
     if (abs.inMinutes < 60) return '${abs.inMinutes}m';
@@ -159,7 +157,7 @@ class _StoryCardState extends State<StoryCard> {
     return '${abs.inDays}d';
   }
 
-  // Small row with clock + text
+  // Small pill row with emoji + timestamp text
   Widget _timePill({required String emoji, required String text}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -173,22 +171,20 @@ class _StoryCardState extends State<StoryCard> {
           child: _Emoji(emoji: emoji, size: 14),
         ),
         const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.grey[400],
-              fontSize: 13.5,
-            ),
+        Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: Colors.grey[400],
+            fontSize: 13.5,
           ),
         ),
       ],
     );
   }
 
-  // Capitalize kind for display ("News", "OTT", "Release", "Trailer")
+  // Capitalize kind
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -196,30 +192,13 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // Row A text: "News • 26 Oct 2025, 11:27 PM"
-  String _rowAText({
-    required String kind,
-    required String? published,
-  }) {
-    final kd = _kindDisplay(kind).trim();
-    final ts = (published ?? '').trim();
-    if (kd.isEmpty && ts.isEmpty) return '';
-    if (kd.isEmpty) return ts;
-    if (ts.isEmpty) return kd;
-    return '$kd • $ts';
-  }
-
-  // Bottom attribution "Source: koimoi.com"
-  String _sourceFooter() {
-    final src = _cleanSource(widget.story.source);
-    final dom = _cleanSource(widget.story.sourceDomain);
-    if (src.isNotEmpty && dom.isNotEmpty) {
-      // avoid "koimoi.com / koimoi.com"
-      final same = src.toLowerCase() == dom.toLowerCase();
-      return 'Source: ${same ? src : '$src / $dom'}';
-    }
-    if (src.isNotEmpty) return 'Source: $src';
-    if (dom.isNotEmpty) return 'Source: $dom';
+  // Bottom "Source: <x>" logic.
+  // Use domain if we have it, else fall back to source.
+  String _attribution(Story s) {
+    final dom = (s.sourceDomain ?? '').trim();
+    if (dom.isNotEmpty) return dom;
+    final src = (s.source ?? '').trim();
+    if (src.isNotEmpty) return src;
     return '';
   }
 
@@ -231,7 +210,7 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
 
-    // --- timestamps ---
+    // timestamps
     final DateTime? publishedAt = widget.story.publishedAt;
     final DateTime? addedAt =
         widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
@@ -246,23 +225,19 @@ class _StoryCardState extends State<StoryCard> {
                 : '')
         : null;
 
-    // Row A label
-    final rowAText = _rowAText(kind: kind, published: publishedText);
-
-    // bottom disclosure
-    final footerText = _sourceFooter();
-
     final hasUrl = _linkUrl != null;
 
-    // Unified hero/thumbnail URL
+    // hero/thumbnail
     final imageUrl = resolveStoryImageUrl(widget.story);
+
+    // attribution for footer
+    final srcText = _attribution(widget.story);
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover
-          ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0))
-          : null,
+      transform:
+          _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
       decoration: BoxDecoration(
         color: isDark
             ? const Color(0xFF181E2A).withOpacity(0.92)
@@ -296,9 +271,7 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ------------------------------------------------------------------
-                  // IMAGE / POSTER
-                  // ------------------------------------------------------------------
+                  // IMAGE
                   SizedBox(
                     height: mediaH,
                     child: Hero(
@@ -384,35 +357,48 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // ------------------------------------------------------------------
-                  // META, TIMESTAMPS, TITLE, CTA, FOOTER
-                  // ------------------------------------------------------------------
+                  // BODY
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Row A: "News • 26 Oct 2025, 11:27 PM"
-                          if (rowAText.isNotEmpty)
-                            Text(
-                              rowAText,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.w600,
+                          // Row A:
+                          // "<Kind>  [🕐 publishedAt]"
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Text(
+                                _kindDisplay(kind),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.grey[400],
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
+                              if (publishedText != null) ...[
+                                const SizedBox(width: 10),
+                                Flexible(
+                                  child: _timePill(
+                                    emoji: '🕐',
+                                    text: publishedText!,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
 
                           const SizedBox(height: 6),
 
-                          // Row B: second timestamp (ingested/normalized +gap)
+                          // Row B:
+                          // second timestamp with gap, still pill
                           if (addedText != null)
                             _timePill(
                               emoji: '🕐',
-                              text: addedText,
+                              text: addedText!,
                             ),
 
                           const SizedBox(height: 8),
@@ -438,7 +424,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const Spacer(),
 
-                          // Row D: CTA row (Watch/Read + Save + Share)
+                          // Row D: CTA row
                           Row(
                             children: [
                               Expanded(
@@ -510,18 +496,17 @@ class _StoryCardState extends State<StoryCard> {
                             ],
                           ),
 
-                          // Row E: footer attribution (tiny)
-                          if (footerText.isNotEmpty) ...[
+                          // Row E: bottom attribution
+                          if (srcText.isNotEmpty) ...[
                             const SizedBox(height: 8),
                             Text(
-                              footerText,
+                              'Source: $srcText',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: 12,
-                                height: 1.3,
-                                fontWeight: FontWeight.w500,
                                 color: Colors.grey[500],
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
                           ],
