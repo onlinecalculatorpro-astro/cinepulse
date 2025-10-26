@@ -7,16 +7,19 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse, unquote
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-router = APIRouter(prefix="/v1", tags=["img"])
+router = APIRouter(
+    prefix="/v1",
+    tags=["img"],
+)
 
 # ------------------------------------------------------------------------------
 # Tunables / safety / perf knobs
 # ------------------------------------------------------------------------------
 
-# Timeouts: stay snappy, don't hang the API worker if origin is slow
+# Network timeouts: keep workers from hanging
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
 TOTAL_TIMEOUT = httpx.Timeout(
@@ -27,42 +30,54 @@ TOTAL_TIMEOUT = httpx.Timeout(
     pool=CONNECT_TIMEOUT,
 )
 
-# Don't chase infinite redirect loops
+# Redirect safety
 MAX_REDIRECTS = 5
 
-# Cache aggressively at the edge/CDN (24h)
+# Tell browsers / CDN edges "you can cache this thumbnail for 24h"
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
-# Pretend to be a normal desktop Chrome so CDNs don't serve us "bot block" JPGs
+# Pretend to be a normal browser, not python-httpx
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
-# Obvious non-image traps we don't want to proxy (login pages, logout actions, etc.)
+# Obvious bad paths we never want to proxy
 _BAD_PATH_PATTERNS = re.compile(
     r"/wp-login\.php|action=logout",
     flags=re.IGNORECASE,
 )
 
+# Hosts we refuse to fetch from (to avoid loops / internal hits)
+# NOTE: keep this list in sync with your public API hostnames / internal hostnames.
+_BLOCKED_HOSTS = {
+    "api.onlinecalculatorpro.org",
+    "localhost",
+    "localhost.localdomain",
+    "127.0.0.1",
+    "0.0.0.0",
+}
+
+
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
 
-def _host_is_private_ip(host: str) -> bool:
+def _host_is_private_ip_literal(host: str) -> bool:
     """
-    SSRF guard #1: if the caller gives us a literal IP, do not allow RFC1918,
-    loopback, link-local, etc.
-
-    We intentionally DO NOT resolve DNS here. We just block direct IPs.
+    SSRF guard #1:
+    If the caller gives us a literal IP address, reject RFC1918, loopback,
+    link-local, reserved, etc.
+    We *do not* DNS-resolve hostnames here. This only fires if `host`
+    itself parses as an IP string.
     """
     if not host:
         return True
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        # it's a hostname, not an IP literal -> allow for now
+        # not an IP literal, probably a hostname -> handled later
         return False
 
     return (
@@ -76,8 +91,8 @@ def _host_is_private_ip(host: str) -> bool:
 
 def _looks_like_image(content_type: Optional[str]) -> bool:
     """
-    We only stream if the upstream responded with an image/* content-type
-    (or a very generic 'application/octet-stream' which a lot of CDNs use for JPGs).
+    We only stream if upstream says it's an image/* OR it's the infamous
+    'application/octet-stream' that a lot of CDNs use for jpg/webp.
     """
     if not content_type:
         return False
@@ -85,40 +100,57 @@ def _looks_like_image(content_type: Optional[str]) -> bool:
     return ct.startswith("image/") or ct == "application/octet-stream"
 
 
-def _build_headers(host: str, alt: bool = False) -> dict[str, str]:
+def _build_headers_for_host(origin_host: str, *, alt: bool = False) -> dict[str, str]:
     """
-    alt=False:
-        - Realistic browser Accept + Referer=https://<host>/ to please
-          WordPress/CDNs that hotlink-protect unless you "came" from them.
-    alt=True:
-        - Fallback headers without Referer for CDNs that 403 on spoofed referers.
+    attempt 0 (alt=False):
+      - Spoof Referer=https://<origin_host>/ to bypass hotlink protection.
+    attempt 1 (alt=True):
+      - Drop Referer, slightly looser Accept.
     """
     if not alt:
         return {
             "User-Agent": BROWSER_UA,
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Referer": f"https://{host}/",
+            "Referer": f"https://{origin_host}/",
             "Connection": "keep-alive",
         }
-    else:
-        return {
-            "User-Agent": BROWSER_UA,
-            "Accept": "image/*,*/*;q=0.5",
-            "Accept-Language": "en-US,en;q=0.8",
-            "Connection": "keep-alive",
-        }
+    return {
+        "User-Agent": BROWSER_UA,
+        "Accept": "image/*,*/*;q=0.5",
+        "Accept-Language": "en-US,en;q=0.8",
+        "Connection": "keep-alive",
+    }
 
 
-def _parse_source_url(raw_u: str) -> Tuple[str, str, str]:
+def _is_blocked_hostname(host: str) -> bool:
     """
-    Validate & normalize ?u=...
+    SSRF guard #2:
+    - don't allow direct hits back to ourselves / localhost / 127.0.0.1 etc.
+    - cheap sanity filter to avoid proxy loops like:
+        /v1/img?u=https://api.onlinecalculatorpro.org/v1/img?u=...
+    """
+    if not host:
+        return True
+    h = host.lower().strip()
+    if h in _BLOCKED_HOSTS:
+        return True
+    # also block subdomains of blocked hosts
+    for b in _BLOCKED_HOSTS:
+        if h.endswith("." + b):
+            return True
+    return False
+
+
+def _parse_and_validate_source_url(raw_u: str) -> Tuple[str, str, str]:
+    """
+    Take the ?u=... param from the query string, URL-decode it, and vet it.
     Returns (full_url, scheme, host) or raises HTTPException.
     """
     if not raw_u:
-        raise HTTPException(status_code=422, detail="missing 'u'")
+        raise HTTPException(status_code=422, detail="missing 'u' param")
 
-    # We expect frontend to send encodeURIComponent(url); undo that.
+    # Frontend sends encodeURIComponent(url)
     full_url = unquote(raw_u).strip()
     p = urlparse(full_url)
 
@@ -128,15 +160,15 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str]:
     if not p.netloc:
         raise HTTPException(status_code=400, detail="invalid URL")
 
-    host = p.hostname or ""
+    host = (p.hostname or "").strip()
 
-    # SSRF guard #2: block localhost/0.0.0.0/etc. as literal hosts.
-    if host in {"localhost", "localhost.localdomain"}:
-        raise HTTPException(status_code=400, detail="private addresses are not allowed")
-    if _host_is_private_ip(host):
-        raise HTTPException(status_code=400, detail="private addresses are not allowed")
+    # Block localhost / 127.x / our own domain / obvious internal nets
+    if _is_blocked_hostname(host):
+        raise HTTPException(status_code=400, detail="forbidden host")
+    if _host_is_private_ip_literal(host):
+        raise HTTPException(status_code=400, detail="forbidden host (private ip literal)")
 
-    # Drop super-obvious trap paths (login, logout, etc.). We'll just tell caller "not an image".
+    # Extra: short-circuit obvious "login/logged-out" traps
     if _BAD_PATH_PATTERNS.search(p.path or ""):
         raise HTTPException(status_code=404, detail="not an image")
 
@@ -149,24 +181,22 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str]:
 
 @router.get("/img")
 async def proxy_img(
-    u: str = Query(..., description="Absolute image URL, URL-encoded"),
-) -> Response:
+    u: str = Query(..., description="Absolute image URL, URL-encoded with encodeURIComponent()"),
+):
     """
-    Image proxy used by the feed.
+    Public image proxy.
+    - Browser never hits random external domains. It only hits us.
+    - We attach Referer/User-Agent to dodge hotlink protection.
+    - We block internal/loopback/private targets to avoid SSRF.
+    - We stream back bytes with CORS + long cache headers.
 
-    Why it exists:
-    - We rewrite thumb_url/poster_url to hit /v1/img?u=...
-      so the browser only ever requests our domain → CORS-safe.
-    - We attach Referer/User-Agent so hotlink-protected WordPress CDNs still serve.
-    - We refuse obvious SSRF targets (localhost, 10.x.x.x, etc.).
-    - We stream bytes without buffering the entire image in RAM.
-
-    Behavior:
-    - 404 for "not image", "blocked", "login" etc.
-    - 502 only for true upstream errors/timeouts.
+    Responses:
+      200: image bytes stream + image/* content-type
+      404: upstream is not an image / anti-hotlink / not found / login page
+      502: true upstream failure or timeout
     """
 
-    full_url, _scheme, host = _parse_source_url(u)
+    full_url, _scheme, host = _parse_and_validate_source_url(u)
 
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
@@ -177,54 +207,61 @@ async def proxy_img(
             max_connections=20,
         ),
     ) as client:
-        # Attempt #1: send with Referer spoofed to the origin host
-        # Attempt #2: retry w/o Referer if origin 403s/401s/etc.
+
+        # attempt order:
+        #   1) send Referer spoofed to that host
+        #   2) retry without Referer if we got blocked (401/403/451)
         for attempt in (0, 1):
             try:
-                r = await client.get(full_url, headers=_build_headers(host, alt=bool(attempt)))
+                resp_up = await client.get(
+                    full_url,
+                    headers=_build_headers_for_host(host, alt=bool(attempt)),
+                )
             except httpx.RequestError:
-                # network timeout / DNS issue / refused
+                # DNS fail / timeout / TCP reset / etc.
                 if attempt == 0:
-                    # retry once with alt headers
                     continue
                 raise HTTPException(status_code=502, detail="upstream request failed")
 
-            # Retry once on "forbidden" style 4xx (CDN anti-hotlinking)
-            if r.status_code in (401, 403, 451) and attempt == 0:
+            # retry once on "forbidden" style codes from CDNs
+            if resp_up.status_code in (401, 403, 451) and attempt == 0:
                 continue
 
-            # Final response handling
-            if r.status_code >= 500:
-                raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
-            if r.status_code == 404:
+            # handle final upstream status
+            if resp_up.status_code >= 500:
+                raise HTTPException(status_code=502, detail=f"upstream {resp_up.status_code}")
+            if resp_up.status_code == 404:
                 raise HTTPException(status_code=404, detail="not found")
-            if r.status_code >= 400:
-                # For remaining 4xx: treat it as "not available"
-                raise HTTPException(status_code=404, detail=f"blocked ({r.status_code})")
+            if resp_up.status_code >= 400:
+                # treat remaining 4xx as "image unavailable"
+                raise HTTPException(status_code=404, detail=f"blocked ({resp_up.status_code})")
 
-            ct = r.headers.get("Content-Type")
-            if not _looks_like_image(ct):
+            ctype = resp_up.headers.get("Content-Type", "")
+            if not _looks_like_image(ctype):
                 raise HTTPException(status_code=404, detail="not an image")
 
-            # Stream the upstream body directly to client.
-            resp = StreamingResponse(
-                r.aiter_bytes(),
+            # Stream upstream body directly
+            out = StreamingResponse(
+                resp_up.aiter_bytes(),
                 status_code=200,
-                media_type=ct.split(";", 1)[0] if ct else "application/octet-stream",
+                media_type=ctype.split(";", 1)[0] if ctype else "application/octet-stream",
             )
 
-            # Propagate useful headers
-            if "Content-Length" in r.headers:
-                resp.headers["Content-Length"] = r.headers["Content-Length"]
+            # Surface content-length if upstream gave one
+            cl = resp_up.headers.get("Content-Length")
+            if cl:
+                out.headers["Content-Length"] = cl
 
-            # Cache hint so CDNs/browsers keep thumbnails for a day
-            resp.headers["Cache-Control"] = CACHE_CONTROL
+            # Strong cache hint downstream
+            out.headers["Cache-Control"] = CACHE_CONTROL
 
-            # CORS for <img src="..."> across any origin
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            resp.headers["Access-Control-Allow-Credentials"] = "true"
+            # Wide-open CORS so <img src> and even fetch() from web works
+            out.headers["Access-Control-Allow-Origin"] = "*"
+            out.headers["Access-Control-Allow-Credentials"] = "true"
+            out.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            out.headers["Access-Control-Allow-Headers"] = "*"
 
-            return resp
+            return out
 
-    # Should never get here logically, but just in case.
+    # If we somehow escaped the loop with no return, treat as upstream failure
     raise HTTPException(status_code=502, detail="unexpected proxy failure")
