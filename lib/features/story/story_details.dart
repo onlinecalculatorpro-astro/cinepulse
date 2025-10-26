@@ -1,12 +1,12 @@
 // lib/features/story/story_details.dart
 //
-// Change: add legal/source attribution footer at the VERY BOTTOM
-// of the details view, small + muted text:
-//
-//   Source: YouTube / BollywoodHungama.com
-//
-// Sits under the CTA row, above the bottom padding.
-// Nothing else in layout/logic changes.
+// Updates in this version:
+// 1. Footer attribution no longer shows "rss:" prefix. We clean it.
+//    e.g. "rss:bollywoodhungama.com" -> "bollywoodhungama.com".
+//    Format is still: "Source: YouTube / BollywoodHungama.com"
+// 2. The big red NEWS badge is hidden for plain news stories,
+//    because the row already says "News • <timestamp>".
+//    We still show badges for non-news kinds like RELEASE / OTT / TRAILER.
 
 import 'dart:math' as math;
 
@@ -80,7 +80,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     // prefer our deep link
     final deep = deepLinkForStoryId(widget.story.id).toString();
     if (deep.isNotEmpty) return deep;
-    // fallback to source link
+    // fallback to upstream link
     final link = _primaryUrl?.toString();
     return (link != null && link.isNotEmpty) ? link : widget.story.title;
   }
@@ -150,12 +150,25 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     }
   }
 
+  /* ---------------- Source attribution helpers ---------------- */
+
+  // remove leading "rss:" or "rss " or "rss-" etc.
+  String _cleanupSourcePiece(String s) {
+    var out = s.trim();
+    out = out.replaceFirst(RegExp(r'^\s*rss[:\s-]+', caseSensitive: false), '');
+    return out.trim();
+  }
+
   // Build "YouTube / BollywoodHungama.com" style attribution for footer
   String _sourceAttribution(Story s) {
-    final a = (s.source ?? '').trim();
-    final b = (s.sourceDomain ?? '').trim();
+    final aRaw = (s.source ?? '').trim();
+    final bRaw = (s.sourceDomain ?? '').trim();
+
+    final a = _cleanupSourcePiece(aRaw);
+    final b = _cleanupSourcePiece(bRaw);
+
     if (a.isNotEmpty && b.isNotEmpty) {
-      // Avoid duplicate if b already basically == a
+      // Avoid duplicating if they basically match each other
       final al = a.toLowerCase();
       final bl = b.toLowerCase();
       if (bl.contains(al) || al.contains(bl)) {
@@ -179,8 +192,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // smarter header height:
-    // keep ~16:9-ish hero, cap height, expand if player visible
+    // hero height logic (~16:9, capped, expands if inline player is visible)
     final desired16x9 = screenW * 9.0 / 16.0;
     final maxHeightCap = isPhone ? 340.0 : 400.0;
     final baseHeroHeight = math.min(desired16x9, maxHeightCap);
@@ -189,8 +201,13 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
         ? (desired16x9 + (isPhone ? 96.0 : 120.0))
         : baseHeroHeight;
 
-    // attribution footer string
+    // cleaned attribution footer string
     final attribution = _sourceAttribution(widget.story);
+
+    // decide if we should draw the big colored badge:
+    // hide for plain "news"
+    final storyKindDisplay = widget.story.kindLabel ?? widget.story.kind;
+    final kindIsNews = storyKindDisplay.toLowerCase() == 'news';
 
     return Scaffold(
       body: CustomScrollView(
@@ -286,9 +303,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                         spacing: 8,
                         runSpacing: 6,
                         children: [
-                          KindBadge(
-                            widget.story.kindLabel ?? widget.story.kind,
-                          ),
+                          // only show kind badge when it's not plain News
+                          if (!kindIsNews)
+                            KindBadge(storyKindDisplay),
                           OttBadge.fromStory(
                             widget.story,
                             dense: true,
@@ -395,7 +412,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                         ],
                       ),
 
-                      // ↓↓↓ NEW: legal/source attribution footer ↓↓↓
+                      // legal / source attribution footer
                       if (attribution.isNotEmpty) ...[
                         const SizedBox(height: 24),
                         Text(
