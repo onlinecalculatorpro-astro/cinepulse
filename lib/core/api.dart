@@ -2,17 +2,20 @@
 //
 // CinePulse HTTP client & endpoints
 //
-// What this file does:
-// - Figures out which backend URL to talk to (prod by default).
-// - Wraps HTTP with retry/backoff and friendly error messages.
-// - Exposes high-level helpers like fetchFeed(), fetchStory(), etc.
-// - Now supports cursor pagination from /v1/feed.
+// Responsibilities:
+// - Resolve which backend base URL to talk to (prod by default).
+// - Provide typed helpers to call the CinePulse API.
+// - Handle retry/backoff, decode responses, and pagination.
+// - Build deep links for story pages.
+// - Build CORS-safe thumbnail URLs using the backend /v1/img proxy.
 //
-// New in this version:
-// - Safe storyId URL-encoding in fetchStory()
-// - Cursor-aware fetchFeedPage()
-// - ApiPage model { items, nextCursor }
-// - Debug-friendly "flavor" string
+// Production changes:
+// - kApiBaseUrl is now the single source of truth for ALL network access
+//   including thumbnails (proxyImageUrl()).
+// - proxyImageUrl() ALWAYS points to API_BASE_URL/v1/img?u=..., never the
+//   Netlify origin.
+// - We send X-CinePulse-Client and nginx is configured to allow it in CORS.
+// - We keep cursor pagination and ApiPage model.
 
 import 'dart:async';
 import 'dart:convert';
@@ -23,27 +26,25 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 
 /// ------------------------------------------------------------
-/// Base URLs (prod by default; NO implicit localhost unless asked)
+/// Resolve base URLs
 /// ------------------------------------------------------------
 
 String _resolveApiBase() {
   // Highest priority: explicit build-time override
-  //   --dart-define=API_BASE_URL=https://api.my-prod.com
+  //   flutter build web --dart-define=API_BASE_URL=https://api.onlinecalculatorpro.org
   const fromDefine = String.fromEnvironment('API_BASE_URL');
   if (fromDefine.isNotEmpty) return fromDefine;
 
-  // Dev override:
+  // Dev override for LAN box:
   //   --dart-define=DEV_SERVER=http://192.168.1.50:8000
   const devServer = String.fromEnvironment('DEV_SERVER');
   if (devServer.isNotEmpty) {
     return devServer.startsWith('http') ? devServer : 'http://$devServer';
   }
 
-  // Opt-in local mode:
+  // Local emulator fallback (opt-in):
   //   --dart-define=USE_LOCAL_DEV=true
-  //
-  // We default Android emulator style (10.0.2.2). If you're on iOS sim,
-  // just use DEV_SERVER above instead.
+  // We assume Android emulator (10.0.2.2 -> host machine).
   const useLocal = String.fromEnvironment('USE_LOCAL_DEV');
   if (useLocal.toLowerCase() == 'true' || useLocal == '1') {
     return 'http://10.0.2.2:8000';
@@ -54,23 +55,23 @@ String _resolveApiBase() {
 }
 
 String _resolveDeepBase() {
-  // You can override deep link base at build time if needed:
+  // Optional override:
   //   --dart-define=DEEP_LINK_BASE=https://cinepulse.app/#/s
   const fromDefine = String.fromEnvironment('DEEP_LINK_BASE');
   if (fromDefine.isNotEmpty) return fromDefine;
 
-  // Web builds can just reuse their current origin.
+  // On web builds, default deep link base to current origin.
   if (kIsWeb) return '${Uri.base.origin}/#/s';
 
-  // Fallback for mobile builds.
+  // Mobile fallback:
   return 'https://cinepulse.netlify.app/#/s';
 }
 
-/// Public constants: most of the app should refer to these.
+/// Public bases used everywhere else.
 final String kApiBaseUrl = _resolveApiBase();
 final String kDeepLinkBase = _resolveDeepBase();
 
-/// Optional helper that's nice in debug UIs.
+/// A small flavor string you can show in debug banners / settings pages.
 String get currentApiFlavor {
   if (kApiBaseUrl.contains('10.0.2.2')) return 'local-dev';
   if (kApiBaseUrl.contains('192.168.')) return 'lan-dev';
@@ -78,14 +79,32 @@ String get currentApiFlavor {
   return 'prod';
 }
 
-/// Build a CinePulse deep link to open a story inside the app.
+/// Build a CinePulse deep link to open a story inside the app UI.
 Uri deepLinkForStoryId(String storyId) {
   final encoded = Uri.encodeComponent(storyId);
   return Uri.parse('$kDeepLinkBase/$encoded');
 }
 
 /// ------------------------------------------------------------
-/// ApiPage: page of feed results w/ cursor for "load more"
+/// Image proxy helper
+///
+/// Web browsers block <img src="https://i.ytimg.com/..."> if the remote
+/// host doesn't send CORS headers. We solve this by routing all images
+/// through our API's /v1/img proxy, which DOES send CORS. This MUST use
+/// the API domain, not the Netlify origin, otherwise you get 404 + CORS
+/// errors like we saw in DevTools.
+///
+/// Usage in widgets:
+///   Image.network(proxyImageUrl(story.thumbUrl))
+/// ------------------------------------------------------------
+String proxyImageUrl(String rawImageUrl) {
+  if (rawImageUrl.isEmpty) return '';
+  final encoded = Uri.encodeQueryComponent(rawImageUrl);
+  return '$kApiBaseUrl/v1/img?u=$encoded';
+}
+
+/// ------------------------------------------------------------
+/// ApiPage: feed results + opaque cursor
 /// ------------------------------------------------------------
 class ApiPage {
   final List<Story> items;
@@ -98,7 +117,7 @@ class ApiPage {
 }
 
 /// ------------------------------------------------------------
-/// Low-level API client w/ retry & helpers
+/// Low-level HTTP client with retry
 /// ------------------------------------------------------------
 const _timeout = Duration(seconds: 12);
 
@@ -108,11 +127,14 @@ class ApiClient {
   final Uri _base;
   final http.Client _client = http.Client();
 
+  /// Request headers for every API call.
+  /// NOTE: nginx is configured to allow X-CinePulse-Client
+  /// in Access-Control-Allow-Headers.
   Map<String, String> _headers() => const {
         'Accept': 'application/json',
         'Accept-Encoding': 'gzip',
         'Content-Type': 'application/json',
-        'X-CinePulse-Client': 'app/1.0', // bump this if you ever need server logic per app version
+        'X-CinePulse-Client': 'app/1.0',
       };
 
   bool _isRetriableStatus(int code) =>
@@ -128,7 +150,7 @@ class ApiClient {
       try {
         final r = await op().timeout(_timeout);
         if (_isRetriableStatus(r.statusCode) && i < attempts) {
-          // brief backoff, then try again
+          // soft backoff then retry
           await Future<void>.delayed(backoff * (i + 1));
           continue;
         }
@@ -190,8 +212,8 @@ class ApiClient {
     return ApiPage(items: items, nextCursor: nextCursor);
   }
 
-  /// Normalize Flutter tab keys to server-understood categories.
-  /// (Right now it's basically pass-through with sanity fallback.)
+  /// Normalize Flutter tab keys to server categories.
+  /// If something weird hits us, fall back to "all".
   String _normalizeTab(String tab) {
     switch (tab) {
       case 'all':
@@ -205,7 +227,8 @@ class ApiClient {
     }
   }
 
-  /// Safe path join that won't accidentally drop base path segments.
+  /// Build a URL against kApiBaseUrl, with optional query params.
+  /// This preserves the upstream path (/v1/feed, /v1/story/..., etc.).
   Uri _build(String path, [Map<String, String>? q]) {
     final pieces = <String>[
       if (_base.path.isNotEmpty && _base.path != '/') _base.path,
@@ -216,14 +239,15 @@ class ApiClient {
   }
 
   // ------------------------------------------------------------
-  // Public instance methods
+  // Public API calls
   // ------------------------------------------------------------
 
-  /// Get 1 page of feed items (with cursor).
+  /// Fetch 1 page of the feed with cursor pagination.
   ///
-  /// `cursor` = opaque string from previous page's `next_cursor`.
-  /// `since`  = only include items newer than this timestamp (UTC).
-  /// `tab`    = category filter ("all", "trailers", ...).
+  /// - `tab` = "all", "trailers", ...
+  /// - `since` = optional DateTime to only include newer stories.
+  /// - `cursor` = opaque string from previous page's next_cursor.
+  /// - `limit` = page size.
   ///
   /// Returns ApiPage(items, nextCursor).
   Future<ApiPage> fetchFeedPage({
@@ -240,7 +264,7 @@ class ApiClient {
     };
 
     if (since != null) {
-      // API accepts RFC3339 with offset or Z.
+      // Send RFC3339 UTC
       params['since'] = since.toUtc().toIso8601String();
     }
 
@@ -261,9 +285,7 @@ class ApiClient {
     }
   }
 
-  /// Back-compat helper:
-  /// returns just `items` from the first page, ignores cursor.
-  /// Your existing UI code that expects `List<Story>` can keep using this.
+  /// Convenience shim for older code that just wants "List<Story>".
   Future<List<Story>> fetchFeed({
     String tab = 'all',
     DateTime? since,
@@ -274,11 +296,13 @@ class ApiClient {
     return page.items;
   }
 
+  /// Full-text search.
   Future<List<Story>> searchStories(
     String query, {
     int limit = 10,
   }) async {
     final uri = _build('/v1/search', {'q': query, 'limit': '$limit'});
+
     try {
       final r = await _withRetry(() => _client.get(uri, headers: _headers()));
       if (r.statusCode != 200) _fail(r);
@@ -295,8 +319,9 @@ class ApiClient {
     }
   }
 
+  /// Fetch a single story by ID.
+  /// We URL-encode storyId so characters like ":" or "/" don't break the path.
   Future<Story> fetchStory(String storyId) async {
-    // IMPORTANT: encode storyId so colons / slashes don't break the URL.
     final safeId = Uri.encodeComponent(storyId);
     final uri = _build('/v1/story/$safeId');
 
@@ -313,8 +338,9 @@ class ApiClient {
     }
   }
 
+  /// Ask the API /health endpoint for feed_len, etc.
+  /// We use this for diagnostics, maybe "is backend alive" banners.
   Future<int> fetchApproxFeedLength() async {
-    // /health returns { feed_len: <int>, ... } from the API container.
     final uri = _build('/health');
     try {
       final r = await _withRetry(() => _client.get(uri, headers: _headers()));
@@ -332,12 +358,11 @@ class ApiClient {
   void dispose() => _client.close();
 }
 
-/// A shared singleton client for convenience.
-/// Most code should just call the top-level helpers below.
+/// Singleton client shared everywhere.
 final ApiClient _api = ApiClient(baseUrl: kApiBaseUrl);
 
 /// ------------------------------------------------------------
-/// Top-level functions (back-compat for your existing widgets)
+/// Top-level helpers (back-compat for existing widgets)
 /// ------------------------------------------------------------
 
 Future<List<Story>> fetchFeed({
