@@ -1,4 +1,13 @@
 // lib/features/story/story_details.dart
+//
+// Change: add legal/source attribution footer at the VERY BOTTOM
+// of the details view, small + muted text:
+//
+//   Source: YouTube / BollywoodHungama.com
+//
+// Sits under the CTA row, above the bottom padding.
+// Nothing else in layout/logic changes.
+
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -15,7 +24,7 @@ import '../../core/models.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/smart_video_player.dart';
 import 'ott_badge.dart';
-import 'story_image_url.dart'; // <-- shared image sanitizing / fallback logic
+import 'story_image_url.dart'; // shared image sanitizing / fallback logic
 
 class StoryDetailsScreen extends StatefulWidget {
   const StoryDetailsScreen({
@@ -141,6 +150,24 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     }
   }
 
+  // Build "YouTube / BollywoodHungama.com" style attribution for footer
+  String _sourceAttribution(Story s) {
+    final a = (s.source ?? '').trim();
+    final b = (s.sourceDomain ?? '').trim();
+    if (a.isNotEmpty && b.isNotEmpty) {
+      // Avoid duplicate if b already basically == a
+      final al = a.toLowerCase();
+      final bl = b.toLowerCase();
+      if (bl.contains(al) || al.contains(bl)) {
+        return a.isNotEmpty ? a : b;
+      }
+      return '$a / $b';
+    }
+    if (a.isNotEmpty) return a;
+    if (b.isNotEmpty) return b;
+    return '';
+  }
+
   /* ---------------- UI ---------------- */
 
   @override
@@ -152,16 +179,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // ----- NEW PART: smarter header height -----
-    //
-    // We want the hero image in details to keep a ~16:9 vibe like the card,
-    // not a super short banner that crops faces.
-    //
-    // 1. desired16x9 = width * 9/16 (true 16:9 height for this screen)
-    // 2. cap it on desktop so it doesn't eat the whole viewport
-    //    (400px max on desktop, 340px max on phone-ish)
-    // 3. if the inline player is showing, reserve full 16:9 + controls row
-    //
+    // smarter header height:
+    // keep ~16:9-ish hero, cap height, expand if player visible
     final desired16x9 = screenW * 9.0 / 16.0;
     final maxHeightCap = isPhone ? 340.0 : 400.0;
     final baseHeroHeight = math.min(desired16x9, maxHeightCap);
@@ -169,7 +188,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final double expandedHeight = _showPlayer
         ? (desired16x9 + (isPhone ? 96.0 : 120.0))
         : baseHeroHeight;
-    // -------------------------------------------
+
+    // attribution footer string
+    final attribution = _sourceAttribution(widget.story);
 
     return Scaffold(
       body: CustomScrollView(
@@ -194,14 +215,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                 builder: (_, __) {
                   final saved = SavedStore.instance.isSaved(widget.story.id);
                   return IconButton(
-                    tooltip:
-                        saved ? 'Remove from Saved' : 'Save bookmark',
-                    onPressed: () =>
-                        SavedStore.instance.toggle(widget.story.id),
+                    tooltip: saved ? 'Remove from Saved' : 'Save bookmark',
+                    onPressed: () => SavedStore.instance.toggle(widget.story.id),
                     icon: Icon(
-                      saved
-                          ? Icons.bookmark
-                          : Icons.bookmark_add_outlined,
+                      saved ? Icons.bookmark : Icons.bookmark_add_outlined,
                     ),
                   );
                 },
@@ -246,7 +263,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
-                  // bottom padding so bottom nav bar doesn't hide CTA row
+                  // bottom padding so bottom nav bar doesn't hide footer/CTA
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -270,8 +287,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                         runSpacing: 6,
                         children: [
                           KindBadge(
-                            widget.story.kindLabel ??
-                                widget.story.kind,
+                            widget.story.kindLabel ?? widget.story.kind,
                           ),
                           OttBadge.fromStory(
                             widget.story,
@@ -302,7 +318,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           ),
                         ),
 
-                      // optional facets
+                      // optional facets (Language / Genre chips)
                       if (widget.story.languages.isNotEmpty ||
                           widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
@@ -313,14 +329,12 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                             if (widget.story.languages.isNotEmpty)
                               _Facet(
                                 label: 'Language',
-                                value: widget.story.languages
-                                    .join(', '),
+                                value: widget.story.languages.join(', '),
                               ),
                             if (widget.story.genres.isNotEmpty)
                               _Facet(
                                 label: 'Genre',
-                                value: widget.story.genres
-                                    .join(', '),
+                                value: widget.story.genres.join(', '),
                               ),
                           ],
                         ),
@@ -341,9 +355,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                       if (_hasVideo) {
                                         _openPlayerInHeader();
                                       } else {
-                                        _openExternalPrimary(
-                                          context,
-                                        );
+                                        _openExternalPrimary(context);
                                       }
                                     }
                                   : null,
@@ -365,15 +377,13 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           AnimatedBuilder(
                             animation: SavedStore.instance,
                             builder: (_, __) {
-                              final saved = SavedStore.instance
-                                  .isSaved(widget.story.id);
+                              final saved =
+                                  SavedStore.instance.isSaved(widget.story.id);
                               return IconButton.filledTonal(
-                                tooltip: saved
-                                    ? 'Remove from Saved'
-                                    : 'Save bookmark',
+                                tooltip:
+                                    saved ? 'Remove from Saved' : 'Save bookmark',
                                 onPressed: () =>
-                                    SavedStore.instance
-                                        .toggle(widget.story.id),
+                                    SavedStore.instance.toggle(widget.story.id),
                                 icon: Icon(
                                   saved
                                       ? Icons.bookmark
@@ -384,6 +394,20 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           ),
                         ],
                       ),
+
+                      // ↓↓↓ NEW: legal/source attribution footer ↓↓↓
+                      if (attribution.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        Text(
+                          'Source: $attribution',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            height: 1.3,
+                            fontWeight: FontWeight.w500,
+                            color: cs.onSurfaceVariant.withOpacity(0.7),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
