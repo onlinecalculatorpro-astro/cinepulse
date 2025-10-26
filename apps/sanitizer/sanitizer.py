@@ -5,7 +5,7 @@
 #   scheduler  → polls sources and enqueues ingest jobs
 #
 #   workers    → normalize_event() builds a canonical story dict:
-#                 - title, summary (already cleaned / professional tone ~80 words)
+#                 - title, summary (already cleaned / professional tone ~100 words)
 #                 - kind, kind_meta (trailer / release / ott / news, etc.)
 #                 - verticals (["entertainment"], ["sports"], ...)
 #                 - tags (industry, ott, box-office, etc.)
@@ -15,7 +15,7 @@
 #
 #   sanitizer  → THIS FILE
 #               - final gatekeeper for the public feed:
-#                   * dedupe (first version wins forever)
+#                   * ROBUST dedupe with fuzzy matching (first version wins forever)
 #                   * write to Redis FEED_KEY
 #                   * trim FEED_KEY
 #                   * broadcast realtime + optional push notification
@@ -28,19 +28,22 @@
 # - workers DO NOT dedupe
 # - sanitizer is the ONLY thing that can publish to FEED_KEY
 #
-# DEDUPE STRATEGY (TOPIC SIGNATURE):
+# ENHANCED DEDUPE STRATEGY (ROBUST TOPIC SIGNATURE):
 # 1. Clean title and summary (lowercase, remove hype like "BREAKING",
 #    strip punctuation/emojis, drop "read more at ...").
-# 2. Extract meaningful keywords:
-#       - keep names / verbs ("salman", "joins", "bigg", "boss", "19")
+# 2. Extract and NORMALIZE meaningful keywords:
+#       - stem verbs: "announces"/"announced"/"announcing" → "announce"
+#       - normalize names: "salmankhan" → "salman khan", "srk" → "shahrukh khan"
+#       - collapse multi-word entities: "bigg boss 19" → "biggboss19"
+#       - semantic equivalents: "teaser"/"promo" → "trailer"
 #       - keep "day5"/"day-5" tokens (so Day 5 box office != Day 6)
 #       - drop glue words ("the", "and", "to", etc.)
 #       - drop raw numeric money tokens ("505cr", "120cr") that change hourly
 # 3. Sort + dedupe those keywords → stable "topic fingerprint".
-# 4. sha1 that → 16-char signature.
+# 4. Fuzzy match against existing topics (80% token overlap = duplicate).
 #
-# - We store signatures in Redis set SEEN_KEY.
-# - If we see the same signature again, it's "duplicate".
+# - We store topic blobs in Redis hash SEEN_KEY (sig → topic_blob).
+# - If we see a similar topic again (80%+ keyword overlap), it's "duplicate".
 # - We never "upgrade" an older story in-place. First accepted story wins.
 #
 # sanitize_story() returns:
@@ -53,21 +56,7 @@
 #   FEED_PUBSUB, FEED_STREAM, FEED_STREAM_MAXLEN
 #   ENABLE_PUSH_NOTIFICATIONS
 #   FALLBACK_VERTICAL (default "entertainment")
-#
-# BEFORE WE PUBLISH INTO FEED_KEY:
-# - ensure story["verticals"] is non-empty list
-# - ensure story["thumb_url"] exists
-# - ensure story["kind_meta"] exists
-# - ensure timestamps (normalized_at, ingested_at)
-# - normalize tags format
-# - ADD camelCase aliases that the Flutter app expects:
-#       publishedAt / normalizedAt / ingestedAt
-#       thumbUrl / posterUrl
-#       releaseDate / isTheatrical / isUpcoming
-#       ottPlatform / sourceDomain
-#
-# We do NOT drop debug fields (payload, image_candidates, etc.)
-# because workers.backfill_repair_recent() may repair thumbnails later.
+#   DUPLICATE_SIMILARITY_THRESHOLD (default 0.80)
 
 from __future__ import annotations
 
@@ -98,7 +87,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 # Public feed LIST that /v1/feed will read newest-first.
 FEED_KEY = os.getenv("FEED_KEY", "feed:items")
 
-# Redis SET of dedupe signatures for accepted stories.
+# Redis HASH of dedupe topic blobs for accepted stories (sig → topic_blob).
 SEEN_KEY = os.getenv("SEEN_KEY", "feed:seen_signatures")
 
 # Feed length cap (0 or negative means "never trim").
@@ -120,11 +109,16 @@ ENABLE_PUSH_NOTIFICATIONS = os.getenv("ENABLE_PUSH_NOTIFICATIONS", "0").lower() 
 # Vertical fallback (workers should already set story["verticals"], but just in case).
 FALLBACK_VERTICAL = os.getenv("FALLBACK_VERTICAL", "entertainment")
 
+# Fuzzy duplicate detection threshold (0.80 = 80% keyword overlap).
+DUPLICATE_SIMILARITY_THRESHOLD = float(
+    os.getenv("DUPLICATE_SIMILARITY_THRESHOLD", "0.80")
+)
+
 
 def _redis() -> Redis:
     """
     Redis client for:
-      - dedupe set (SEEN_KEY)
+      - dedupe hash (SEEN_KEY)
       - feed list writes
       - pub/sub + stream fanout
       - optional push enqueue
@@ -136,7 +130,7 @@ def _redis() -> Redis:
 
 
 # ------------------------------------------------------------------------------
-# Canonicalization + topic-signature helpers for dedupe
+# Canonicalization + ROBUST topic-signature helpers for dedupe
 # ------------------------------------------------------------------------------
 
 # High-drama / hype / filler words that shouldn't define uniqueness.
@@ -225,6 +219,199 @@ _DAY_TOKEN_RE = re.compile(r"^day[-_]?(\d{1,2})$", re.I)
 # We DROP these so tiny ₹ deltas don't create new topics, unless it's a dayN token.
 _NUMERICY_RE = re.compile(r"^\d+[a-z]*$", re.I)
 
+# ------------------------------------------------------------------------------
+# NORMALIZATION DICTIONARIES (verb stemming, name normalization, semantic equiv)
+# ------------------------------------------------------------------------------
+
+# Simple verb/noun stemming rules for entertainment/sports news
+_VERB_STEMS = {
+    # action verbs
+    "announcing": "announce",
+    "announces": "announce",
+    "announced": "announce",
+    "confirming": "confirm",
+    "confirms": "confirm",
+    "confirmed": "confirm",
+    "revealing": "reveal",
+    "reveals": "reveal",
+    "revealed": "reveal",
+    "dropping": "drop",
+    "drops": "drop",
+    "dropped": "drop",
+    "releasing": "release",
+    "releases": "release",
+    "released": "release",
+    "joining": "join",
+    "joins": "join",
+    "joined": "join",
+    "starring": "star",
+    "stars": "star",
+    "starred": "star",
+    "streaming": "stream",
+    "streams": "stream",
+    "streamed": "stream",
+    "earning": "earn",
+    "earns": "earn",
+    "earned": "earn",
+    "collecting": "collect",
+    "collects": "collect",
+    "collected": "collect",
+    "grossing": "gross",
+    "grosses": "gross",
+    "grossed": "gross",
+    "making": "make",
+    "makes": "make",
+    "made": "make",
+    # common plurals
+    "trailers": "trailer",
+    "teasers": "teaser",
+    "films": "film",
+    "movies": "movie",
+    "shows": "show",
+}
+
+# Common name variations in entertainment/sports
+_NAME_NORMALIZE = {
+    # Bollywood
+    "salmankhan": "salman",
+    "srk": "shahrukh",
+    "shahrukhkhan": "shahrukh",
+    "ranbir": "ranbir",
+    "ranbirkapoor": "ranbir",
+    "alia": "alia",
+    "aliabhatt": "alia",
+    "vicky": "vicky",
+    "vickykaushal": "vicky",
+    "ranveer": "ranveer",
+    "ranveersingh": "ranveer",
+    "deepika": "deepika",
+    "deepikapadukone": "deepika",
+    "katrina": "katrina",
+    "katrinakaif": "katrina",
+    "hrithik": "hrithik",
+    "hrithikroshan": "hrithik",
+    "priyanka": "priyanka",
+    "priyankachopra": "priyanka",
+    "aamir": "aamir",
+    "aamirkhan": "aamir",
+    "akshay": "akshay",
+    "akshaykumar": "akshay",
+    "ajay": "ajay",
+    "ajaydevgn": "ajay",
+    # Sports
+    "virat": "virat",
+    "viratkohli": "virat",
+    "dhoni": "dhoni",
+    "msdhoni": "dhoni",
+    "rohit": "rohit",
+    "rohitsharma": "rohit",
+    "sachin": "sachin",
+    "sachintendulkar": "sachin",
+    # IPL teams
+    "rcb": "bangalore",
+    "csk": "chennai",
+    "mi": "mumbai",
+    "kkr": "kolkata",
+    "dc": "delhi",
+    "rr": "rajasthan",
+    "pbks": "punjab",
+    "srh": "hyderabad",
+    "gt": "gujarat",
+    "lsg": "lucknow",
+}
+
+# Words that mean the same thing in context
+_SEMANTIC_EQUIV = {
+    "teaser": "trailer",
+    "promo": "trailer",
+    "glimpse": "trailer",
+    "sneak": "trailer",
+    "peek": "trailer",
+    "preview": "trailer",
+    "ott": "streaming",
+    "digital": "streaming",
+    "online": "streaming",
+    "theatrical": "cinema",
+    "theater": "cinema",
+    "theatre": "cinema",
+    "earns": "collect",
+    "grosses": "collect",
+    "makes": "collect",
+    "earnings": "collection",
+    "gross": "collection",
+}
+
+# Known multi-word entities to collapse
+_KNOWN_ENTITIES = {
+    "biggboss",
+    "lovewar",
+    "pushpa",
+    "kgf",
+    "rrr",
+    "pathaan",
+    "jawan",
+    "dunki",
+    "animal",
+    "fighter",
+    "badeميyan",
+    "chhotemiyan",
+    "singham",
+    "golmaal",
+    "housefull",
+    "racetrack",
+    "boxoffice",
+    "ottrelease",
+    "primeminister",
+}
+
+
+def _stem_token(word: str) -> str:
+    """Normalize verb tenses and common plurals."""
+    return _VERB_STEMS.get(word.lower(), word.lower())
+
+
+def _normalize_name(word: str) -> str:
+    """Expand/normalize common name abbreviations."""
+    return _NAME_NORMALIZE.get(word.lower(), word.lower())
+
+
+def _semantic_normalize(word: str) -> str:
+    """Map semantically equivalent words to canonical form."""
+    return _SEMANTIC_EQUIV.get(word.lower(), word.lower())
+
+
+def _collapse_multi_word_entities(tokens: List[str]) -> List[str]:
+    """
+    Merge adjacent tokens that form known entities.
+    "bigg boss 19" → "biggboss19"
+    "love and war" → "lovewar"
+    "pushpa 2" → "pushpa2"
+    """
+    result = []
+    i = 0
+    while i < len(tokens):
+        # Check for "word1 word2 number" pattern (show/movie with season/part)
+        if i + 2 < len(tokens) and tokens[i + 2].isdigit():
+            two_word = tokens[i] + tokens[i + 1]
+            if two_word in _KNOWN_ENTITIES:
+                entity = two_word + tokens[i + 2]
+                result.append(entity)
+                i += 3
+                continue
+
+        # Check for "word1 word2" pattern (2-word names/titles)
+        if i + 1 < len(tokens):
+            two_word = tokens[i] + tokens[i + 1]
+            if two_word in _KNOWN_ENTITIES:
+                result.append(two_word)
+                i += 2
+                continue
+
+        result.append(tokens[i])
+        i += 1
+
+    return result
+
 
 def _strip_noise_words(words: List[str]) -> List[str]:
     """
@@ -278,50 +465,56 @@ def canonical_summary(raw_summary: Optional[str]) -> str:
 
 def _keywords_for_signature(canon_title: str, canon_summary: str) -> List[str]:
     """
-    Turn cleaned title+summary into a bag of meaningful keywords.
+    Turn cleaned title+summary into NORMALIZED bag of keywords.
 
-    Rules:
-    - Start from canonical title + canonical summary (already de-hyped).
-    - Split into tokens.
-    - Throw away:
-        * COMMON_STOPWORDS like "the", "and", "to", etc.
-        * raw numeric / money-ish tokens "505cr", "120cr"
-          (box office and sports scores fluctuate constantly)
-    - KEEP:
-        * names / entities / verbs ("salman", "joins", "bigg", "boss", "injured")
-        * "day5"/"day-5" tokens so Day 5 vs Day 6 box office are distinct
+    Improvements over basic approach:
+    - Stem verbs: "announces"/"announced"/"announcing" → "announce"
+    - Normalize names: "salmankhan" → "salman", "srk" → "shahrukh"
+    - Collapse multi-word entities: "bigg boss 19" → "biggboss19"
+    - Map semantic equivalents: "teaser"/"promo" → "trailer"
+    - Keep "day5" tokens (Day 5 vs Day 6 are different)
+    - Drop pure numbers and glue words
     """
     blob = f"{canon_title} {canon_summary}".strip()
     tokens = blob.split()
 
-    out: List[str] = []
+    # Phase 1: Basic filtering + normalization
+    normalized = []
     for tok in tokens:
         t = tok.strip().lower()
         if not t:
             continue
 
-        # drop glue/common words
+        # Drop glue words
         if t in _COMMON_STOPWORDS:
             continue
 
-        # always keep "day5"-style tokens
+        # Always keep day tokens
         if _DAY_TOKEN_RE.match(t):
-            out.append(t)
+            normalized.append(t)
             continue
 
-        # drop generic numeric-ish tokens ("505cr", "120", "600crore")
+        # Drop pure numbers
         if _NUMERICY_RE.match(t):
             continue
 
-        out.append(t)
+        # Apply all normalizations
+        t = _stem_token(t)
+        t = _normalize_name(t)
+        t = _semantic_normalize(t)
 
-    return out
+        normalized.append(t)
+
+    # Phase 2: Collapse multi-word entities
+    collapsed = _collapse_multi_word_entities(normalized)
+
+    return collapsed
 
 
 def _build_topic_signature_blob(canon_title: str, canon_summary: str) -> str:
     """
     Build a "topic fingerprint" string:
-      - extract filtered keywords
+      - extract filtered + normalized keywords
       - dedupe them
       - sort them alphabetically so word order changes don't matter
     """
@@ -336,6 +529,29 @@ def _build_topic_signature_blob(canon_title: str, canon_summary: str) -> str:
     return " ".join(uniq_sorted).strip()
 
 
+def _are_topics_similar(topic_blob1: str, topic_blob2: str) -> bool:
+    """
+    Check if two topic blobs are similar enough to be considered duplicates.
+    Uses token overlap ratio (Jaccard similarity).
+
+    Returns True if overlap >= DUPLICATE_SIMILARITY_THRESHOLD (default 80%).
+    """
+    tokens1 = set(topic_blob1.split())
+    tokens2 = set(topic_blob2.split())
+
+    if not tokens1 or not tokens2:
+        return False
+
+    overlap = len(tokens1 & tokens2)
+    smaller = min(len(tokens1), len(tokens2))
+
+    if smaller == 0:
+        return False
+
+    similarity = overlap / smaller
+    return similarity >= DUPLICATE_SIMILARITY_THRESHOLD
+
+
 def story_signature(title: str, summary: Optional[str]) -> str:
     """
     Produce a short deterministic signature for dedupe based on TOPIC,
@@ -343,7 +559,7 @@ def story_signature(title: str, summary: Optional[str]) -> str:
 
     Steps:
       1. canonicalize title + summary (remove hype, junk)
-      2. extract + normalize topic keywords
+      2. extract + normalize topic keywords (stem, name normalize, etc.)
       3. sort + dedupe keywords into a stable blob
       4. sha1(blob)[0:16]
 
@@ -363,6 +579,7 @@ def story_signature(title: str, summary: Optional[str]) -> str:
 # ------------------------------------------------------------------------------
 # Helpers to finalize the story object before we publish
 # ------------------------------------------------------------------------------
+
 
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -540,6 +757,7 @@ def _finalize_story_shape(story: Dict[str, Any]) -> Dict[str, Any]:
 # Realtime fanout + optional push
 # ------------------------------------------------------------------------------
 
+
 def _publish_realtime(conn: Redis, story: Dict[str, Any]) -> None:
     """
     Broadcast minimal info about a NEW story to downstream listeners.
@@ -609,15 +827,19 @@ def _enqueue_push(conn: Redis, story: Dict[str, Any]) -> None:
 # RQ job entrypoint
 # ------------------------------------------------------------------------------
 
-def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "invalid"]:
+
+def sanitize_story(
+    story: Dict[str, Any]
+) -> Literal["accepted", "duplicate", "invalid"]:
     """
     Runs inside the "sanitize" queue worker.
 
     Flow:
-      1. Build topic-based dedupe signature from (title, summary).
-      2. If signature already in Redis -> "duplicate".
-      3. Else:
-           - mark signature in Redis (so future dupes get dropped),
+      1. Build NORMALIZED topic-based signature from (title, summary).
+      2. Check fuzzy similarity against all existing topics in Redis.
+      3. If 80%+ similar to any existing topic -> "duplicate".
+      4. Else:
+           - store topic blob in Redis hash (so future dupes get caught),
            - finalize the story (verticals, thumb, timestamps, aliases),
            - LPUSH to FEED_KEY,
            - TRIM FEED_KEY,
@@ -629,21 +851,41 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
     raw_title = (story.get("title") or "").strip()
     raw_summary = story.get("summary")
 
-    # 1. topic signature
-    sig = story_signature(raw_title, raw_summary)
-    if not sig:
-        print(f"[sanitizer] INVALID (no canonical title) -> {story.get('id')} | {raw_title}")
+    # 1. Build canonical + topic signature
+    canon_t = canonical_title(raw_title)
+    canon_s = canonical_summary(raw_summary)
+
+    if not canon_t:
+        print(
+            f"[sanitizer] INVALID (no canonical title) -> {story.get('id')} | {raw_title}"
+        )
         return "invalid"
 
-    # 2. dedupe check
-    if conn.sismember(SEEN_KEY, sig):
-        print(f"[sanitizer] DUPLICATE -> {story.get('id')} | {raw_title}")
-        return "duplicate"
+    topic_blob = _build_topic_signature_blob(canon_t, canon_s)
+    sig = hashlib.sha1(topic_blob.encode("utf-8")).hexdigest()[:16]
 
-    # 3a. mark signature so future duplicates are dropped
-    conn.sadd(SEEN_KEY, sig)
+    # 2. Fuzzy dedupe check against existing topics
+    try:
+        existing_topics = conn.hgetall(SEEN_KEY)  # hash: sig → topic_blob
+    except Exception as e:
+        print(f"[sanitizer] ERROR reading SEEN_KEY: {e}")
+        existing_topics = {}
 
-    # 3b. finalize story shape so feed/api get consistent + Flutter-ready fields
+    for existing_sig, existing_blob in existing_topics.items():
+        if _are_topics_similar(topic_blob, existing_blob):
+            print(
+                f"[sanitizer] DUPLICATE (
+                f"[sanitizer] DUPLICATE (similar to {existing_sig}) -> {story.get('id')} | {raw_title}"
+            )
+            return "duplicate"
+
+    # 3a. Mark topic blob so future duplicates are caught
+    try:
+        conn.hset(SEEN_KEY, sig, topic_blob)
+    except Exception as e:
+        print(f"[sanitizer] ERROR storing signature {sig}: {e}")
+
+    # 3b. Finalize story shape so feed/api get consistent + Flutter-ready fields
     story = _finalize_story_shape(story)
 
     # 3c. LPUSH newest-first story JSON into the public feed list
@@ -659,9 +901,12 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
         except Exception as e:
             print(f"[sanitizer] ERROR LTRIM feed: {e}")
 
-    # 4. broadcast + maybe push
+    # 4. Broadcast + maybe push
     _publish_realtime(conn, story)
     _enqueue_push(conn, story)
 
     print(f"[sanitizer] ACCEPTED -> {story.get('id')} | {raw_title}")
     return "accepted"
+
+
+                
