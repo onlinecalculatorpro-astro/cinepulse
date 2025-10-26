@@ -766,6 +766,7 @@ def _has_any_image(obj: Dict[str, Any]) -> bool:
         or obj.get("thumb_url")
         or obj.get("thumbnail")
         or obj.get("poster")
+        or obj.get("poster_url")
         or obj.get("media")
     )
 
@@ -838,6 +839,9 @@ def normalize_event(event: AdapterEventDict) -> dict:
     if not image_url and source == "youtube":
         image_url = _youtube_thumb(link)
 
+    # final_best is what we'll expose to frontend
+    final_best = image_url or thumb_hint
+
     # --- SUMMARY -----------------------------------------------------
     summary_text = summarize_story(title, raw_text)
 
@@ -882,11 +886,14 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "ott_platform":    ott_platform,
 
         # hero image for cards / UI
-        "thumb_url":       image_url or thumb_hint,
-        "image":           image_url,
-        "thumbnail":       image_url,
-        "poster":          image_url,
-        "media":           image_url,
+        # We set ALL of these so downstream (sanitizer → Redis → API → Flutter)
+        # always has poster_url/thumb_url populated.
+        "thumb_url":       final_best,
+        "poster_url":      final_best,
+        "image":           final_best,
+        "thumbnail":       final_best,
+        "poster":          final_best,
+        "media":           final_best,
 
         "tags":            final_tags or None,
 
@@ -1002,7 +1009,7 @@ def youtube_rss_poll(
             "title": title,
             "kind": kind,
             "published_at": pub_norm,
-            "thumb_url": None,
+            "thumb_url": None,  # we'll fill via _youtube_thumb() in normalize_event
             "payload": {
                 "channelId": channel_id,
                 "videoId": vid,
@@ -1111,6 +1118,13 @@ def rss_poll(
 # =====================================================================
 
 def backfill_repair_recent(scan: int = None) -> int:
+    """
+    Patch existing FEED_KEY items in Redis:
+    - ensure ingested_at exists
+    - ensure we have a usable image and populate thumb_url/poster_url/etc.
+    This lets us repair old stories so the app can render thumbnails
+    without waiting for fresh ingest.
+    """
     conn = _redis()
     window = int(scan or REPAIR_SCAN)
 
@@ -1127,10 +1141,12 @@ def backfill_repair_recent(scan: int = None) -> int:
 
         need_save = False
 
+        # backfill missing ingest timestamp
         if not obj.get("ingested_at"):
             obj["ingested_at"] = obj.get("normalized_at") or now_ts
             need_save = True
 
+        # backfill missing hero artwork
         if not _has_any_image(obj):
             payload = obj.get("payload") or {}
             link = obj.get("url") or (
@@ -1150,6 +1166,7 @@ def backfill_repair_recent(scan: int = None) -> int:
                 thumb = None
 
             if not thumb and link:
+                # try to rebuild payload on the fly
                 dummy_entry = {
                     "link": link,
                     "summary": obj.get("summary") or "",
@@ -1173,7 +1190,15 @@ def backfill_repair_recent(scan: int = None) -> int:
                 thumb = _pick_image_from_payload(payload, base, thumb_hint)
 
             if thumb:
-                for k in ("image", "thumb_url", "thumbnail", "poster", "media"):
+                # write into all the keys the frontend / api might look at
+                for k in (
+                    "image",
+                    "thumb_url",
+                    "thumbnail",
+                    "poster",
+                    "poster_url",
+                    "media",
+                ):
                     obj[k] = thumb
                 obj["normalized_at"] = now_ts
                 need_save = True
