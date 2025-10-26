@@ -17,12 +17,12 @@ from typing import List, Tuple
 
 SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "80"))
 SUMMARY_MIN    = int(os.getenv("SUMMARY_MIN_WORDS", "60"))
-SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "100"))
+# keep it tight; avoid trailing fluff
+SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "90"))
 
-# If the body is already shorter than this, we'll mostly reuse it,
-# after cleaning/polishing.
-PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "120"))
-PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "900"))
+# "passthrough mode" basically never fires unless it's extremely short
+PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "60"))
+PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "400"))
 
 # =====================================================================
 # Regex library
@@ -30,9 +30,30 @@ PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "900"))
 
 # Sentences that start like YouTube / promo hooks.
 _PROMO_PREFIX_RE = re.compile(
-    r"^(watch|watch\s+now|check\s+(this|it)\s+out|don['’]t\s+miss|"
-    r"don['’]t\s+forget|follow\s+us|subscribe|hit\s+the\s+bell|"
+    r"^(watch|watch\s+now|check\s+(this|it)\s+out|don['']t\s+miss|"
+    r"don['']t\s+forget|follow\s+us|subscribe|hit\s+the\s+bell|"
     r"like\s+and\s+share)\b",
+    re.I,
+)
+
+# Soft fluff / fanbait intros that sound like "As fans eagerly await..."
+_SOFT_FLUFF_RE = re.compile(
+    r"^(as\s+fans\s+(eagerly\s+)?await|"
+    r"fans\s+are\s+(now\s+)?excited|"
+    r"in\s+a\s+surprising\s+turn|"
+    r"according\s+to\s+reports|"
+    r"meanwhile|"
+    r"amid\s+huge\s+buzz|"
+    r"creating\s+massive\s+hype|"
+    r"setting\s+the\s+stage\s+for)\b",
+    re.I,
+)
+
+# Filler/redundant words that add no value
+_FILLER_WORDS_RE = re.compile(
+    r"\b(recently|currently|actually|basically|essentially|"
+    r"literally|really|very|quite|rather|somewhat|"
+    r"just|simply|merely)\b",
     re.I,
 )
 
@@ -44,12 +65,22 @@ _CTA_NOISE_RE = re.compile(
     re.I,
 )
 
-# Overhype / gossip-y framing that we want to penalize.
+# Overhype / gossip / fan-reaction framing that we want to penalize hard.
 _HYPE_RE = re.compile(
     r"\b(buzz(?:ing)?|internet\s+is\s+buzzing|fans\s+are\s+going\s+crazy|"
-    r"massive\s+showdown|epic\s+clash|who(?:'|’)ll\s+win|who\s+will\s+win|"
+    r"fans\s+can['']t\s+keep\s+calm|internet\s+reacts|"
+    r"massive\s+showdown|epic\s+clash|who(?:'|')ll\s+win|who\s+will\s+win|"
     r"promises\s+to\s+deliver|set(?:ting)?\s+the\s+stage\s+for\s+a\s+showdown|"
-    r"blockbuster\s+in\s+the\s+making|taking\s+the\s+internet\s+by\s+storm)\b",
+    r"blockbuster\s+in\s+the\s+making|taking\s+the\s+internet\s+by\s+storm|"
+    r"poised\s+to\s+dominate|expected\s+to\s+shatter|"
+    r"all\s+set\s+to\s+take\s+over)\b",
+    re.I,
+)
+
+# Future hype / prediction lines we don't want in final paragraph.
+_FUTURE_HYPE_RE = re.compile(
+    r"\b(poised\s+to|expected\s+to|set\s+to\s+dominate|"
+    r"all\s+set\s+to\s+take\s+over|will\s+set\s+the\s+box\s+office\s+on\s+fire)\b",
     re.I,
 )
 
@@ -66,7 +97,7 @@ _NOISE_CHUNK_RE_LIST = [
     re.compile(r"(read\s+(also|more)\s*:[^\.!?]+[\.!?])", re.I),
 ]
 
-# We will break sentences on ., !, ? followed by whitespace.
+# Sentence splitter: ".", "!" or "?" followed by whitespace.
 _SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
 
 # Weak tail that feels cut-off / unfinished.
@@ -130,8 +161,11 @@ def _word_list(s: str) -> List[str]:
 
 def _preclean_body_text(raw: str) -> str:
     """
-    Remove scrape noise, credits, CTA questions like
-    'How much did it earn in 5 days?' etc.
+    Remove scrape noise, credits, social plugs,
+    and reader-bait questions like:
+      "How much did it earn in 5 days?"
+      "Will it cross 100 crore?"
+      "What does this mean for X?"
     Collapse whitespace.
     """
     if not raw:
@@ -143,22 +177,41 @@ def _preclean_body_text(raw: str) -> str:
     for _pat in _NOISE_CHUNK_RE_LIST:
         text = _pat.sub(" ", text)
 
-    # Drop clickbait Q-style closers: "How much did it make...?"
+    # Drop clickbait / Q-style bait at the end.
     text = re.sub(
         r"(how\s+much\s+did\s+[^?]+\?\s*)$",
         " ",
         text,
         flags=re.I | re.M,
     )
+    text = re.sub(
+        r"(will\s+it\s+[^?]+\?\s*)$",
+        " ",
+        text,
+        flags=re.I | re.M,
+    )
+    text = re.sub(
+        r"(what\s+does\s+this\s+mean[^?]*\?\s*)$",
+        " ",
+        text,
+        flags=re.I | re.M,
+    )
 
-    # Remove social handle fluff like "(Photo Credit – Instagram)" left behind,
-    # just in case.
+    # Remove social handle fluff like "(Photo Credit – Instagram)".
     text = re.sub(r"\(\s*(photo|image|pic)[^)]+\)", " ", text, flags=re.I)
 
     # Remove obvious social plugs mid-body.
     text = re.sub(
         r"(follow\s+us\s+on\s+instagram[^\.!?]*[\.!?])",
         " ",
+        text,
+        flags=re.I,
+    )
+
+    # Remove vague time references that add no value
+    text = re.sub(
+        r"\b(recently|in\s+recent\s+times|lately)\b",
+        "",
         text,
         flags=re.I,
     )
@@ -192,13 +245,15 @@ def _polish_sentence(s: str) -> str:
     - trim dangling "and..." endings etc.
     - normalize CAPS -> Title except whitelisted acronyms
     - enforce starting capital & ending punctuation
+    - remove filler words
+    - normalize awkward phrasings
     """
     original = s.strip()
 
     # Strip leading promo-y prefixes.
     s = re.sub(
         r"^(watch|watch\s+now|check\s+this\s+out|check\s+it\s+out|"
-        r"don['’]t\s+miss|don['’]t\s+forget\s+to\s+subscribe|"
+        r"don['']t\s+miss|don['']t\s+forget\s+to\s+subscribe|"
         r"subscribe\s+now|exclusive\s*:)\s*",
         "",
         original,
@@ -210,10 +265,22 @@ def _polish_sentence(s: str) -> str:
     s = re.sub(r"(follow\s+us.*)$", "", s, flags=re.I).strip()
     s = re.sub(r"(hit\s+the\s+bell.*)$", "", s, flags=re.I).strip()
 
+    # Normalize awkward phrasings
+    s = re.sub(r"\b(\d+)-day\s+([A-Z][a-z]+)\s+schedule\b", r"\1-day schedule in \2", s, re.I)
+    s = re.sub(r"\btoo\s+slow\s+and\s+logistically\s+complex\b", "too complex to execute", s, re.I)
+    s = re.sub(r"\brecently\s+completed\b", "completed", s, re.I)
+    s = re.sub(r"\bcurrently\s+targeted[;,]?\s*the\s+date\s+is\s+not\s+yet\s+officially\s+confirmed\b", "targeted", s, re.I)
+    s = re.sub(r"\bcurrently\s+targeted\b", "targeted", s, re.I)
+
     # Trim annoying tails like "and..." "but..." etc.
     s = _DANGLING_ELLIPSIS_RE.sub("", s).strip()
     s = _BAD_END_WORD.sub("", s).strip()
     s = _AUX_TAIL_RE.sub("", s).strip()
+
+    # Remove filler words
+    s = _FILLER_WORDS_RE.sub("", s)
+    # Collapse multiple spaces after filler removal
+    s = re.sub(r"\s+", " ", s).strip()
 
     # Normalize all-caps words.
     fixed_words = [_clean_caps(w) for w in s.split()]
@@ -258,19 +325,23 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
     + overlap with title keywords
     + factual bonus (numbers, %, Day 5, release dates, platforms)
     + box office / performance verbs
-    - hype / gossip / CTA / promo
+    + clarity bonus for specific transitions
+    - hype / gossip / CTA / promo / fluff
     - extreme length / extreme short
+    - redundancy penalty
     """
 
     if not s:
         return -10**9
 
-    # Hard penalties: promo / CTA / hype.
+    # Hard penalties: promo / CTA / hype / fluff.
     if _PROMO_PREFIX_RE.search(s):
         return -10**8
     if _CTA_NOISE_RE.search(s):
         return -10**8
     if _HYPE_RE.search(s):
+        return -10**7
+    if _SOFT_FLUFF_RE.search(s):
         return -10**7
 
     # Title keyword overlap.
@@ -288,15 +359,29 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
         re.I,
     ) else 0
 
-    # Factual numeric bonus (money, %, day numbers, platforms, release dates)
+    # Factual numeric bonus (money, %, day numbers, platforms, release dates).
     factual_bonus = 2 if _FACTUAL_BONUS_RE.search(s) else 0
 
-    # Penalize hype adjectives left behind like "huge showdown".
+    # Bonus for clear, specific phrasing
+    clarity_bonus = 0
+    if re.search(r"\b(instead|after|rather\s+than|in\s+place\s+of)\b", s, re.I):
+        clarity_bonus += 1
+    if re.search(r"\b(has\s+(built|filmed|completed|cancelled|dropped))\b", s, re.I):
+        clarity_bonus += 1
+
+    # Penalize leftover hype adjectives if somehow here.
     fluff_penalty = -1 if re.search(
         r"\b(huge|massive|epic|intense\s+clash|explosive\s+showdown)\b",
         s,
         re.I,
     ) else 0
+
+    # Penalize redundant phrasing
+    redundancy_penalty = 0
+    if re.search(r"\b(currently\s+targeted|not\s+yet\s+officially\s+confirmed)\b", s, re.I):
+        redundancy_penalty -= 2
+    if re.search(r"\b(too\s+slow\s+and\s+logistically|too\s+slow\s+and)\b", s, re.I):
+        redundancy_penalty -= 1
 
     wc = len(s.split())
     length_penalty = 0
@@ -309,30 +394,47 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
         overlap * 2
         + verb_bonus
         + factual_bonus
+        + clarity_bonus
         + fluff_penalty
         + length_penalty
+        + redundancy_penalty
     )
 
 
 def _assemble_paragraph(chosen_sentences: List[str]) -> str:
     """
     Join chosen sentences into one paragraph and re-polish.
-    We'll also do a last sanity pass on punctuation/spacing.
+    - Drop future-hype ("poised to dominate", etc.)
+    - Polish each sentence (caps, punctuation, trim fluff)
+    - De-dupe again post-polish
+    - Join into one paragraph
     """
     if not chosen_sentences:
         return ""
 
-    polished = []
+    interim: List[str] = []
     for s in chosen_sentences:
         s = s.strip()
         if not s:
             continue
-        polished.append(_polish_sentence(s))
+        # drop predictive hype like "is poised to dominate"
+        if _FUTURE_HYPE_RE.search(s):
+            continue
+        ps = _polish_sentence(s)
+        if ps:
+            interim.append(ps)
 
-    text = " ".join(polished).strip()
+    # Deduplicate again after polish (polish can normalize two lines
+    # into near-identical wording).
+    final_sents: List[str] = []
+    for s in interim:
+        if not any(_similar_enough(s, prev) for prev in final_sents):
+            final_sents.append(s)
+
+    text = " ".join(final_sents).strip()
     text = re.sub(r"\s+", " ", text).strip()
 
-    # Safety: final punctuation.
+    # Ensure final punctuation.
     if text and text[-1] not in ".!?":
         text += "."
 
@@ -342,14 +444,14 @@ def _assemble_paragraph(chosen_sentences: List[str]) -> str:
 def _select_sentences(title: str, body_text: str) -> List[str]:
     """
     Extractive summary:
-    1. Pre-clean body text (remove junk).
-    2. If body already short, return it directly as 1 "sentence".
-    3. Otherwise:
+    1. Pre-clean body text (remove junk / CTA / fan fluff).
+    2. If body is extremely short, reuse it (polished later).
+    3. Else:
         - split into sentences
-        - score
-        - choose best factual/neutral sentences
-        - keep original article order
-        - aim for ~80 words total
+        - score sentences for factual signal
+        - pick best in ORIGINAL ARTICLE ORDER
+        - ensure first sentence actually names the subject
+        - cap around ~80 words
     """
     body_text = _preclean_body_text(body_text or "")
     if not body_text:
@@ -357,7 +459,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
         t = (title or "").strip()
         return [t] if t else []
 
-    # If already short-ish, just pass through (polish happens later).
+    # If already tweet-sized, just pass it through. We'll still polish later.
     words_all = body_text.split()
     if (
         len(words_all) <= PASSTHROUGH_MAX_WORDS
@@ -365,7 +467,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
     ):
         return [body_text]
 
-    # Split body into sentences.
+    # Sentence split.
     sentences = [s.strip() for s in _SENT_SPLIT_RE.split(body_text) if s.strip()]
     if not sentences:
         return [body_text]
@@ -394,10 +496,10 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
 
         wc = len(s.split())
         if wc < 6:
-            # Sentence fragment, skip.
+            # Fragment, skip.
             continue
 
-        # Don't add sentences that are near-duplicates of already chosen ones.
+        # Don't add near-duplicates.
         duplicate = False
         for _, prev_s in chosen:
             if _similar_enough(prev_s, s):
@@ -406,12 +508,13 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
         if duplicate:
             continue
 
-        # Check hype/CTA again — skip if it somehow passed but is mostly hype.
-        if _HYPE_RE.search(s) or _CTA_NOISE_RE.search(s):
+        # Skip if still mostly hype.
+        if _HYPE_RE.search(s) or _CTA_NOISE_RE.search(s) or _SOFT_FLUFF_RE.search(s):
             continue
 
-        # Always include while we're below SUMMARY_MIN.
-        # After that, include only if we won't blow SUMMARY_MAX.
+        # Add it if:
+        #   - we haven't hit SUMMARY_MIN yet
+        #   OR adding it doesn't blow SUMMARY_MAX
         if total_words < SUMMARY_MIN or (total_words + wc) <= SUMMARY_MAX:
             chosen.append((i, s))
             total_words += wc
@@ -430,8 +533,21 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
     # Sort back to original article order.
     chosen.sort(key=lambda x: x[0])
 
+    # Ensure the first sentence actually references the subject/title.
+    if chosen:
+        first_idx, first_sent = chosen[0]
+        first_kw = set(w.lower() for w in _word_list(first_sent))
+        if len(title_kw & first_kw) < 1:
+            # try to swap with a later sentence that DOES include a title keyword
+            for j in range(1, len(chosen)):
+                _, cand_sent = chosen[j]
+                cand_kw = set(w.lower() for w in _word_list(cand_sent))
+                if len(title_kw & cand_kw) >= 1:
+                    chosen[0], chosen[j] = chosen[j], chosen[0]
+                    break
+
     # Tail prune:
-    # Drop weak last sentence if it's super short or trails off.
+    # Drop weak last sentence if it's super short, trails off, or ends with redundant info.
     while len(chosen) > 1:
         tail = chosen[-1][1]
         tail_wc = len(tail.split())
@@ -439,12 +555,14 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
             tail_wc < 8
             or _AUX_TAIL_RE.search(tail)
             or _BAD_END_WORD.search(tail)
+            or re.search(r"not\s+yet\s+officially\s+confirmed", tail, re.I)
+            or re.search(r"currently\s+targeted", tail, re.I)
         ):
             chosen.pop()
             continue
         break
 
-    # Hard enforce SUMMARY_MAX by trimming last sentences.
+    # Hard enforce SUMMARY_MAX by trimming from the end.
     while True:
         words_now = sum(len(s.split()) for _, s in chosen)
         if words_now <= SUMMARY_MAX:
@@ -460,7 +578,7 @@ def summarize_story(title: str, body_text: str) -> str:
     """
     Public entry point.
     Returns a single polished paragraph ~80 words,
-    neutral tone, no hype.
+    neutral, trade-style, no hype.
     """
     sentences = _select_sentences(title, body_text)
     paragraph = _assemble_paragraph(sentences).strip()
