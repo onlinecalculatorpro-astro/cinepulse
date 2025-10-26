@@ -289,7 +289,7 @@ class _StoryCardState extends State<StoryCard> {
                   // Meta + CTA
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
