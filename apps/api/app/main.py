@@ -15,63 +15,66 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from apps.api.app.config import settings  # <- central env / config
+from apps.api.app.config import settings  # central env/config (redis_url, feed_key, etc.)
 
-# ------------------------------ Redis ----------------------------------------
+# ------------------------------------------------------------------------------
+# Redis
+# ------------------------------------------------------------------------------
 
 try:
     import redis  # type: ignore
 except Exception as e:  # pragma: no cover
     raise RuntimeError("redis package is required") from e
 
-# These come from env because they're runtime-tuning knobs for this API layer,
-# not global pipeline config.
-MAX_SCAN = int(os.getenv("MAX_SCAN", "400"))            # how deep feed/search/detail can look
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "200"))        # lrange chunk size for scans
+# Runtime knobs (all overridable via env, no code change needed)
+MAX_SCAN = int(os.getenv("MAX_SCAN", "400"))          # how deep feed/search/detail can look
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "200"))      # lrange chunk size per scan
 
-# Rate limits (per IP)
+# Per-IP per-minute rate limits
 RL_FEED_PER_MIN = int(os.getenv("RL_FEED_PER_MIN", "120"))
 RL_SEARCH_PER_MIN = int(os.getenv("RL_SEARCH_PER_MIN", "90"))
 RL_STORY_PER_MIN = int(os.getenv("RL_STORY_PER_MIN", "240"))
 
-# Public URL for proxy rewriting (used by _to_proxy)
+# Public API base, used when rewriting image URLs to our /v1/img proxy
 API_PUBLIC_BASE_URL = os.getenv(
     "API_PUBLIC_BASE_URL",
     "https://api.onlinecalculatorpro.org",
 ).strip().rstrip("/")
 
-# Reuse the same Redis that workers/sanitizer write to.
-# We pull redis_url + feed_key from pydantic settings.
+# Redis client (shared w/ workers/sanitizer)
 _redis_client = redis.from_url(
     settings.redis_url,
-    decode_responses=True,  # return str not bytes
+    decode_responses=True,  # get str not bytes
     socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "2.0")),
     socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0")),
 )
 
-FEED_KEY = settings.feed_key  # LIST newest-first (LPUSH in sanitizer)
+FEED_KEY = settings.feed_key  # LIST newest-first (sanitizer LPUSH's here)
 
 
-# ------------------------------ Routers (realtime / push / img) --------------
-
-#   apps/api/app/realtime.py   -> router = APIRouter(prefix="/v1/realtime", ...)
-#   apps/api/app/push.py       -> router = APIRouter(prefix="/v1/push", ...)
-#   apps/api/app/img_proxy.py  -> router = APIRouter(prefix="/v1", ...)
+# ------------------------------------------------------------------------------
+# Routers (realtime / push / img proxy)
+#  - realtime: /v1/realtime/ws, /v1/realtime/stream
+#  - push:     /v1/push/*
+#  - img:      /v1/img?u=... (public image proxy)
+# ------------------------------------------------------------------------------
 
 from apps.api.app.realtime import router as realtime_router  # noqa: E402
 
 try:
-    from apps.api.app.push import router as push_router  # optional
+    from apps.api.app.push import router as push_router
 except Exception:
-    push_router = None
+    push_router = None  # push is optional / can be stubbed
 
 try:
-    from apps.api.app.img_proxy import router as img_proxy_router  # optional
+    from apps.api.app.img_proxy import router as img_proxy_router
 except Exception:
-    img_proxy_router = None
+    img_proxy_router = None  # img proxy becomes optional during bootstrap
 
 
-# ------------------------------ Models ---------------------------------------
+# ------------------------------------------------------------------------------
+# Pydantic response models
+# ------------------------------------------------------------------------------
 
 class Story(BaseModel):
     # core
@@ -79,31 +82,31 @@ class Story(BaseModel):
     kind: str
     title: str
     summary: Optional[str] = None
-    published_at: Optional[str] = None  # RFC3339 (UTC)
+    published_at: Optional[str] = None  # RFC3339 UTC
     source: Optional[str] = None
     thumb_url: Optional[str] = None
 
-    # timestamps from pipeline
+    # pipeline timestamps
     ingested_at: Optional[str] = None
     normalized_at: Optional[str] = None
 
-    # story classification / feed filtering
-    verticals: Optional[List[str]] = None          # ["entertainment"], ["sports"], ...
-    kind_meta: Optional[dict] = None               # e.g. {kind:"release", release_date:..., ...}
-    tags: Optional[List[str]] = None               # regions, industries, etc.
+    # classification / feed filters
+    verticals: Optional[List[str]] = None        # ["entertainment"] / ["sports"] etc.
+    kind_meta: Optional[dict] = None             # {"kind":"release","release_date":...}
+    tags: Optional[List[str]] = None             # free-form tags
 
-    # link + domain
+    # link + source domain
     url: Optional[str] = None
     source_domain: Optional[str] = None
 
     # release-ish metadata
-    release_date: Optional[str] = None             # YYYY-MM-DD or RFC3339
+    release_date: Optional[str] = None           # YYYY-MM-DD or RFC3339
     is_theatrical: Optional[bool] = None
     is_upcoming: Optional[bool] = None
     ott_platform: Optional[str] = None
 
     # visuals
-    poster_url: Optional[str] = None               # mapped from story["poster"] / etc.
+    poster_url: Optional[str] = None             # canonical poster / hero art
 
 
 class FeedResponse(BaseModel):
@@ -134,49 +137,72 @@ class FeedTab(str, Enum):
     comingsoon = "comingsoon"
 
 
-# ------------------------------ App / CORS -----------------------------------
+# ------------------------------------------------------------------------------
+# FastAPI app + CORS
+# ------------------------------------------------------------------------------
 
 app = FastAPI(
     title="CinePulse API",
     version="0.5.0",
     description=(
-        "Public feed API /v1/feed.\n"
-        "Now supports vertical filtering (?vertical=entertainment|sports), "
-        "cursor pagination, realtime fanout, and basic rate limiting."
+        "Public CinePulse feed API.\n"
+        "- /v1/feed (cursor pagination + vertical/tab filters)\n"
+        "- /v1/search\n"
+        "- /v1/story/{id}\n"
+        "- /v1/img image proxy for safe thumbnails\n"
+        "- /v1/realtime/* (WebSocket/SSE)\n"
     ),
 )
 
-_cors = os.getenv("CORS_ORIGINS", "*").strip()
-if _cors == "*":
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# CORS behavior:
+# - We MUST explicitly allow cinepusle.netlify.app (web client) and our API origin,
+#   because the client sends a custom header X-CinePulse-Client which triggers
+#   a preflight. '*' won't satisfy that in modern Chrome.
+#
+# - You can still override via CORS_ORIGINS env
+#   e.g. "https://cinepusle.netlify.app,https://api.onlinecalculatorpro.org"
+_env_origins = os.getenv("CORS_ORIGINS", "").strip()
+
+if _env_origins:
+    allow_list = [o.strip() for o in _env_origins.split(",") if o.strip()]
 else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[o.strip() for o in _cors.split(",") if o.strip()],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    allow_list = [
+        "https://cinepusle.netlify.app",
+        "https://cinepulse.netlify.app",           # in case you typo'd in one deploy :)
+        "https://api.onlinecalculatorpro.org",
+    ]
 
-# Mount routers
-app.include_router(realtime_router)                 # /v1/realtime/*
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_list,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=[
+        "*",
+        "x-cinepulse-client",   # Flutter client sends this
+    ],
+)
+
+# Mount subrouters
+app.include_router(realtime_router)          # /v1/realtime/*
 if push_router is not None:
-    app.include_router(push_router)                 # /v1/push/*
+    app.include_router(push_router)          # /v1/push/*
 if img_proxy_router is not None:
-    app.include_router(img_proxy_router)            # /v1/img?u=...
+    app.include_router(img_proxy_router)     # /v1/img?u=...
 
 
-# ------------------------------ Error handlers -------------------------------
+# ------------------------------------------------------------------------------
+# Error handlers (uniform JSON for errors)
+# ------------------------------------------------------------------------------
 
 def _json_error(status_code: int, err: str, msg: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
-        content=ErrorBody(status=status_code, error=err, message=msg).model_dump(),
+        content=ErrorBody(
+            status=status_code,
+            error=err,
+            message=msg,
+        ).model_dump(),
     )
 
 
@@ -188,17 +214,21 @@ async def http_exc_handler(_: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exc_handler(_: Request, exc: RequestValidationError):
-    return _json_error(422, "validation_error", exc.errors().__repr__())
+    return _json_error(422, "validation_error", repr(exc.errors()))
 
 
 @app.exception_handler(Exception)
 async def unhandled_exc_handler(_: Request, exc: Exception):
+    # We deliberately do NOT leak stack traces to clients.
     return _json_error(500, exc.__class__.__name__, "Internal server error")
 
 
-# ------------------------------ Rate limiting --------------------------------
+# ------------------------------------------------------------------------------
+# Rate limiting helpers
+# ------------------------------------------------------------------------------
 
 def _client_ip(req: Request) -> str:
+    # honor x-forwarded-for from nginx first
     xff = req.headers.get("x-forwarded-for", "")
     if xff:
         return xff.split(",")[0].strip()
@@ -206,10 +236,18 @@ def _client_ip(req: Request) -> str:
 
 
 def limiter(route: str, limit_per_min: int) -> Callable:
+    """
+    Cheap per-IP token bucket in Redis.
+    Key is `rl:<route>:<ip>:<minute-bucket>`.
+    - Allow traffic while Redis is up.
+    - If Redis explodes, we "soft allow" instead of killing feed.
+    """
+
     async def _limit_dep(req: Request):
         ip = _client_ip(req)
         now_bucket = int(time.time() // 60)
         key = f"rl:{route}:{ip}:{now_bucket}"
+
         try:
             n = _redis_client.incr(key)
             if n == 1:
@@ -220,12 +258,15 @@ def limiter(route: str, limit_per_min: int) -> Callable:
                     detail=f"Rate limit exceeded for {route}; try again shortly",
                 )
         except redis.RedisError:
-            # Best-effort: if Redis is unhappy for rate limit we soft-allow.
+            # If rate-limit storage is unavailable, we let the request pass.
             return
+
     return _limit_dep
 
 
-# ------------------------------ Helpers --------------------------------------
+# ------------------------------------------------------------------------------
+# Feed filtering / adaptation helpers
+# ------------------------------------------------------------------------------
 
 TRAILER_KINDS = {"trailer", "teaser", "clip", "featurette", "song", "poster"}
 OTT_ALIGNED_KINDS = {"release-ott", "ott", "acquisition"}
@@ -236,6 +277,7 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
     try:
+        # Accept both "...Z" and offset forms
         if s.endswith("Z"):
             return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
         dt = datetime.fromisoformat(s)
@@ -250,13 +292,16 @@ def _redis_lrange(key: str, start: int, stop: int) -> list[str]:
     try:
         return _redis_client.lrange(key, start, stop)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
+        raise HTTPException(
+            status_code=503,
+            detail=f"Redis unavailable: {type(e).__name__}",
+        ) from e
 
 
 def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
     """
-    Generator over recent feed items (raw JSON from Redis, newest-ish first).
-    Used by /v1/search and /v1/story/{id} where we don't need cursor paging.
+    Iterate over the most recent ~MAX_SCAN raw feed entries (newest-ish first).
+    Used by /v1/search and /v1/story/{id}, which don't need cursor paging.
     """
     raw = _redis_lrange(FEED_KEY, 0, max(0, max_items - 1))
     for s in raw:
@@ -268,24 +313,22 @@ def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
 
 def _matches_vertical(item: dict, vertical: Optional[str]) -> bool:
     """
-    Return True if:
-      - no vertical was requested, OR
-      - item.verticals contains that vertical.
-    verticals is guaranteed in sanitizer to be a list[str] (at least the fallback).
+    True if:
+      - no vertical requested, OR
+      - the story's verticals contain that slug (case-insensitive match)
     """
     if not vertical:
         return True
     verts = item.get("verticals") or []
     if not isinstance(verts, list):
         return False
-    vertical_l = vertical.strip().lower()
-    return any(isinstance(v, str) and v.strip().lower() == vertical_l for v in verts)
+    want = vertical.strip().lower()
+    return any(isinstance(v, str) and v.strip().lower() == want for v in verts)
 
 
 def _matches_tab(item: dict, tab: FeedTab) -> bool:
     """
-    Legacy "tab" filter logic. We keep this for backward compatibility.
-    Eventually, product can kill tabs and rely fully on `vertical`.
+    Legacy home tabs. Product can eventually kill this.
     """
     if tab == FeedTab.all:
         return True
@@ -315,12 +358,14 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
         rd = _parse_iso(item.get("release_date"))
         return bool(rd and rd > datetime.now(timezone.utc))
 
+    # default allow
     return True
 
 
 def _best_dt(item: dict) -> Optional[datetime]:
     """
-    Pick the "effective" timestamp for ordering: normalized_at > published_at > release_date.
+    "Effective" timestamp for sort/order and since-filtering:
+    normalized_at > published_at > release_date
     """
     for fld in ("normalized_at", "published_at", "release_date"):
         dt = _parse_iso(item.get(fld))
@@ -331,7 +376,7 @@ def _best_dt(item: dict) -> Optional[datetime]:
 
 def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     """
-    Filter out anything strictly older than `since`.
+    Keep only items that are >= since_iso in effective timestamp.
     """
     if not since_iso:
         return True
@@ -344,9 +389,10 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
 
 def _to_proxy(u: Optional[str]) -> Optional[str]:
     """
-    Wrap absolute external URLs so the frontend can fetch images via our
-    CORS-safe proxy endpoint: /v1/img?u=...
-    Avoid double-wrapping and leave relative / already-proxied URLs untouched.
+    Rewrites any absolute http(s) image URL into our proxy:
+    https://api.onlinecalculatorpro.org/v1/img?u=<encoded>
+    so the web client never has to load 3rd-party origins directly.
+    We skip if it's already proxied or it's a relative path we trust.
     """
     if not u:
         return u
@@ -359,20 +405,20 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
 
 def _adapt_for_response(it: dict) -> dict:
     """
-    Adapt raw story objects (what sanitizer wrote) into what we ship over API.
-    - poster_url <- poster (if not already provided)
-    - thumb_url  <- thumb_url or first of [image, thumbnail, media]
-    - normalized_at fallback from ingested_at
-    - proxy URL rewrite for images
-    - keep verticals, kind_meta, tags, etc.
+    Take a raw entry from sanitizer and normalize shape for the public API:
+      - poster_url fallback
+      - thumb_url fallback
+      - normalized_at fallback
+      - CORS-safe proxy rewrite for images
+      - force tags to list[str] or None
     """
     obj = dict(it)
 
-    # poster_url fallback
+    # poster fallback
     if not obj.get("poster_url") and obj.get("poster"):
         obj["poster_url"] = obj.get("poster")
 
-    # thumbnail / image fallbacks
+    # thumb fallback
     if not obj.get("thumb_url"):
         obj["thumb_url"] = (
             obj.get("image")
@@ -381,21 +427,16 @@ def _adapt_for_response(it: dict) -> dict:
             or None
         )
 
-    # normalized_at fallback
+    # timestamp fallback
     if not obj.get("normalized_at"):
         obj["normalized_at"] = obj.get("ingested_at")
 
-    # rewrite images through proxy for CORS
+    # proxy image URLs
     obj["thumb_url"] = _to_proxy(obj.get("thumb_url"))
     obj["poster_url"] = _to_proxy(obj.get("poster_url"))
 
-    # verticals is already enforced in sanitizer (_ensure_verticals),
-    # kind_meta is guaranteed-ish in sanitizer (_ensure_kind_meta)
-    # We just leave them as-is.
-
-    # ensure tags is either list[str] or None (sanitizer already tries this)
-    tags_val = obj.get("tags")
-    if not (tags_val is None or isinstance(tags_val, list)):
+    # tags sanity
+    if not (obj.get("tags") is None or isinstance(obj.get("tags"), list)):
         obj["tags"] = None
 
     return obj
@@ -409,34 +450,29 @@ def _scan_with_cursor(
     since: Optional[str],
 ) -> Tuple[List[dict], Optional[int]]:
     """
-    We paginate over the Redis LIST (which is LPUSH newest-first in sanitizer).
-    BUT we don't trust push order completely; we sort the collected batch by
-    "effective timestamp" (normalized_at > published_at > release_date).
-
-    Inputs:
-      - start_idx: where to start scanning the Redis list
-      - limit: how many results to *return*
-      - vertical: optional vertical slug, e.g. "entertainment" or "sports"
-      - tab: legacy tab filter
-      - since: timestamp floor
-
-    Returns:
-      (page, next_cursor_int_or_None)
+    Cursor-pagination over the Redis LIST (newest-first push).
+    We:
+      - scan forward in chunks,
+      - filter (vertical, tab, since),
+      - then sort by "effective" timestamp,
+      - then return `limit` items + the next cursor index.
     """
 
-    # total list length so we don't read past the tail
+    # Total list length so we don't read past tail
     try:
         total_len = _redis_client.llen(FEED_KEY)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
+        raise HTTPException(
+            status_code=503,
+            detail=f"Redis unavailable: {type(e).__name__}",
+        ) from e
 
     total_len = int(total_len or 0)
     idx = max(0, start_idx)
 
     collected: List[dict] = []
     scanned = 0
-
-    # We intentionally collect more than asked so our timestamp sort is meaningful.
+    # grab extra so timestamp sort has some breathing room
     target_collect = max(limit * 5, limit)
 
     while idx < total_len and scanned < MAX_SCAN and len(collected) < target_collect:
@@ -477,10 +513,15 @@ def _scan_with_cursor(
     return (page, next_cursor)
 
 
-# ------------------------------ Endpoints ------------------------------------
+# ------------------------------------------------------------------------------
+# Endpoints
+# ------------------------------------------------------------------------------
 
 @app.get("/health")
 def health():
+    """
+    Public healthcheck. Also exposes feed_len so we can verify sanitizer is alive.
+    """
     try:
         ok = _redis_client.ping()
         feed_len = _redis_client.llen(FEED_KEY)
@@ -489,6 +530,7 @@ def health():
         ok = False
         feed_len = None
         err = f"{type(e).__name__}"
+
     return {
         "status": "ok" if ok else "degraded",
         "redis": settings.redis_url,
@@ -503,58 +545,62 @@ def health():
 
 @app.get("/v1/health", include_in_schema=False)
 def v1_health():
-    # Shim so both /health and /v1/health answer 200 JSON
+    # convenience shim so uptime monitors can hit either /health or /v1/health
     return health()
 
 
 @app.get(
     "/v1/feed",
     response_model=FeedResponse,
-    summary="Feed items",
+    summary="Paginated feed",
     description=(
-        "Cursor-paginated feed. "
-        "Use ?vertical=entertainment|sports to filter. "
-        "Results are sorted by effective timestamp (normalized_at > published_at > release_date). "
-        "Use returned `next_cursor` for pagination."
+        "Cursor-paginated feed.\n"
+        "- ?vertical=entertainment|sports filters by vertical\n"
+        "- ?tab=all|trailers|ott|intheatres|comingsoon applies legacy tabs\n"
+        "- ?since=RFC3339 limits to items >= that timestamp\n"
+        "- ?cursor returned by previous page\n"
+        "Items are sorted by effective timestamp "
+        "(normalized_at > published_at > release_date)."
     ),
 )
 async def feed(
     request: Request,
     vertical: Optional[str] = Query(
         None,
-        description="Vertical slug to filter by (e.g. 'entertainment', 'sports'). "
-                    "If omitted, returns all verticals.",
+        description="Vertical slug, e.g. 'entertainment' or 'sports'. "
+                    "If omitted you get all.",
     ),
     tab: FeedTab = Query(
         FeedTab.all,
-        description="Legacy tabs: all | trailers | ott | intheatres | comingsoon. "
-                    "Still applied after vertical filter.",
+        description="Legacy tabs: all | trailers | ott | intheatres | comingsoon.",
     ),
     since: Optional[str] = Query(
         None,
-        description="RFC3339 / UTC. Only include items where "
-                    "(normalized_at → published_at → release_date) >= this time.",
+        description="RFC3339 UTC. "
+                    "Only include stories whose effective timestamp "
+                    "is >= this time.",
     ),
     cursor: Optional[str] = Query(
         None,
-        description="Opaque cursor from previous page; omit for first page.",
+        description="Opaque cursor from previous response.next_cursor. "
+                    "Omit for first page.",
     ),
     limit: int = Query(
         default=settings.default_page_size,
         ge=1,
         le=settings.max_page_size,
-        description="Max number of stories to return in this page.",
+        description="Max number of stories to return.",
     ),
     _=Depends(limiter("feed", RL_FEED_PER_MIN)),
 ):
-    # Validate 'since' early so we give nice 422 instead of empty feed.
+    # Pre-validate 'since' so we don't silently return empty
     if since is not None and _parse_iso(since) is None:
         raise HTTPException(
             status_code=422,
             detail="Invalid 'since' (use RFC3339, e.g. 2025-01-01T00:00:00Z)",
         )
 
-    # decode cursor
+    # decode cursor -> starting list index
     start_idx = 0
     if cursor:
         try:
@@ -578,7 +624,7 @@ async def feed(
 @app.get(
     "/v1/search",
     response_model=SearchResponse,
-    summary="Substring search over title+summary",
+    summary="Naive substring search over recent titles/summaries",
 )
 async def search(
     request: Request,
@@ -587,29 +633,33 @@ async def search(
     _=Depends(limiter("search", RL_SEARCH_PER_MIN)),
 ):
     """
-    Very naive substring match across the most recent MAX_SCAN stories.
-    Does NOT care about verticals, tabs, etc.
+    Lowercase substring match on title+summary across ~MAX_SCAN most
+    recent stories in Redis. No vertical/tab filtering here (for now).
     """
     ql = q.lower()
-    res: list[dict] = []
+    out: list[dict] = []
     scanned = 0
+
     for it in _iter_feed():
         scanned += 1
         hay = f"{it.get('title','')} {(it.get('summary') or '')}".lower()
         if ql in hay:
-            res.append(_adapt_for_response(it))
-            if len(res) >= limit:
+            out.append(_adapt_for_response(it))
+            if len(out) >= limit:
                 break
         if scanned >= MAX_SCAN:
             break
 
-    return SearchResponse(q=q, items=[Story(**it) for it in res])
+    return SearchResponse(
+        q=q,
+        items=[Story(**it) for it in out],
+    )
 
 
 @app.get(
     "/v1/story/{story_id}",
     response_model=Story,
-    summary="Story detail by ID",
+    summary="Fetch a single story by ID",
 )
 async def story_detail(
     request: Request,
@@ -617,18 +667,20 @@ async def story_detail(
     _=Depends(limiter("story", RL_STORY_PER_MIN)),
 ):
     """
-    Walk recent feed items and return the first matching story ID.
-    This is O(MAX_SCAN) and is fine for now.
+    Scan recent feed items and return the first match (O(MAX_SCAN)).
+    This is fine because new stories are always toward the head of FEED_KEY.
     """
     sid = unquote(story_id)
     for it in _iter_feed():
         if it.get("id") == sid:
             return Story(**_adapt_for_response(it))
+
     raise HTTPException(status_code=404, detail="Story not found")
 
 
 @app.get("/")
 def root():
+    # Very lightweight sanity endpoint
     return {
         "ok": True,
         "service": "cinepulse-api",
