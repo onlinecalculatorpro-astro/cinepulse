@@ -3,6 +3,15 @@
 # =============================================================================
 # PHILOSOPHY: Quality over quantity. 100% FREE sources + ZERO noise.
 # Premium editorial + official channels + zero paywalls + zero clickbait.
+#
+# We allow:
+#   - Official trailers, OTT drops, booking info
+#   - Box office / business numbers
+#   - Reality show on-screen drama (arguments, eliminations, walkouts) that aired publicly
+#
+# We block:
+#   - Off-camera gossip, airport looks, relationship rumours, party pics
+#   - "Fans troll/slam" outrage bait
 # =============================================================================
 vertical: entertainment
 
@@ -16,10 +25,15 @@ throttle:
     indiatoday.in: 180              # 3 min for mainstream news
     hindustantimes.com: 180         # 3 min for mainstream news
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # YouTube sources for this vertical
-# 100% FREE - YouTube API quota: 10,000 units/day (plenty for our needs)
-# ----------------------------------------------------------------------------- 
+# 100% FREE - Official studio / platform / exhibitor channels
+#
+# NOTE:
+# - kind_hint drives downstream tagging ("trailer", "ott", "release")
+# - All are India-facing, Hindi-first or pan-India but theatrically relevant in Hindi belt
+# - We only want *official* uploads (trailers, release announcements, OTT drops)
+# -----------------------------------------------------------------------------
 youtube:
   defaults:
     enabled: true
@@ -31,7 +45,7 @@ youtube:
 
   channels:
     # === BIG 4 PRODUCTION HOUSES (Premium Quality) ===
-    
+
     - name: "Dharma Productions"
       enabled: true
       channel_id: "UCwo9ey4fQ8h0c8rQ2n2-2sw"
@@ -62,10 +76,10 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Farhan Akhtar/Ritesh Sidhwani - Gully Boy, Dil Chahta Hai, quality films
+      # Farhan Akhtar / Ritesh Sidhwani - Gully Boy, Dil Chahta Hai, quality films
 
-    # === MAJOR STUDIOS & DISTRIBUTORS ===
-    
+    # === MAJOR STUDIOS & DISTRIBUTORS (Hindi theatrical + pan-India releases) ===
+
     - name: "T-Series"
       enabled: true
       channel_id: "UCq-Fj5jknLsUf-MWSy4_brA"
@@ -88,7 +102,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Large catalog of Hindi films
+      # Large Hindi film catalog
 
     - name: "Rajshri"
       enabled: true
@@ -98,8 +112,40 @@ youtube:
       region: "IN"
       # Family entertainment specialist - wholesome content
 
-    # === EMERGING/QUALITY PRODUCERS ===
-    
+    - name: "Viacom18 Studios"
+      enabled: true
+      channel_id: "UCs56ffejFhWlCvlvRIdpb9Q"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+      # Hindi theatrical slate and official trailers
+
+    - name: "Star Studios"
+      enabled: true
+      channel_id: "UCGqvJPRcv7aVFun-eTsatcA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+      # Disney-owned Hindi film label (ex Fox Star) – high-profile releases
+
+    - name: "Jio Studios"
+      enabled: true
+      channel_id: "UCcXQd6kHKm0b41x8zMVMmMg"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+      # Reliance-backed studio covering theatrical + direct-to-digital
+
+    - name: "Pen Movies"
+      enabled: true
+      channel_id: "UC3ar28GS6o1p0m_wabfk2zw"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+      # PEN Studios / Pen Movies: Hindi-dubbed pan-India blockbusters, early trailers
+
+    # === EMERGING / QUALITY PRODUCERS (Hindi-first but pan-India reach) ===
+
     - name: "Maddock Films"
       enabled: true
       channel_id: "UCiXm7T0gdYB6AqDDYhbb0lA"
@@ -116,15 +162,31 @@ youtube:
       region: "IN"
       # Vikram Malhotra - content-driven cinema (Airlift, Sherni)
 
-    # === SOUTH INDIAN BIGGIES (Pan-India Blockbusters) ===
-    
+    - name: "RSVP Movies"
+      enabled: true
+      channel_id: "UCbSWf4PKXPbMHe-rPIBD0bQ"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+      # Ronnie Screwvala’s banner – buzzy Hindi originals
+
+    - name: "Junglee Pictures"
+      enabled: true
+      channel_id: "UCTSewLhQ8JEhgPCT6N_YyJA"
+      industry: "bollywood"
+      kind_hint: "trailer"
+      region: "IN"
+      # (Badhaai Ho, Talvar) – strong story-led theatrical films
+
+    # === SOUTH INDIAN BIGGIES (Pan-India Blockbusters in Hindi belt) ===
+
     - name: "Hombale Films"
       enabled: true
       channel_id: "UCkBa5gKdL8KLdWDE96Gy6Eg"
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # KGF Chapter 1 & 2, Salaar - massive Hindi market success
+      # KGF, Salaar – massive appeal in Hindi markets
 
     - name: "Mythri Movie Makers"
       enabled: true
@@ -132,7 +194,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Pushpa series - Hindi dubbed version was massive hit
+      # Pushpa series – pan-India breakout, Hindi audience cares
 
     - name: "UV Creations"
       enabled: true
@@ -140,12 +202,71 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Prabhas films (Saaho, Radhe Shyam) - pan-India releases
+      # Prabhas vehicles etc.
 
-# ----------------------------------------------------------------------------- 
+    # === OTT PLATFORMS (Official India handles)
+    # We treat these as "ott": now streaming, digital premieres, season drops.
+    # Zero paparazzi. Pure "watch this tonight" value.
+
+    - name: "Netflix India"
+      enabled: true
+      channel_id: "UCZSNzBgFub_WWil6TOTYwAg"
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+      # OTT premiere announcements, series trailers
+
+    - name: "Prime Video India"
+      enabled: true
+      channel_id: "UC4zWG9LccdWGUlF77LZ8toA"
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+      # Amazon India slate, direct-to-digital drops
+
+    - name: "Sony LIV"
+      enabled: true
+      channel_id: "UCOQNJjhXwvAScuELTT_i7cQ"
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+      # Originals, reality, sports-rights promos (downstream can filter sports later)
+
+    - name: "ZEE5"
+      enabled: true
+      channel_id: "UCXOgAl4w-FQero1ERbGHpXQ"
+      industry: "bollywood"
+      kind_hint: "ott"
+      region: "IN"
+      # ZEE5 originals + digital premieres
+
+    # (Disney+ Hotstar / JioCinema can be added later once channel_id is verified
+    # and once we decide how we want to treat live sports noise.)
+
+    # === THEATRICAL / TICKETING (Release calendar signals)
+    # These tell us: "In cinemas Friday", "Advance booking open".
+    # We badge them as kind_hint: "release" to power In Theatres / Coming Soon.
+
+    - name: "PVR INOX / PVR Cinemas"
+      enabled: true
+      channel_id: "UCQAGGxDiY8mCBvorddZFymQ"
+      industry: "bollywood"
+      kind_hint: "release"
+      region: "IN"
+      # National exhibitor. Posts booking / 'Now Showing' promos.
+
+    - name: "BookMyShow"
+      enabled: true
+      channel_id: "UCV7DChRolW8-60g2053qi_A"
+      industry: "bollywood"
+      kind_hint: "release"
+      region: "IN"
+      # India's top ticketing platform. "Advance booking open" = instant CTA.
+
+# -----------------------------------------------------------------------------
 # RSS / News sources for this vertical
 # 100% FREE - No paywalls + Quality journalism ONLY
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 rss:
   defaults:
     enabled: true
@@ -153,7 +274,7 @@ rss:
     max_items_per_poll: 12
     include_keywords: []
     ignore_keywords:
-      # Celebrity gossip noise
+      # Celebrity gossip noise (off-camera lifestyle / paparazzi)
       - "spotted"
       - "airport look"
       - "gym look"
@@ -170,7 +291,7 @@ rss:
       - "seen with"
       - "dinner date"
       - "lunch date"
-      # Sensationalism
+      # Sensationalism / outrage bait
       - "trolled"
       - "slammed"
       - "roasted"
@@ -185,7 +306,7 @@ rss:
       - "fans react"
       - "fans slam"
       - "gets trolled"
-      # Fluff content
+      # Low-signal fluff
       - "throwback"
       - "throwback thursday"
       - "tbt"
@@ -199,7 +320,7 @@ rss:
       - "bloopers"
       - "deleted scenes"
       - "extended cut"
-      # Interview/non-news
+      # Promo interview / feelings content
       - "interview"
       - "exclusive interview"
       - "talks about"
@@ -218,7 +339,7 @@ rss:
       - "q&a"
 
   buckets:
-    # === TIER 1: TRADE AUTHORITY (100% Free, ZERO Paywall) ===
+    # === TIER 1: TRADE AUTHORITY (Box office / business) ===
     trade_authority:
       enabled: true
       feeds:
@@ -226,21 +347,15 @@ rss:
           enabled: true
           url: "https://www.bollywoodhungama.com/rss/news.xml"
           industry: "bollywood"
-          # ✅ 100% FREE - Trade publication since 1998
-          # WHY: Box office authority, industry insiders read this
-          # QUALITY: Professional journalism, accurate numbers
-          # NO clickbait, NO paywall
+          # Box office numbers, release status, OTT pickup. No paywall.
 
         - name: "Box Office India"
           enabled: true
           url: "https://www.boxofficeindia.com/rss.xml"
           industry: "bollywood"
-          # ✅ 100% FREE - Box office tracking specialist
-          # WHY: Daily collections, weekly analysis, territorial breakdowns
-          # QUALITY: Data-driven, no sensationalism
-          # NO clickbait, NO paywall
+          # Daily collections, weekend trends, theatrical business context.
 
-    # === TIER 2: MAINSTREAM NEWS (100% Free, Quality Journalism) ===
+    # === TIER 2: MAINSTREAM NEWS (High editorial standards) ===
     mainstream_quality:
       enabled: true
       feeds:
@@ -248,56 +363,44 @@ rss:
           enabled: true
           url: "https://www.indiatoday.in/rss/1206578"
           industry: "bollywood"
-          # ✅ 100% FREE - India Today Group credibility
-          # WHY: Balanced reporting, mainstream reach
-          # QUALITY: Professional standards, fact-checked
-          # NO clickbait headlines
           ignore_keywords:
             - "trolled"
             - "slammed"
             - "viral"
             - "spotted"
             - "airport"
+          # Balanced national coverage, not pure gossip.
 
         - name: "Hindustan Times Entertainment"
           enabled: true
           url: "https://www.hindustantimes.com/feeds/rss/entertainment/rssfeed.xml"
           industry: "bollywood"
-          # ✅ 100% FREE - Established English daily
-          # WHY: Quality entertainment journalism
-          # QUALITY: Good film reviews, industry news
-          # NO sensationalism
           ignore_keywords:
             - "trolled"
             - "slammed"
             - "spotted"
             - "airport"
             - "gym"
+          # Good for mainstream reach + film industry angles.
 
         - name: "Indian Express Entertainment"
           enabled: true
           url: "https://indianexpress.com/section/entertainment/feed/"
           industry: "bollywood"
-          # ✅ 100% FREE - Reputable newspaper
-          # WHY: Thoughtful film criticism, industry analysis
-          # QUALITY: Well-written, researched pieces
-          # NO clickbait
           ignore_keywords:
             - "trolled"
             - "spotted"
             - "viral"
             - "airport"
+          # Thoughtful coverage, OTT & censor board / clash stories.
 
         - name: "The Hindu Entertainment"
           enabled: true
           url: "https://www.thehindu.com/entertainment/movies/?service=rss"
           industry: "bollywood"
-          # ✅ 100% FREE - India's most respected English daily
-          # WHY: High editorial standards, quality film coverage
-          # QUALITY: Intellectual approach, no gossip
-          # ZERO noise
+          # High editorial standards, zero paparazzi tone.
 
-    # === TIER 3: ENTERTAINMENT FOCUSED (100% Free, Heavily Filtered) ===
+    # === TIER 3: ENTERTAINMENT FOCUSED (Fast but filtered hard) ===
     entertainment_filtered:
       enabled: true
       feeds:
@@ -305,10 +408,8 @@ rss:
           enabled: true
           url: "https://www.pinkvilla.com/entertainment/feed"
           industry: "bollywood"
-          # ✅ 100% FREE - Fast breaking news
-          # WHY: Good industry sources, quick updates
-          # CAVEAT: Needs HEAVY filtering (gossip-prone)
-          # Only keeping actual NEWS, not gossip
+          # We whitelist actual news (casting, show incidents, OTT release dates)
+          # and kill paparazzi / airport / "fans troll" junk.
           ignore_keywords:
             - "spotted"
             - "airport look"
@@ -332,7 +433,7 @@ rss:
             - "vacation"
             - "holiday"
 
-    # === TIER 4: OTT/STREAMING NEWS (100% Free) ===
+    # === TIER 4: OTT/STREAMING NEWS (Digital premiere dates = high utility) ===
     ott_streaming:
       enabled: true
       feeds:
@@ -340,7 +441,6 @@ rss:
           enabled: true
           url: "https://www.bollywoodhungama.com/rss/news.xml"
           industry: "bollywood"
-          # ✅ 100% FREE - Same trusted source, OTT-filtered
           include_keywords:
             - "OTT"
             - "streaming"
@@ -368,15 +468,12 @@ rss:
           enabled: true
           url: "https://www.ottplay.com/feed"
           industry: "bollywood"
-          # ✅ 100% FREE - OTT-specialized publication
-          # WHY: Dedicated OTT coverage, streaming news
-          # QUALITY: Platform-agnostic, comprehensive
-          # NO paywall
           ignore_keywords:
             - "interview"
-            - "review"  # We want NEWS, not reviews
+            - "review"   # We want "now streaming / coming to OTT", not critic review.
+          # Dedicated OTT coverage: platform availability + drop dates.
 
-    # === TIER 5: REALITY TV (100% Free, Selective) ===
+    # === TIER 5: REALITY TV / BIGG BOSS (ON-SCREEN DRAMA ONLY) ===
     reality_tv:
       enabled: true
       feeds:
@@ -384,9 +481,18 @@ rss:
           enabled: true
           url: "https://www.indiatvnews.com/entertainment.rss"
           industry: "bollywood"
-          # ✅ 100% FREE - Hindi news channel
-          # WHY: Good for Bigg Boss, reality show updates
-          # QUALITY: TV + film coverage
+
+          # We ONLY allow public, on-air events from televised / streamed reality shows.
+          # We DO allow:
+          #   - Eliminations / evictions / finales / winner reveals
+          #   - Fights or confrontations that happened on camera in the show
+          #   - Breakdown / walkout / nomination drama INSIDE the house or on stage
+          #
+          # We DO NOT allow:
+          #   - Airport looks
+          #   - Off-screen dating rumours
+          #   - Party/birthday paparazzi
+          #
           include_keywords:
             - "Bigg Boss"
             - "Khatron Ke Khiladi"
@@ -395,6 +501,29 @@ rss:
             - "finale"
             - "winner"
             - "contestant"
+            - "evicted"
+            - "eliminated"
+            - "nominated"
+            - "nomination"
+            - "captaincy task"
+            - "task"
+            - "heated argument"
+            - "fight"
+            - "fights with"
+            - "shouted at"
+            - "clash"
+            - "called out"
+            - "confronts"
+            - "accuses"
+            - "walks out"
+            - "stormed out"
+            - "in tears"
+            - "breaks down"
+            - "breaks down in tears"
+            - "breakdown on air"
+            - "on stage"
+            - "in the house"
+
           ignore_keywords:
             - "trolled"
             - "slammed"
@@ -402,53 +531,57 @@ rss:
             - "viral"
             - "party"
             - "birthday"
+          # Result: high-drama, high-engagement moments that aired publicly,
+          # WITHOUT paparazzi stalking or personal-life gossip.
 
 # =============================================================================
-# SOURCES REMOVED (Quality Issues):
+# SOURCES REMOVED (Quality Issues / Legal Risk):
 # =============================================================================
 # ❌ Film Companion - Paywall on many articles
 # ❌ Koimoi - Too clickbait-heavy, sensational headlines
 # ❌ TellyUpdates - TV serial gossip, low signal-to-noise ratio
-# ❌ TellyChakkar - Similar to TellyUpdates, too much gossip
+# ❌ TellyChakkar - Serial gossip, paparazzi-style personal life focus
 #
 # =============================================================================
-# SOURCES KEPT (100% Free + Quality):
+# SOURCES KEPT (100% Free + Quality / High Utility):
 # =============================================================================
-# ✅ Bollywood Hungama - Trade authority (Box office gold standard)
-# ✅ Box Office India - Box office specialist (Data-driven)
-# ✅ India Today - Mainstream credibility
-# ✅ Hindustan Times - Quality journalism
-# ✅ Indian Express - Thoughtful coverage
-# ✅ The Hindu - Highest editorial standards
-# ✅ Pinkvilla - Breaking news (HEAVILY filtered)
-# ✅ OTTplay - OTT specialist
-# ✅ India TV - Reality TV updates
+# ✅ Bollywood Hungama - Trade / box office authority
+# ✅ Box Office India - Collections, business context
+# ✅ India Today / Hindustan Times / Indian Express / The Hindu - Mainstream,
+#    fact-checked, attributable, less paparazzi
+# ✅ Pinkvilla (heavily filtered) - Fast casting / production / show updates
+# ✅ OTTplay - OTT availability / digital premiere info
+# ✅ India TV (filtered) - Reality show drama that actually aired
 #
-# ✅ 13 YouTube channels - All official production houses
+# ✅ Production houses & studios (Dharma, YRF, Red Chillies, Excel, Viacom18 Studios,
+#    Star Studios, Jio Studios, T-Series, Zee Studios, Pen Movies, RSVP, Junglee,
+#    Maddock, Abundantia, Hombale, Mythri, UV Creations)
+#
+# ✅ OTT platforms (Netflix India, Prime Video India, Sony LIV, ZEE5)
+#
+# ✅ Exhibitors / ticketing (PVR INOX / PVR Cinemas, BookMyShow)
 #
 # =============================================================================
-# QUALITY PROFILE:
+# QUALITY / ENGAGEMENT PROFILE:
 # =============================================================================
-# Total Sources: 22 (13 YouTube + 9 RSS)
-# All 100% FREE
-# All ZERO paywalls
-# Heavy filtering on Pinkvilla (only source prone to gossip)
-# Focus: Trade news, mainstream journalism, official trailers
+# - Trailers, teasers, ticket booking -> instant "watch now / book now" actions
+# - OTT drops -> "what do I watch tonight?"
+# - Box office + clashes -> fandom / bragging rights
+# - Reality TV fights, walkouts, nominations -> daily drama (BUT only what's on air)
 #
-# EXPECTED FEED:
-# =============================================================================
-# - 30-45 stories/day (quality over quantity)
-# - Box office updates (Bollywood Hungama, Box Office India)
-# - Official trailers (13 production houses)
-# - Industry news (mainstream newspapers)
-# - OTT releases (OTTplay, filtered Bollywood Hungama)
-# - Reality TV (Bigg Boss, major shows only)
+# We still DO NOT surface:
+# - Airport looks
+# - Relationship rumours
+# - "Spotted with mystery girl"
+# - "Fans troll outfit"
 #
-# ZERO:
-# - Celebrity airport/gym photos
-# - "Trolled/slammed" drama
-# - Throwback/unseen content
-# - Party/birthday coverage
-# - Interview fluff
-# - Clickbait headlines
+# Downstream rules still apply:
+# - normalize_event() must tag:
+#     gossip_only = true for off-camera personal-life stuff (will be dropped)
+#     is_risky = true for accusations / heated drama
+#     onscreen_drama = true when fights/confrontations happened on camera
+# - summarize_story_safe() / generate_safe_title():
+#     Must add attribution ("According to <source>...") and soften accusations.
+# - sanitizer is still the only publisher to feed:items
+# - sanitizer drops gossip_only == true and dedupes repeating topics
 # =============================================================================
