@@ -1,47 +1,78 @@
-import '../../core/api.dart'; // for API_BASE_URL
+// lib/features/story/story_image_url.dart
+//
+// Shared logic to choose a safe hero image URL for a Story.
+// - prefer posterUrl, fallback to thumbUrl
+// - drop obvious junk (demo.tagdiv.com etc.)
+// - avoid /v1/img proxy URLs on web (CORS / broken thumbs)
+// - if the URL is relative, prefix API_BASE_URL from --dart-define
+//
+// Usage:
+//   final imgUrl = resolveStoryImageUrl(story);
+//   if (imgUrl.isNotEmpty) ... CachedNetworkImage(imageUrl: imgUrl, ...);
 
-/// Return a cleaned, absolute image URL for a story hero/thumb.
-/// Falls back to '' if it's trash.
-String resolveStoryImageUrl(String? posterUrl, String? thumbUrl) {
-  // Prefer posterUrl, else thumbUrl.
-  var raw = (posterUrl != null && posterUrl.isNotEmpty)
-      ? posterUrl
-      : (thumbUrl ?? '');
+import '../../core/models.dart';
 
-  if (raw.isEmpty) return '';
+// This reads the value you pass in CI with
+//   --dart-define=API_BASE_URL=https://api.whatever.com
+// IMPORTANT: no trailing slash in that secret (your workflow already trims it)
+const String _API_BASE = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: '',
+);
 
-  // 1. reject obvious garbage from spammy demo hosts
-  if (raw.contains('demo.tagdiv.com')) return '';
+String resolveStoryImageUrl(Story story) {
+  // 1. pick candidate from story
+  final cand = (story.posterUrl?.isNotEmpty == true)
+      ? story.posterUrl!
+      : (story.thumbUrl ?? '');
 
-  // 2. normalize relative proxy URLs like "/v1/img?u=..." so they hit API, not Netlify
-  String fixProxy(String u) {
-    // already absolute? leave it.
-    if (u.startsWith('http://') || u.startsWith('https://')) {
-      return u;
-    }
+  if (cand.isEmpty) return '';
 
-    // "/v1/img?u=..."  OR  "v1/img?u=..."
-    if (u.startsWith('/v1/img')) {
-      return '$API_BASE_URL$u'; // API_BASE_URL has no trailing slash (CI enforces that)
-    }
-    if (u.startsWith('v1/img')) {
-      return '$API_BASE_URL/$u';
-    }
+  // 2. reject obvious garbage domains
+  if (cand.contains('demo.tagdiv.com')) return '';
 
-    // any other relative path, just return it untouched (best effort)
-    return u;
+  final uri = Uri.tryParse(cand);
+  if (uri == null) return '';
+
+  // Inner candidate if this was some proxy like /v1/img?u=<real-url>
+  final innerParam =
+      uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
+
+  // If that innerParam points to demo.tagdiv.com, nuke it too
+  if (innerParam.contains('demo.tagdiv.com')) {
+    return '';
   }
 
-  raw = fixProxy(raw);
+  final pathLower = uri.path.toLowerCase();
 
-  // 3. if it's still a proxy path, sanity check the inner target
-  final uri = Uri.tryParse(raw);
-  if (uri != null && uri.path.contains('/v1/img')) {
-    final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
-    if (inner.contains('demo.tagdiv.com')) {
-      return '';
+  // 3. We generally do NOT want to use `/v1/img?...` thumbnails in web,
+  //    because they'll 404/CORS on Netlify. Try to fall back to the inner real URL.
+  if (pathLower.contains('/v1/img')) {
+    final innerUri = Uri.tryParse(innerParam);
+    if (innerUri != null &&
+        innerUri.hasScheme &&
+        (innerUri.scheme == 'http' || innerUri.scheme == 'https')) {
+      return innerParam;
+    }
+    // couldn't salvage -> give up
+    return '';
+  }
+
+  // 4. If it's already absolute http/https, just use it as-is.
+  if (uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https')) {
+    return cand;
+  }
+
+  // 5. Otherwise it's probably a relative path like "/images/foo.jpg".
+  //    Prefix API_BASE_URL (which your GitHub Action passes via --dart-define).
+  if (_API_BASE.isNotEmpty) {
+    if (cand.startsWith('/')) {
+      return '$_API_BASE$cand';
+    } else {
+      return '$_API_BASE/$cand';
     }
   }
 
-  return raw;
+  // 6. Last resort: return whatever we had.
+  return cand;
 }
