@@ -1,28 +1,28 @@
 # apps/workers/jobs.py
 #
-# PIPELINE ROLE (this file runs in the "workers" container / RQ queue: events)
+# PIPELINE OVERVIEW (runs in the "workers" container / RQ queue: events)
 #
-#   scheduler  → polls YouTube/RSS and enqueues AdapterEventDict into "events"
+#   scheduler  → polls sources (RSS / YouTube) and enqueues AdapterEventDict jobs on "events"
 #   workers    → THIS FILE, rq worker "events"
-#                 - normalize_event(): turn AdapterEventDict → canonical story dict
+#                 - normalize_event(): AdapterEventDict → canonical story dict
 #                 - enqueue that story onto the "sanitize" queue
 #
 #   sanitizer  → rq worker "sanitize"
 #                 - dedupe using canonical(title+summary)
 #                 - first one wins, later variants dropped
-#                 - push to Redis FEED_KEY (public feed), trim, fanout, push notify
+#                 - push to Redis FEED_KEY, trim, fanout, optional push
 #
-#   api        → serves /v1/feed by reading FEED_KEY
+#   api        → /v1/feed reads FEED_KEY to serve the app
 #
-# IMPORTANT:
-# - workers do NOT write directly to FEED_KEY.
-# - workers do NOT dedupe.
-# - workers do NOT push notifications.
-# - workers just normalize and forward to sanitizer.
+# RULES:
+# - workers do NOT write directly to FEED_KEY
+# - workers do NOT dedupe
+# - workers do NOT send push notifications
+# - workers just normalize + forward to sanitizer
 #
-# Extra utility:
-# - backfill_repair_recent() is a manual/maintenance helper to patch old items
-#   in FEED_KEY (e.g. missing thumbnails). This is not part of the live loop.
+# MAINTENANCE:
+# - backfill_repair_recent() can patch older feed items in Redis
+#   (timestamps, thumbnails). It's manual / not in the live loop.
 
 from __future__ import annotations
 
@@ -49,6 +49,7 @@ from apps.workers.extractors import (
 )
 from apps.workers.summarizer import summarize_story
 
+
 __all__ = [
     "youtube_rss_poll",
     "rss_poll",
@@ -58,14 +59,12 @@ __all__ = [
     "VERTICAL_RULES",
 ]
 
-# =====================================================================
+# =============================================================================
 # Redis / env config
-# =====================================================================
+# =============================================================================
 
 def _redis() -> Redis:
-    """
-    Build a Redis client using REDIS_URL.
-    """
+    """Return a Redis client using REDIS_URL."""
     return Redis.from_url(
         os.getenv("REDIS_URL", "redis://redis:6379/0"),
         decode_responses=True,
@@ -79,19 +78,18 @@ REPAIR_BY_URL = os.getenv("REPAIR_BY_URL", "1").lower() not in ("0", "", "false"
 YT_MAX_ITEMS = int(os.getenv("YT_MAX_ITEMS", "50"))
 RSS_MAX_ITEMS = int(os.getenv("RSS_MAX_ITEMS", "30"))
 
-# =====================================================================
+# =============================================================================
 # Vertical config
-# =====================================================================
+# =============================================================================
 
-# Default vertical if nothing matches.
+# Fallback vertical if nothing matches
 FALLBACK_VERTICAL = os.getenv("FALLBACK_VERTICAL", "entertainment")
 
-# Rule structure:
-#   "vertical-slug": { "keywords": [ ...lowercase substrings... ] }
+# We map stories to vertical buckets via stupid-simple keyword sniffing.
+# This is cheap, fast, and easy to extend.
 #
-# We only match substrings in title/body/domain, super cheap.
-# We start with "entertainment" and "sports", but this format scales to
-# "tech", "travel", etc. with no changes to Redis or sanitizer.
+# Shape:
+#   "vertical-slug": { "keywords": [ ...lowercase substrings... ] }
 VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
     "entertainment": {
         "keywords": [
@@ -106,7 +104,6 @@ VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
             "cast announced", "actor", "actress", "director",
         ]
     },
-
     "sports": {
         "keywords": [
             "ipl", "t20", "odi", "test match", "wicket", "wickets",
@@ -120,34 +117,34 @@ VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
-# stable order to emit verticals
+# deterministic-ish ordering for emitted verticals
 _VERTICAL_ORDER = [FALLBACK_VERTICAL] + [
     v for v in VERTICAL_RULES.keys() if v != FALLBACK_VERTICAL
 ]
 
-# =====================================================================
+# =============================================================================
 # Types
-# =====================================================================
+# =============================================================================
 
 class AdapterEventDict(TypedDict, total=False):
     source: str                  # "youtube" | "rss:<domain>"
-    source_event_id: str         # e.g. YouTube video ID or hash of normalized RSS link
+    source_event_id: str         # YouTube video ID or hash of normalized RSS link
     title: str
     kind: str                    # trailer | ott | news | release
-    published_at: Optional[str]  # RFC3339 UTC
+    published_at: Optional[str]  # RFC3339 UTC-ish
     thumb_url: Optional[str]
-    payload: dict                # extracted payload (link, html, etc.)
+    payload: dict                # raw scraped payload (link/html/etc.)
 
-# =====================================================================
+# =============================================================================
 # Regex / heuristics
-# =====================================================================
+# =============================================================================
 
 TRAILER_RE = re.compile(r"\b(trailer|teaser)\b", re.I)
 
 _OTT_PROVIDERS = [
     "Netflix", "Prime Video", "Amazon Prime Video", "Disney\\+ Hotstar", "Hotstar",
-    "JioCinema", "Jio Cinema", "ZEE5", "Zee5", "SonyLIV", "Sony LIV", "Hulu", "Max",
-    "HBO Max", "Apple TV\\+", "Apple TV",
+    "JioCinema", "Jio Cinema", "ZEE5", "Zee5", "SonyLIV", "Sony LIV",
+    "Hulu", "Max", "HBO Max", "Apple TV\\+", "Apple TV",
 ]
 OTT_RE = re.compile(
     rf"(?:on|premieres on|streams on|streaming on|now on|now streaming on)\s+({'|'.join(_OTT_PROVIDERS)})",
@@ -166,11 +163,13 @@ RELEASE_VERBS_RE = re.compile(
 )
 COMING_SOON_RE = re.compile(r"\bcoming\s+soon\b", re.I)
 
+# kill boilerplate like "Subscribe / Follow / Link in bio"
 _BOILERPLATE_RE = re.compile(
     r"^\s*(subscribe|follow|like|comment|share|credits?:|cast:|music by|original score|prod(?:uction)? by|"
     r"cinematograph(?:y)?|director:?|producer:?|©|copyright|http[s]?://|#\w+|the post .* appeared first on)\b",
     re.I,
 )
+
 _TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
 _WS_RE = re.compile(r"\s+")
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -183,12 +182,7 @@ _CTA_NOISE_RE      = re.compile(
 _ELLIPSIS_TAIL_RE = re.compile(r"(\[\s*(?:…|\.{3})\s*\]\s*)+$")
 _DANGLING_ELLIPSIS_RE = re.compile(r"(?:…|\.{3})\s*$")
 
-_BAD_END_WORD = re.compile(r"\b(?:and|but|or|so|because|since|although|though|while|as)\.?$", re.I)
-_AUX_TAIL_RE  = re.compile(
-    r"\b(?:has|have|had|is|are|was|were|will|can|could|should|may|might|do|does|did)\b[\.…]*\s*$",
-    re.I,
-)
-
+# close-enough classifiers for tags/verticals
 _BOX_OFFICE_RE = re.compile(
     r"\bbox\s*office\b|collection[s]?\b|opening\s+weekend\b|crore\b|gross(?:ed|es)?\b|earned\s+₹",
     re.I,
@@ -214,16 +208,15 @@ DAY_MON_YR = re.compile(rf"\b(\d{{1,2}})\s+({_MN})\s*(\d{{2,4}})?\b", re.I)
 MON_DAY_YR = re.compile(rf"\b({_MN})\s+(\d{{1,2}})(?:,\s*(\d{{2,4}}))?\b", re.I)
 MON_YR     = re.compile(rf"\b({_MN})\s+(\d{{4}})\b", re.I)
 
-_SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
-
-# friendly CDNs for same-origin-ish bonus
+# track "friendly" CDNs so we don't pull blocked images
 _IMG_HOSTS_FRIENDLY = {"i0.wp.com", "i1.wp.com", "images.ctfassets.net"}
 
-# =====================================================================
+# =============================================================================
 # Time helpers
-# =====================================================================
+# =============================================================================
 
 def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Optional[str]:
+    """Normalize arbitrary date-ish input to UTC RFC3339 'YYYY-MM-DDTHH:MM:SSZ'."""
     if value is None:
         return None
 
@@ -247,13 +240,15 @@ def _to_rfc3339(value: Optional[Union[str, datetime, _time.struct_time]]) -> Opt
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
+        # If it's already some ISO-ish string, keep it.
         return s
 
-# =====================================================================
-# ID/link helpers
-# =====================================================================
+# =============================================================================
+# ID / link helpers
+# =============================================================================
 
 def _extract_video_id(entry: dict) -> Optional[str]:
+    """Pull a YouTube video ID out of a feedparser entry."""
     vid = entry.get("yt_videoid") or entry.get("yt:videoid")
     if vid:
         return vid
@@ -266,6 +261,7 @@ def _extract_video_id(entry: dict) -> Optional[str]:
 
 
 def _safe_job_id(prefix: str, *parts: str) -> str:
+    """Generate a sanely-bounded RQ job_id from arbitrary strings."""
     def clean(s: str) -> str:
         return re.sub(r"[^A-Za-z0-9_\-]+", "-", s).strip("-")
 
@@ -274,6 +270,7 @@ def _safe_job_id(prefix: str, *parts: str) -> str:
 
 
 def _domain(url: str) -> str:
+    """Extract domain (without www.) from a URL. Fallback 'rss'."""
     try:
         return urlparse(url).netloc.replace("www.", "")
     except Exception:
@@ -281,27 +278,33 @@ def _domain(url: str) -> str:
 
 
 def _hash_link(link: str) -> str:
+    """Stable ID for RSS items: sha1(link)."""
     return hashlib.sha1(link.encode("utf-8", "ignore")).hexdigest()
 
-# =====================================================================
+# =============================================================================
 # Release date / kind classification
-# =====================================================================
+# =============================================================================
 
 def _month_to_num(m: str) -> int | None:
     return _MONTHS.get(m.lower()[:3]) or _MONTHS.get(m.lower())
 
 
 def _nearest_future(year: int, month: int, day: int | None) -> datetime:
+    """
+    Try to interpret ambiguous "Oct 2025" / "Nov 5" etc. as
+    a sane future-ish release date.
+    """
     now = datetime.now(timezone.utc)
     d = 1 if day is None else max(1, min(28, day))
 
     if year < 100:
+        # 2-digit years like "25"
         year = 1900 + year if year >= 70 else 2000 + year
 
     candidate = datetime(year, month, d, tzinfo=timezone.utc)
 
     if candidate < now:
-        # bump to next year for ambiguous stuff in the past
+        # if it's already in the past, bump year forward for vague stuff
         if day is None or len(str(year)) <= 2:
             try:
                 candidate = datetime(year + 1, month, d, tzinfo=timezone.utc)
@@ -312,6 +315,10 @@ def _nearest_future(year: int, month: int, day: int | None) -> datetime:
 
 
 def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
+    """
+    Look for phrases like "in theatres Oct 25", "releasing 5 Nov", etc.
+    Returns (ISO release_date, is_theatrical, is_upcoming).
+    """
     t = title or ""
     if not t:
         return (None, False, False)
@@ -351,6 +358,7 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
 
 
 def _detect_ott_provider(text: str) -> Optional[str]:
+    """If the text literally says 'now streaming on Netflix', pull 'Netflix'."""
     if not text:
         return None
     m = OTT_RE.search(text)
@@ -360,6 +368,10 @@ def _detect_ott_provider(text: str) -> Optional[str]:
 
 
 def _classify(title: str, fallback: str = "news") -> Tuple[str, Optional[str], Optional[str], bool, bool]:
+    """
+    Decide story.kind.
+    Returns (kind, rd_iso, ott_platform, is_theatrical, is_upcoming)
+    """
     t = title or ""
     if TRAILER_RE.search(t):
         return ("trailer", None, None, False, False)
@@ -383,6 +395,9 @@ def _build_kind_meta(
     is_upcoming: bool,
     rd_iso: Optional[str],
 ) -> Dict[str, Any]:
+    """
+    Portable metadata shard that the frontend can render as badges / chips.
+    """
     if kind == "trailer":
         return {
             "kind": "trailer",
@@ -410,15 +425,17 @@ def _build_kind_meta(
         "is_breaking": False,
     }
 
-# =====================================================================
-# Text cleanup before summarizer
-# =====================================================================
+# =============================================================================
+# Text cleanup before summarize_story()
+# =============================================================================
 
 def _strip_html(s: str) -> str:
     """
-    Clean RSS/YouTube HTML-ish text into plain text for summarization.
-    Strip boilerplate like "Subscribe", timestamps like "0:43",
-    inline URLs, hashtags, etc.
+    Convert RSS / YouTube HTML-ish junk to plain text we can summarize:
+    - remove boilerplate ("subscribe / follow us")
+    - remove timestamps
+    - remove inline URLs / hashtags
+    - collapse whitespace
     """
     if not s:
         return ""
@@ -428,7 +445,7 @@ def _strip_html(s: str) -> str:
     s = _TIMESTAMP_RE.sub(" ", s)
 
     lines = [ln.strip() for ln in s.splitlines()]
-    keep: list[str] = []
+    keep: List[str] = []
     for ln in lines:
         if not ln:
             continue
@@ -441,15 +458,17 @@ def _strip_html(s: str) -> str:
     s2 = _HASHTAG_INLINE_RE.sub(" ", s2)
     s2 = _ELLIPSIS_TAIL_RE.sub("", s2)
     s2 = _DANGLING_ELLIPSIS_RE.sub("", s2)
+
     return _WS_RE.sub(" ", s2).strip()
 
-# =====================================================================
-# Verticals / tags
-# =====================================================================
+# =============================================================================
+# Verticals / industry / tags
+# =============================================================================
 
 INDUSTRY_ORDER = ["hollywood", "bollywood", "tollywood", "kollywood", "mollywood", "sandalwood"]
 
 DOMAIN_TO_INDUSTRY = {
+    # hollywood-ish
     "variety.com": "hollywood",
     "hollywoodreporter.com": "hollywood",
     "deadline.com": "hollywood",
@@ -458,11 +477,13 @@ DOMAIN_TO_INDUSTRY = {
     "collider.com": "hollywood",
     "vulture.com": "hollywood",
 
+    # bollywood-ish
     "bollywoodhungama.com": "bollywood",
     "koimoi.com": "bollywood",
     "filmfare.com": "bollywood",
     "pinkvilla.com": "bollywood",
 
+    # south industries
     "123telugu.com": "tollywood",
     "telugu360.com": "tollywood",
     "greatandhra.com": "tollywood",
@@ -488,8 +509,8 @@ KEYWORD_TO_INDUSTRY = [
     (re.compile(r"\bhollywood\b", re.I), "hollywood"),
 ]
 
-YOUTUBE_CHANNEL_TAG: dict[str, str] = {
-    # channel_id -> force an industry tag if you want
+YOUTUBE_CHANNEL_TAG: Dict[str, str] = {
+    # channel_id -> force an industry tag if we ever want to hard-pin
     # "UCWOA1ZGywLbqmigxE4Qlvuw": "hollywood",
 }
 
@@ -500,7 +521,8 @@ def _industry_tags(
     body_text: str,
     payload: dict,
 ) -> List[str]:
-    cand = set()
+    """Guess which film industry(ies) this story belongs to."""
+    cand: set[str] = set()
 
     dom = (source_domain or "").lower()
     for suffix, tag in DOMAIN_TO_INDUSTRY.items():
@@ -526,6 +548,10 @@ def _classify_verticals(
     body_text: str,
     source_domain: str,
 ) -> List[str]:
+    """
+    Map story → vertical(s) like ["entertainment"] or ["sports"].
+    Basically substring search against VERTICAL_RULES.
+    """
     blob = f"{title}\n{body_text}\n{source_domain}".lower()
 
     hits: set[str] = set()
@@ -556,6 +582,10 @@ def _content_tags(
     kind: str,
     ott_platform: Optional[str],
 ) -> List[str]:
+    """
+    Build tags array for frontend chips / filters.
+    Things like: ["bollywood","box-office","trailer","ott","now-streaming",...]
+    """
     tags = set(base_industry_tags or [])
     hay = f"{title}\n{body_text or ''}"
 
@@ -574,13 +604,14 @@ def _content_tags(
 
     return sorted(tags)
 
-# =====================================================================
-# Image helpers
-# =====================================================================
+# =============================================================================
+# Image scoring / selection
+# =============================================================================
 
 _YT_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})")
 
 def _youtube_thumb(link: str | None) -> str | None:
+    """Return a YouTube HQ thumbnail from any watch/shorts link."""
     if not link:
         return None
     m = _YT_ID.search(link)
@@ -592,10 +623,10 @@ def _youtube_thumb(link: str | None) -> str | None:
 
 def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tuple[str, int]]:
     """
-    Wrapper around extractor._images_from_html_block.
+    Thin wrapper for extractors._images_from_html_block().
     Returns list[(url, size_bias)].
     """
-    from apps.workers.extractors import _images_from_html_block as _imgs  # type: ignore
+    from apps.workers.extractors import _images_from_html_block as _imgs  # lazy import
     return _imgs(html_str, base_url)
 
 _BAD_IMG_RE = re.compile(
@@ -606,28 +637,32 @@ _BAD_IMG_RE = re.compile(
 
 def _looks_bad_brand_card(u: str) -> bool:
     """
-    Heuristic "is this just a branded/social card and not the real hero image?"
+    Heuristic to identify "generic social card" / watermark / tiny logo
+    that we absolutely do NOT want to show in the app card.
     """
     l = u.lower()
 
-    # obvious junk patterns
     if _BAD_IMG_RE.search(l):
         return True
 
-    # tiny boilerplate sizes (logos, watermarks)
+    # blatant tiny watermark-y stuff like ...-150x150 or ...-64x64
     if re.search(r"(\b|_)(1x1|64x64|100x100|150x150)(\b|_)", l):
         return True
 
-    # "default og/share/social" style share tiles
+    # 'default_og_image.jpg', 'social-share-card.png', etc.
     if "default" in l and ("og" in l or "share" in l or "social" in l):
         return True
 
     return False
 
+
 def _numeric_size_hint(u: str) -> int:
     """
-    Guess resolution from URL hints like 1200x630, -2048, _1080 etc.
-    Larger number = larger / more hero-like.
+    Guess approximate resolution from URL:
+    examples:
+      ...-1280x720.jpg → 1280
+      ..._2048.jpg     → 2048
+    Bigger => probably a real hero still.
     """
     size = 0
     m = re.search(r'(\d{3,5})[xX_ -](\d{3,5})', u)
@@ -646,10 +681,12 @@ def _numeric_size_hint(u: str) -> int:
                 pass
     return size
 
+
 def _same_origin_bonus(img_url: str, page_url: str) -> int:
     """
-    Small boost if the image is from same domain or a known friendly CDN,
-    so it's less likely to 403.
+    Reward images that come from same domain (or our known 'friendly' CDNs),
+    because those are more likely to be valid article photos rather than ads
+    that will 403 or get CORS-blocked.
     """
     try:
         host_img = urlparse(img_url).netloc.lower().removeprefix("www.")
@@ -662,12 +699,13 @@ def _same_origin_bonus(img_url: str, page_url: str) -> int:
         pass
     return 0
 
+
 def _is_tiny_wp_thumb(u: str) -> bool:
     """
-    Detect classic WordPress sidebar thumbs like ...-150x79.jpg, ...-300x169.png.
-    These are usually "You may like" / "Trending" tiles, not the hero image.
-
-    We'll treat it as 'tiny' if BOTH dims are < 320px.
+    Detect classic WordPress sidebar thumbs like ...-150x79.jpg,
+    ...-300x169.png, etc. Those are usually "You May Like" tiles
+    and NOT the main hero image.
+    We'll treat it as 'tiny' if both dims < ~320.
     """
     m = re.search(
         r'[-_](\d{2,4})x(\d{2,4})\.(?:jpe?g|png|webp|gif|avif|bmp|jfif|pjpeg)(?:[?#].*)?$',
@@ -683,78 +721,72 @@ def _is_tiny_wp_thumb(u: str) -> bool:
         return False
     return max(w, h) < 320
 
+
 def _score_image_for_card(img_url: str, page_url: str) -> int:
     """
-    Score candidate images for story cards.
-    The goal:
-      - Strongly prefer the real hero/inline article image
-        (e.g. cast still, poster, scene photo).
-      - Aggressively punish sidebar thumbs like '...-150x79.jpg'
-        and generic social-share cards.
+    Assign a score to each candidate image:
+      + big inline/poster/scene stills
+      - social share cards / sidebar thumbs / tiny junk
 
-    This is tuned to avoid the Koimoi "random unrelated tiny thumbnail"
-    problem.
+    This is the core fix for the Koimoi issue
+    (wrong unrelated tiny 150x79 thumbnail).
     """
     score = 0
     l = img_url.lower()
 
-    # 0. Hard penalties for obvious junk / branded social tiles.
+    # Hard nuke obvious junk:
     if _looks_bad_brand_card(img_url):
         score -= 5000
 
-    # Penalize classic tiny sidebar thumbs (150x79, 300x169, etc.).
+    # Strongly punish tiny sidebar thumbs like '-150x79.jpg'
     if _is_tiny_wp_thumb(l):
         score -= 4000
 
-    # Penalize obvious 'share card' or social preview art.
+    # Punish known social/og preview cards
     if re.search(r"(og|open[-_]?graph|social|share[_-]?img|share[_-]?card|shareimage)", l):
         score -= 1000
 
-    # Penalize default/placeholder artwork.
+    # Punish generic "default" / "placeholder"
     if "default" in l or "placeholder" in l:
         score -= 800
 
-    # 1. Boost WordPress / media library hero-style images.
-    # Koimoi etc. often serve real header photos from:
-    #   /wp-content/uploads/...
-    #   /wp-content/new-galleries/...
-    # We'll give those a big push.
+    # Boost real inline article / poster / gallery shots.
+    # Koimoi & friends often serve good hero art from:
+    #   /wp-content/uploads/...  OR  /wp-content/new-galleries/...
     if re.search(r"/wp-content/(uploads|new-galleries)/", l):
         score += 1200
     elif re.search(r"/(uploads|upload|gallery|galleries|media)/", l):
         score += 800
 
-    # Small nudge if URL hints at poster/still/promo.
+    # Mild push if it hints at poster/still/promo keywords
     if re.search(r"(poster|stills?|first-look|promo|on-set|scene)", l):
         score += 200
 
-    # 2. Size heuristics: bigger image hints get more points.
+    # Size hint = bigger might be actual hero
     dim_hint = _numeric_size_hint(l)
     score += dim_hint
     if dim_hint == 0:
-        # If we saw no size hint at all, often it's some tiny sprite.
+        # often means tiny system badge; down-rank a bit
         score -= 50
 
-    # Super tiny thumbs? Nuke harder.
+    # Extra nuke tiny again (double-hit)
     if _is_tiny_wp_thumb(l):
         score -= 1000
 
-    # 3. Hosting preference: same-origin/friendly CDN gets a boost.
+    # Reward same-origin / friendly CDN
     score += _same_origin_bonus(img_url, page_url)
 
-    # 4. Mild bonus for normal photo extensions.
+    # Mild bonus for normal photo extensions
     if re.search(r"\.(jpe?g|png|webp|gif|avif|bmp|jfif|pjpeg)(?:[?#]|$)", l):
         score += 50
 
     return score
 
+
 def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
-    Score ALL candidates and choose the best.
-    We DO NOT blindly trust og:image anymore.
-
-    This fixes cases where og:image or twitter:image is just a generic
-    brand tile or sidebar image, instead of the actual hero still/poster.
+    Build a list of ALL possible image candidates for this story, score them,
+    choose the best. We never just blindly trust og:image.
     """
     def _norm_one(u: Optional[str]) -> Optional[str]:
         if not u:
@@ -763,18 +795,18 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
 
     raw_candidates: List[str] = []
 
-    # candidates scraped by extractors
+    # add candidates discovered by extractors
     cand_list = payload.get("image_candidates")
     if isinstance(cand_list, list):
         for u in cand_list:
             if isinstance(u, str):
                 raw_candidates.append(u)
 
-    # feed-level thumb guess
+    # add feed-level "thumb" guess
     if thumb_hint:
         raw_candidates.insert(0, thumb_hint)
 
-    # direct enclosures like <enclosure type="image/...">
+    # add <enclosure type=image/*> links
     for enc in (payload.get("enclosures") or []):
         if not isinstance(enc, dict):
             continue
@@ -788,7 +820,7 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
         )):
             raw_candidates.append(u)
 
-    # inline <img> in body HTML / summary
+    # add inline <img> from HTML content/summary
     for key in ("content_html", "description_html", "summary"):
         for u, _bias in _images_from_html_block(payload.get(key), page_url):
             raw_candidates.append(u)
@@ -813,11 +845,11 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
 
     scored.sort(key=lambda x: x[0], reverse=True)
     best_score, best_url = scored[0]
-
-    # even if best_score < 0, it's still "best we have"
     return best_url or None
 
+
 def _has_any_image(obj: Dict[str, Any]) -> bool:
+    """Does this story already have ANY usable artwork field set?"""
     return bool(
         obj.get("image")
         or obj.get("thumb_url")
@@ -827,23 +859,22 @@ def _has_any_image(obj: Dict[str, Any]) -> bool:
         or obj.get("media")
     )
 
-# =====================================================================
+# =============================================================================
 # Main worker job: normalize_event
-# =====================================================================
+# =============================================================================
 
 def normalize_event(event: AdapterEventDict) -> dict:
     """
-    TURN RAW ADAPTER EVENT → CANONICAL STORY → HAND OFF TO SANITIZER.
+    RAW → CANONICAL STORY → SANITIZER QUEUE
 
     Steps:
-      1. Parse + clean raw adapter event.
-      2. Summarize content using summarize_story() for pro tone.
-      3. Classify kind (trailer/ott/release/news).
-      4. Build kind_meta.
-      5. Classify verticals (["entertainment"], ["sports"], ...).
-      6. Build tags.
-      7. Pick image using improved scoring.
-      8. Enqueue to sanitizer.
+      1. Collect source info (rss/youtube), title, timestamps.
+      2. Clean body text, summarize it (summarize_story()).
+      3. Classify kind (trailer / ott / release / news).
+      4. Build kind_meta for frontend.
+      5. Figure out verticals & tags.
+      6. SCORE IMAGES and pick a hero photo for cards.
+      7. Enqueue final story to "sanitize".
     """
     conn = _redis()
 
@@ -862,7 +893,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
     published_at = _to_rfc3339(event.get("published_at"))
     payload = event.get("payload") or {}
 
-    # --- source-specific pieces -------------------------------------
+    # --- Source-specific cleanup -----------------------------------
     if source == "youtube":
         link = payload.get("watch_url") or (
             f"https://www.youtube.com/watch?v={src_id}" if src_id else None
@@ -887,21 +918,21 @@ def normalize_event(event: AdapterEventDict) -> dict:
         ott_platform = provider_from_title or _detect_ott_provider(f"{title}\n{raw_text}")
         thumb_hint   = event.get("thumb_url")
 
-    # Normalize link to https absolute
+    # Normalize article link to absolute https
     link = to_https(abs_url(link, payload.get("feed") or link or "")) or ""
     page_for_imgs = link or (payload.get("feed") or "")
 
-    # --- IMAGE PICK with scoring ------------------------------------
+    # --- IMAGE PICK (hero artwork) ---------------------------------
     image_url = _pick_image_from_payload(payload, page_for_imgs, thumb_hint)
     if not image_url and source == "youtube":
         image_url = _youtube_thumb(link)
 
     final_best = image_url or thumb_hint
 
-    # --- SUMMARY -----------------------------------------------------
+    # --- SUMMARY for card body -------------------------------------
     summary_text = summarize_story(title, raw_text)
 
-    # --- TAGS / VERTICALS / KIND_META -------------------------------
+    # --- TAGS / VERTICALS / KIND_META ------------------------------
     industry_base = _industry_tags(source, source_domain, title, raw_text, payload)
     final_tags = _content_tags(industry_base, title, raw_text, kind, ott_platform)
 
@@ -915,53 +946,60 @@ def normalize_event(event: AdapterEventDict) -> dict:
         rd_iso=rd_iso,
     )
 
-    # --- FINAL STORY ------------------------------------------------
+    # --- FINAL STORY DICT ------------------------------------------
     now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     story: Dict[str, Any] = {
-        "id":              story_id,
-        "kind":            kind,
-        "kind_meta":       kind_meta,
-        "verticals":       verticals,
+        "id":            story_id,
+        "kind":          kind,
+        "kind_meta":     kind_meta,
+        "verticals":     verticals,
 
-        "title":           title,
-        "summary":         summary_text or None,
+        "title":         title,
+        "summary":       summary_text or None,
 
-        "published_at":    published_at,
-        "ingested_at":     now_ts,
-        "normalized_at":   now_ts,
+        # timestamps:
+        # published_at  -> source's publish timestamp (Koimoi/YouTube/etc.)
+        # ingested_at   -> when CinePulse pulled it
+        # normalized_at -> same as ingested_at here
+        "published_at":  published_at,
+        "ingested_at":   now_ts,
+        "normalized_at": now_ts,
 
-        "release_date":    rd_iso,
-        "is_theatrical":   True if is_theatrical else None,
-        "is_upcoming":     True if is_upcoming else None,
+        # release hints:
+        "release_date":  rd_iso,
+        "is_theatrical": True if is_theatrical else None,
+        "is_upcoming":   True if is_upcoming else None,
 
-        "url":             link or None,
-        "source":          source,
-        "source_domain":   source_domain,
+        # source info / deeplink:
+        "url":           link or None,
+        "source":        source,
+        "source_domain": source_domain,
 
-        "ott_platform":    ott_platform,
+        # OTT / platform info if relevant
+        "ott_platform":  ott_platform,
 
-        # hero image for cards / UI
-        # We set ALL of these so downstream (sanitizer → Redis → API → Flutter)
-        # always has poster_url/thumb_url populated.
-        "thumb_url":       final_best,
-        "poster_url":      final_best,
-        "image":           final_best,
-        "thumbnail":       final_best,
-        "poster":          final_best,
-        "media":           final_best,
+        # hero artwork for cards
+        # we fill ALL common keys so downstream (sanitizer → Redis → API → app)
+        # never ends up blank-thumbed
+        "thumb_url":     final_best,
+        "poster_url":    final_best,
+        "image":         final_best,
+        "thumbnail":     final_best,
+        "poster":        final_best,
+        "media":         final_best,
 
-        "tags":            final_tags or None,
+        # topical chips
+        "tags":          final_tags or None,
 
-        # debug / transparency
+        # debug / repair data for backfill_repair_recent()
         "enclosures":       payload.get("enclosures") or None,
         "image_candidates": payload.get("image_candidates") or None,
         "inline_images":    payload.get("inline_images") or None,
-
-        "payload":         payload,
+        "payload":          payload,
     }
 
-    # --- HANDOFF TO SANITIZER ---------------------------------------
+    # --- HANDOFF TO SANITIZER --------------------------------------
     q_sanitize = Queue("sanitize", connection=conn)
     sanitize_job_id = _safe_job_id("sanitize", story_id)
     q_sanitize.enqueue(
@@ -977,12 +1015,12 @@ def normalize_event(event: AdapterEventDict) -> dict:
     print(f"[normalize_event] QUEUED sanitize -> {story_id} | {title}")
     return story
 
-# =====================================================================
+# =============================================================================
 # Pollers
-# =====================================================================
+# =============================================================================
 
-YOUTUBE_CHANNEL_KIND = {
-    # channel_id -> force kind label if you want (e.g. "ott" / "trailer")
+YOUTUBE_CHANNEL_KIND: Dict[str, str] = {
+    # channel_id -> force a kind ("ott", "trailer", etc.) if you ever want
     # "UCWOA1ZGywLbqmigxE4Qlvuw": "ott",
     # "UCvC4D8onUfXzvjTOM-dBfEA": "trailer",
 }
@@ -992,6 +1030,9 @@ def youtube_rss_poll(
     published_after: Optional[Union[str, datetime]] = None,
     max_items: int = YT_MAX_ITEMS,
 ) -> int:
+    """
+    Poll a YouTube channel's Atom feed, enqueue normalize_event() for new videos.
+    """
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
     conn = _redis()
@@ -1013,6 +1054,7 @@ def youtube_rss_poll(
         print(f"[youtube_rss_poll] channel={channel_id} no changes (304)")
         return 0
 
+    # cache new etag / modified for conditional GET next time
     if getattr(parsed, "etag", None):
         conn.setex(etag_key, 7 * 24 * 3600, parsed.etag)
     if getattr(parsed, "modified_parsed", None):
@@ -1036,9 +1078,11 @@ def youtube_rss_poll(
             or entry.get("updated")
         )
 
+        # only enqueue if newer than cutoff (when provided)
         if cutoff and pub_norm and pub_norm <= cutoff:
             continue
 
+        # override kind per-channel if desired
         ch_kind = YOUTUBE_CHANNEL_KIND.get(channel_id)
         if ch_kind:
             kind = ch_kind
@@ -1065,7 +1109,7 @@ def youtube_rss_poll(
             "title": title,
             "kind": kind,
             "published_at": pub_norm,
-            "thumb_url": None,  # we'll fill via _youtube_thumb() in normalize_event
+            "thumb_url": None,  # we'll generate via _youtube_thumb() in normalize_event
             "payload": {
                 "channelId": channel_id,
                 "videoId": vid,
@@ -1095,6 +1139,9 @@ def rss_poll(
     kind_hint: str = "news",
     max_items: int = RSS_MAX_ITEMS,
 ) -> int:
+    """
+    Poll a generic RSS/Atom feed, enqueue normalize_event() for recent entries.
+    """
     conn = _redis()
     etag_key = f"rss:etag:{url}"
     mod_key  = f"rss:mod:{url}"
@@ -1114,6 +1161,7 @@ def rss_poll(
         print(f"[rss_poll] url={url} no changes (304)")
         return 0
 
+    # update cache keys
     if getattr(parsed, "etag", None):
         conn.setex(etag_key, 7 * 24 * 3600, parsed.etag)
     if getattr(parsed, "modified_parsed", None):
@@ -1169,16 +1217,18 @@ def rss_poll(
     print(f"[rss_poll] url={url} domain={source_domain} emitted={emitted}")
     return emitted
 
-# =====================================================================
-# Manual maintenance
-# =====================================================================
+# =============================================================================
+# Manual maintenance / repair
+# =============================================================================
 
 def backfill_repair_recent(scan: int = None) -> int:
     """
-    Patch existing FEED_KEY items in Redis:
-    - ensure ingested_at exists
-    - ensure we have a usable image and populate thumb_url/poster_url/etc.
-    This lets us repair old stories so the app can render thumbnails
+    Repair recent feed items already stored in Redis FEED_KEY.
+    We use this to:
+      - guarantee ingested_at exists
+      - re-select a better hero image using the new scoring logic
+        and write it back into all the artwork keys
+    This lets you retro-fix bad thumbnails (like tiny unrelated 150x79 JPGs)
     without waiting for fresh ingest.
     """
     conn = _redis()
@@ -1186,7 +1236,6 @@ def backfill_repair_recent(scan: int = None) -> int:
 
     items = conn.lrange(FEED_KEY, 0, max(window - 1, 0))
     patched = 0
-
     now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for idx, raw in enumerate(items):
@@ -1202,62 +1251,66 @@ def backfill_repair_recent(scan: int = None) -> int:
             obj["ingested_at"] = obj.get("normalized_at") or now_ts
             need_save = True
 
-        # backfill missing hero artwork
-        if not _has_any_image(obj):
-            payload = obj.get("payload") or {}
-            link = obj.get("url") or (
-                payload.get("url") if isinstance(payload, dict) else None
+        # Try to (re)choose the hero artwork with our improved logic,
+        # even if something is already set. This is how we "fix"
+        # old stories that locked in a junk social card.
+        payload = obj.get("payload") or {}
+        link = obj.get("url") or (
+            payload.get("url") if isinstance(payload, dict) else None
+        )
+        base = link or (payload.get("feed") if isinstance(payload, dict) else "")
+
+        # First attempt: score the payload we already have.
+        thumb = None
+        if isinstance(payload, dict) and payload:
+            thumb = _pick_image_from_payload(
+                payload,
+                base,
+                payload.get("image_candidates", [None])[0]
+                if isinstance(payload.get("image_candidates"), list)
+                else None,
             )
-            base = link or (payload.get("feed") if isinstance(payload, dict) else "")
 
-            if isinstance(payload, dict) and payload:
-                thumb = _pick_image_from_payload(
-                    payload,
-                    base,
-                    payload.get("image_candidates", [None])[0]
-                    if isinstance(payload.get("image_candidates"), list)
-                    else None,
-                )
-            else:
-                thumb = None
+        # Fallback attempt: rebuild payload quickly from summary if needed.
+        if not thumb and link:
+            dummy_entry = {
+                "link": link,
+                "summary": obj.get("summary") or "",
+                "description": payload.get("description_html") if isinstance(payload, dict) else "",
+                "content": [
+                    {
+                        "type": "text/html",
+                        "value": payload.get("content_html") if isinstance(payload, dict) else "",
+                    }
+                ],
+            }
+            new_payload, thumb_hint, _ = build_rss_payload(
+                dummy_entry,
+                payload.get("feed") if isinstance(payload, dict) else "",
+            )
+            payload = (
+                {**payload, **new_payload}
+                if isinstance(payload, dict)
+                else new_payload
+            )
+            thumb = _pick_image_from_payload(payload, base, thumb_hint)
 
-            if not thumb and link:
-                # try to rebuild payload on the fly
-                dummy_entry = {
-                    "link": link,
-                    "summary": obj.get("summary") or "",
-                    "description": payload.get("description_html") if isinstance(payload, dict) else "",
-                    "content": [
-                        {
-                            "type": "text/html",
-                            "value": payload.get("content_html") if isinstance(payload, dict) else "",
-                        }
-                    ],
-                }
-                new_payload, thumb_hint, _ = build_rss_payload(
-                    dummy_entry,
-                    payload.get("feed") if isinstance(payload, dict) else "",
-                )
-                payload = (
-                    {**payload, **new_payload}
-                    if isinstance(payload, dict)
-                    else new_payload
-                )
-                thumb = _pick_image_from_payload(payload, base, thumb_hint)
+        if thumb:
+            # Overwrite ALL known artwork keys so the app definitely uses the fixed hero
+            for k in (
+                "image",
+                "thumb_url",
+                "thumbnail",
+                "poster",
+                "poster_url",
+                "media",
+            ):
+                obj[k] = thumb
 
-            if thumb:
-                # write into all the keys the frontend / api might look at
-                for k in (
-                    "image",
-                    "thumb_url",
-                    "thumbnail",
-                    "poster",
-                    "poster_url",
-                    "media",
-                ):
-                    obj[k] = thumb
-                obj["normalized_at"] = now_ts
-                need_save = True
+            # keep merged payload around for future repairs
+            obj["payload"] = payload
+            obj["normalized_at"] = now_ts
+            need_save = True
 
         if need_save:
             conn.lset(FEED_KEY, idx, json.dumps(obj, ensure_ascii=False))
