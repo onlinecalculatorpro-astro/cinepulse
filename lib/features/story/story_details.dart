@@ -7,7 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
+import '../../core/api.dart';           // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../widgets/kind_badge.dart';
@@ -127,20 +127,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     }
   }
 
-  /// 🔥 NEW: pick the same hero image we use in the feed card.
-  /// We ALWAYS prefer thumbUrl first (works in cards, not proxied),
-  /// and only fall back to posterUrl if thumbUrl is empty.
-  String _heroImageFor(Story s) {
-    final t = s.thumbUrl ?? '';
-    if (t.isNotEmpty) return t;
-
-    final p = s.posterUrl ?? '';
-    if (p.isNotEmpty) return p;
-
-    // final fallback if both are somehow empty
-    return '';
-  }
-
   /* --------------------------------- UI ------------------------------------ */
 
   @override
@@ -151,7 +137,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // ensure double for expandedHeight
+    // **expandedHeight logic unchanged**
     final double expandedHeight = _showPlayer
         ? (screenW * 9.0 / 16.0 + (isPhone ? 96.0 : 120.0))
         : (isPhone ? 260.0 : 340.0);
@@ -197,7 +183,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
               background: _HeaderHero(
                 key: _heroPlayerKey,
                 story: widget.story,
-                heroImageUrl: _heroImageFor(widget.story), // 👈 use same image as card
                 showPlayer: _showPlayer,
                 videoUrl: _videoUrl?.toString(),
                 onClosePlayer: () => _hidePlayer(),
@@ -267,15 +252,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           runSpacing: 8,
                           children: [
                             if (widget.story.languages.isNotEmpty)
-                              _Facet(
-                                label: 'Language',
-                                value: widget.story.languages.join(', '),
-                              ),
+                              _Facet(label: 'Language', value: widget.story.languages.join(', ')),
                             if (widget.story.genres.isNotEmpty)
-                              _Facet(
-                                label: 'Genre',
-                                value: widget.story.genres.join(', '),
-                              ),
+                              _Facet(label: 'Genre', value: widget.story.genres.join(', ')),
                           ],
                         ),
                       ],
@@ -345,7 +324,6 @@ class _HeaderHero extends StatelessWidget {
   const _HeaderHero({
     super.key,
     required this.story,
-    required this.heroImageUrl, // 👈 new
     required this.showPlayer,
     required this.videoUrl,
     required this.onClosePlayer,
@@ -354,40 +332,97 @@ class _HeaderHero extends StatelessWidget {
   });
 
   final Story story;
-  final String heroImageUrl;
   final bool showPlayer;
   final String? videoUrl;
   final VoidCallback onClosePlayer;
   final VoidCallback onEndedPlayer;
   final ValueChanged<Object> onErrorPlayer;
 
+  // copy of _cleanImageUrl() from story_card.dart
+  String _cleanImageUrlForStory(Story s) {
+    final cand = (s.posterUrl?.isNotEmpty == true) ? s.posterUrl! : (s.thumbUrl ?? '');
+
+    if (cand.isEmpty) return '';
+
+    // 1. reject obvious garbage source
+    if (cand.contains('demo.tagdiv.com')) return '';
+
+    // 2. if it's a proxy /v1/img?u=... and inner URL is demo.tagdiv.com, reject
+    final uri = Uri.tryParse(cand);
+    if (uri != null) {
+      final isProxy = uri.path.contains('/v1/img');
+      if (isProxy) {
+        final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
+        if (inner.contains('demo.tagdiv.com')) {
+          return '';
+        }
+      }
+    }
+
+    return cand;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final scheme = cs;
 
-    // Use the pre-picked hero image. This is now guaranteed to match the card.
-    final imageUrl = heroImageUrl;
+    final imgUrl = _cleanImageUrlForStory(story);
 
     return Hero(
       tag: 'thumb-${story.id}',
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Image underlay
-          imageUrl.isEmpty
-              ? Container(color: cs.surfaceContainerHighest)
-              : CachedNetworkImage(
-                  imageUrl: imageUrl,
-                  fit: BoxFit.cover,
-                  memCacheWidth: 1600,
-                  fadeInDuration: const Duration(milliseconds: 180),
-                  errorWidget: (_, __, ___) => Container(
-                    color: cs.surfaceVariant.withOpacity(0.2),
-                    child: const Center(child: Icon(Icons.broken_image_outlined)),
+          // --- SAME LOGIC AS CARD ---------------------------------
+          if (imgUrl.isNotEmpty)
+            CachedNetworkImage(
+              imageUrl: imgUrl,
+              fit: BoxFit.cover,
+              alignment: Alignment.center,
+              memCacheWidth: 1600,
+              fadeInDuration: const Duration(milliseconds: 180),
+              errorWidget: (_, __, ___) => Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      isDark
+                          ? const Color(0xFF0F1625)
+                          : scheme.surfaceVariant.withOpacity(0.2),
+                      isDark
+                          ? const Color(0xFF1E2433)
+                          : scheme.surfaceVariant.withOpacity(0.4),
+                    ],
                   ),
                 ),
+                child: Center(
+                  child: _SampleIcon(kind: story.kind),
+                ),
+              ),
+            )
+          else
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    isDark
+                        ? const Color(0xFF0F1625)
+                        : scheme.surfaceVariant.withOpacity(0.2),
+                    isDark
+                        ? const Color(0xFF1E2433)
+                        : scheme.surfaceVariant.withOpacity(0.4),
+                  ],
+                ),
+              ),
+              child: Center(child: _SampleIcon(kind: story.kind)),
+            ),
 
-          // Player in header (on demand)
+          // --- PLAYER OVERLAY -------------------------------------
           if (showPlayer && (videoUrl?.isNotEmpty ?? false))
             Center(
               child: ConstrainedBox(
@@ -408,14 +443,17 @@ class _HeaderHero extends StatelessWidget {
               ),
             )
           else
-            // Gradient overlay when not playing
+            // black fade at bottom for text readability
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,
-                    colors: [Colors.black.withOpacity(0.55), Colors.transparent],
+                    colors: [
+                      Colors.black.withOpacity(0.55),
+                      Colors.transparent,
+                    ],
                     stops: const [0.0, 0.6],
                   ),
                 ),
@@ -457,5 +495,30 @@ class _Facet extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/* --------------- same fallback icon we use in StoryCard ---------------- */
+class _SampleIcon extends StatelessWidget {
+  final String kind;
+  const _SampleIcon({required this.kind});
+
+  @override
+  Widget build(BuildContext context) {
+    IconData iconData = Icons.movie_rounded;
+    Color iconColor = const Color(0xFFECC943);
+
+    final k = kind.toLowerCase();
+    if (k.contains('trailer')) {
+        iconData = Icons.theater_comedy_rounded;
+        iconColor = const Color(0xFF56BAF8);
+    } else if (k.contains('release')) {
+        iconData = Icons.balance_rounded;
+        iconColor = const Color(0xFFF9D359);
+    } else if (k.contains('ott')) {
+        iconData = Icons.videocam_rounded;
+        iconColor = const Color(0xFFC377F2);
+    }
+    return Icon(iconData, size: 60, color: iconColor.withOpacity(0.9));
   }
 }
