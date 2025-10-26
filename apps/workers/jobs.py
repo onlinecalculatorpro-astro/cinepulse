@@ -462,6 +462,83 @@ def _strip_html(s: str) -> str:
     return _WS_RE.sub(" ", s2).strip()
 
 # =============================================================================
+# Defamation / attribution safety layer
+# =============================================================================
+
+# Phrases that imply accusation, scandal, crime, moral wrongdoing, etc.
+# If we see these, we want to make sure our summary is attributed
+# ("According to <source_domain>, ...") so we're clearly reporting,
+# not asserting as fact.
+_RISKY_CLAIM_RE = re.compile(
+    r"\b("
+    r"arrested|detained|in\s+custody|taken\s+into\s+custody|"
+    r"accused|allegations?|alleged|"
+    r"controversy|controversial|backlash|boycott|"
+    r"trolled|slammed|called\s+out|facing\s+heat|"
+    r"cheating|affair|relationship\s+rumors?|"
+    r"assault|harassment|abuse|"
+    r"lawsuit|legal\s+notice|legal\s+action|FIR|police\s+complaint|complaint\s+filed|"
+    r"scam|fraud|money\s+laundering|tax\s+raid|income\s+tax|ED\s+raid|NCB|drug\s+case|drugs?\s+case|leaked\s+video|leaked\s+chat|exposed"
+    r")\b",
+    re.I,
+)
+
+# If the sentence already attributes ("According to police", "As per Koimoi"),
+# we don't need to force-prefix again.
+_ATTRIBUTED_RE = re.compile(
+    r"\b(according\s+to|as\s+per|the\s+police\s+said|officials?\s+said|"
+    r"the\s+FIR\s+alleges|sources?\s+said|the\s+complaint\s+states)\b",
+    re.I,
+)
+
+# Extra spicy / defamatory-sounding adjectives we want to tone down.
+_EXTREME_LANG_RE = re.compile(
+    r"\b(brutally|mercilessly|savagely|ruthlessly|destroys?|obliterates?|"
+    r"humiliates?|shames?|bashes?|slams?|trolls?|gets\s+trolled|"
+    r"faces\s+massive\s+backlash|massive\s+backlash|huge\s+backlash|"
+    r"epic\s+takedown)\b",
+    re.I,
+)
+
+def _soften_defamation(text: str, source_domain: str) -> str:
+    """
+    Add lightweight legal safety:
+    - If summary contains risky claims and is not already attributed,
+      prefix with "According to <source_domain>, ..."
+    - Strip extreme language like "brutally slammed".
+    We DON'T rewrite facts, just frame them as "reporting from X".
+    """
+    if not text:
+        return text
+
+    lowered = text.lower()
+
+    # If it's not risky, just return.
+    if not _RISKY_CLAIM_RE.search(lowered):
+        # We still lightly scrub extreme adjectives because they add liability + drama.
+        cleaned = _EXTREME_LANG_RE.sub("", text)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return cleaned
+
+    # It's risky.
+    # If it's already attributed ("According to ..."), just scrub tone.
+    if _ATTRIBUTED_RE.search(lowered) or lowered.startswith("according to "):
+        cleaned = _EXTREME_LANG_RE.sub("", text)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return cleaned
+
+    # Otherwise, we add attribution prefix.
+    src_label = source_domain or "the source"
+    prefix = f"According to {src_label}, "
+
+    cleaned_body = _EXTREME_LANG_RE.sub("", text)
+    cleaned_body = re.sub(r"\s{2,}", " ", cleaned_body).strip()
+
+    safe = (prefix + cleaned_body).strip()
+
+    return safe
+
+# =============================================================================
 # Verticals / industry / tags
 # =============================================================================
 
@@ -814,7 +891,7 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
         if not u:
             continue
         t = (enc.get("type") or "").lower()
-        if t.startswith("image/") or u.lower().split("?", 1)[0].endswith((
+        if t.startswith("image/") or u.lower().split("?", 1).get(0, "").endswith((
             ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif",
             ".bmp", ".jfif", ".pjpeg",
         )):
@@ -931,6 +1008,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
 
     # --- SUMMARY for card body -------------------------------------
     summary_text = summarize_story(title, raw_text)
+    summary_text = _soften_defamation(summary_text, source_domain)
 
     # --- CLEAN TITLE for card headline ------------------------------
     clean_title = generate_clean_title(title, raw_text)
