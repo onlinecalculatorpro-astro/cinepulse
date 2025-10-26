@@ -15,10 +15,10 @@ from typing import List, Tuple
 # - numbers, dates, platforms, deltas are GOOD
 # - hype, clickbait, CTA are BAD
 
-SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "80"))
-SUMMARY_MIN    = int(os.getenv("SUMMARY_MIN_WORDS", "60"))
+SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "100"))
+SUMMARY_MIN    = int(os.getenv("SUMMARY_MIN_WORDS", "80"))
 # keep it tight; avoid trailing fluff
-SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "90"))
+SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "120"))
 
 # "passthrough mode" basically never fires unless it's extremely short
 PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "60"))
