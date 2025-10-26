@@ -11,7 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
 
-import '../../core/api.dart';
+import '../../core/api.dart';        // proxyImageUrl(), deepLinkForStoryId()
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
@@ -111,7 +111,7 @@ class _StoryCardState extends State<StoryCard> {
     'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
   ];
 
-  // Match the “metaLine” style you already show: 23 Oct 2025, 1:32 PM
+  // Format like: 26 Oct 2025, 12:32 PM
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
@@ -122,7 +122,6 @@ class _StoryCardState extends State<StoryCard> {
     final mm = d.minute.toString().padLeft(2, '0');
     final ap = d.hour >= 12 ? 'PM' : 'AM';
     return '$day $m $y, $h:$mm $ap';
-    // Example: 23 Oct 2025, 1:18 PM
   }
 
   String _formatGap(Duration d) {
@@ -144,12 +143,12 @@ class _StoryCardState extends State<StoryCard> {
           ),
           child: _Emoji(emoji: emoji, size: 14),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 6), // UPDATED: was 8, tighten pill spacing
         Text(
           text,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
+          style: TextStyle(color: Colors.grey[400], fontSize: 13),
         ),
       ],
     );
@@ -164,11 +163,11 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
 
-    // Published (already formatted upstream)
+    // Published line, cleaned
     final rawMeta = widget.story.metaLine;
     final metaText = _stripKindPrefix(rawMeta);
 
-    // Added: use ingestedAt if present, else normalizedAt — formatted EXACTLY like meta
+    // Added time (ingested or normalized), formatted like meta
     final DateTime? publishedAt = widget.story.publishedAt;
     final DateTime? addedAt = widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
     final String? addedText = (addedAt != null)
@@ -177,18 +176,27 @@ class _StoryCardState extends State<StoryCard> {
         : null;
 
     final hasUrl = _linkUrl != null;
-    final imageUrl = (widget.story.posterUrl?.isNotEmpty == true)
+
+    // Pick posterUrl first, then thumbUrl
+    final rawImageUrl = (widget.story.posterUrl?.isNotEmpty == true)
         ? widget.story.posterUrl!
         : (widget.story.thumbUrl ?? '');
 
+    // Route through API proxy so web can load images without CORS trouble
+    final effectiveImageUrl = rawImageUrl.isNotEmpty
+        ? proxyImageUrl(rawImageUrl) // <-- NEW
+        : '';
+
+    // Outer card visuals
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
       transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92)
-                      : scheme.surface.withOpacity(0.97),
-        borderRadius: BorderRadius.circular(22),
+        color: isDark
+            ? const Color(0xFF181E2A).withOpacity(0.92)
+            : scheme.surface.withOpacity(0.97),
+        borderRadius: BorderRadius.circular(20), // UPDATED: was 22, slightly tighter
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
           width: 2,
@@ -196,8 +204,8 @@ class _StoryCardState extends State<StoryCard> {
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.22),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
+            blurRadius: 20, // UPDATED: was 24
+            offset: const Offset(0, 7), // UPDATED: was (0,8)
           ),
         ],
       ),
@@ -214,39 +222,46 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Media
+                  // ------------------------------------------------------------------
+                  // Media / thumbnail
+                  // ------------------------------------------------------------------
                   SizedBox(
                     height: mediaH,
                     child: Hero(
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(20), // UPDATED match card radius
+                        ),
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            if (imageUrl.isNotEmpty)
+                            if (effectiveImageUrl.isNotEmpty)
                               CachedNetworkImage(
-                                imageUrl: imageUrl,
+                                imageUrl: effectiveImageUrl,
                                 fit: BoxFit.cover,
                                 alignment: Alignment.center,
-                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
-                                fadeInDuration: const Duration(milliseconds: 160),
-                                errorWidget: (_, __, ___) => Container(
-                                  color: isDark
-                                      ? const Color(0xFF0F1625)
-                                      : scheme.surfaceVariant.withOpacity(0.3),
-                                  child: const Center(
-                                    child: Icon(Icons.broken_image_outlined),
-                                  ),
+                                memCacheWidth:
+                                    (w.isFinite ? (w * 2).toInt() : 1600),
+                                fadeInDuration:
+                                    const Duration(milliseconds: 160),
+                                errorWidget: (_, __, ___) => _thumbFallback(
+                                  isDark: isDark,
+                                  scheme: scheme,
+                                  storyKind: widget.story.kind,
+                                ),
+                                placeholder: (_, __) => _thumbLoading(
+                                  isDark: isDark,
+                                  scheme: scheme,
                                 ),
                               )
                             else
-                              Container(
-                                color: isDark
-                                    ? const Color(0xFF0F1625)
-                                    : scheme.surfaceVariant.withOpacity(0.3),
-                                child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                              _thumbFallback(
+                                isDark: isDark,
+                                scheme: scheme,
+                                storyKind: widget.story.kind,
                               ),
+                            // dark gradient overlay at bottom
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -268,33 +283,47 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Meta + CTA
+                  // ------------------------------------------------------------------
+                  // Meta / Title / CTA
+                  // ------------------------------------------------------------------
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                      // UPDATED: tighten padding
+                      // was EdgeInsets.symmetric(horizontal: 20, vertical: 14)
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // kind badge + time pills
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               KindMetaBadge(kind),
-                              const SizedBox(width: 10),
+                              const SizedBox(width: 8), // UPDATED: was 10
                               Expanded(
                                 child: Wrap(
-                                  spacing: 12,
+                                  spacing: 10,        // UPDATED: was 12
                                   runSpacing: 4,
                                   crossAxisAlignment: WrapCrossAlignment.center,
                                   children: [
-                                    _timePill(emoji: '🕐', text: metaText), // Published
+                                    _timePill(
+                                      emoji: '🕐',
+                                      text: metaText,
+                                    ),
                                     if (addedText != null)
-                                      _timePill(emoji: '🕐', text: addedText), // Added (same style)
+                                      _timePill(
+                                        emoji: '🕐',
+                                        text: addedText,
+                                      ),
                                   ],
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 10),
+
+                          const SizedBox(height: 8), // UPDATED: was 10
+
+                          // Title
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
@@ -306,64 +335,88 @@ class _StoryCardState extends State<StoryCard> {
                                 fontSize: 15,
                                 height: 1.26,
                                 fontWeight: FontWeight.w800,
-                                color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                                color: isDark
+                                    ? Colors.white.withOpacity(0.96)
+                                    : scheme.onSurface,
                               ),
                             ),
                           ),
+
                           const Spacer(),
+
+                          // CTA row with Save / Share
                           Row(
                             children: [
                               Expanded(
                                 child: Semantics(
                                   button: true,
-                                  label: '${_ctaLabel} ${widget.story.title}',
+                                  label:
+                                      '${_ctaLabel} ${widget.story.title}',
                                   child: SizedBox(
-                                    height: 42,
+                                    height: 40, // UPDATED: was 42
                                     child: ElevatedButton.icon(
                                       icon: _ctaLeading(),
                                       onPressed: hasUrl
                                           ? () {
-                                              if (_isWatchCta && _videoUrl != null) {
-                                                _openDetails(autoplay: true);
+                                              if (_isWatchCta &&
+                                                  _videoUrl != null) {
+                                                _openDetails(
+                                                    autoplay: true);
                                               } else {
-                                                _openExternalLink(context);
+                                                _openExternalLink(
+                                                    context);
                                               }
                                             }
                                           : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
-                                        backgroundColor: const Color(0xFFdc2626),
+                                        backgroundColor:
+                                            const Color(0xFFdc2626),
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(10),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
                                         ),
                                         textStyle: const TextStyle(
                                           fontWeight: FontWeight.w700,
                                           fontSize: 15,
                                         ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ), // UPDATED: slightly tighter button padding
                                       ),
                                       label: Text(_ctaLabel),
                                     ),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 10),
+                              const SizedBox(width: 8), // UPDATED: was 10
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
-                                  final saved = SavedStore.instance.isSaved(widget.story.id);
+                                  final saved = SavedStore.instance
+                                      .isSaved(widget.story.id);
                                   return _ActionIconBox(
-                                    tooltip: saved ? 'Saved' : 'Save',
-                                    onTap: () => SavedStore.instance.toggle(widget.story.id),
-                                    icon: const _Emoji(emoji: '🔖', size: 18),
+                                    tooltip:
+                                        saved ? 'Saved' : 'Save',
+                                    onTap: () => SavedStore.instance
+                                        .toggle(widget.story.id),
+                                    icon: const _Emoji(
+                                      emoji: '🔖',
+                                      size: 18,
+                                    ),
                                   );
                                 },
                               ),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: 6), // UPDATED: was 8
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
-                                icon: const _Emoji(emoji: '📤', size: 18),
+                                icon: const _Emoji(
+                                  emoji: '📤',
+                                  size: 18,
+                                ),
                               ),
                             ],
                           ),
@@ -379,18 +432,51 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
+    // keep hover lift effect + glass blur mobile
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: kIsWeb
           ? card
           : ClipRRect(
-              borderRadius: BorderRadius.circular(22),
+              borderRadius: BorderRadius.circular(20), // UPDATED match card
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
                 child: card,
               ),
             ),
+    );
+  }
+
+  // Small helpers for the thumbnail placeholder / error states
+  Widget _thumbFallback({
+    required bool isDark,
+    required ColorScheme scheme,
+    required String storyKind,
+  }) {
+    return Container(
+      color: isDark
+          ? const Color(0xFF0F1625)
+          : scheme.surfaceVariant.withOpacity(0.3),
+      alignment: Alignment.center,
+      child: _SampleIcon(kind: storyKind),
+    );
+  }
+
+  Widget _thumbLoading({
+    required bool isDark,
+    required ColorScheme scheme,
+  }) {
+    return Container(
+      color: isDark
+          ? const Color(0xFF0F1625)
+          : scheme.surfaceVariant.withOpacity(0.3),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.image_outlined,
+        color: Colors.white54,
+        size: 28,
+      ),
     );
   }
 }
@@ -414,7 +500,10 @@ Widget KindMetaBadge(String kind) {
   }
 
   return Container(
-    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 13),
+    padding: const EdgeInsets.symmetric(
+      vertical: 4,
+      horizontal: 11, // UPDATED: was 13
+    ),
     decoration: BoxDecoration(
       color: bg.withOpacity(0.96),
       borderRadius: BorderRadius.circular(6),
@@ -424,7 +513,7 @@ Widget KindMetaBadge(String kind) {
       style: TextStyle(
         color: lower == 'release' ? Colors.black : Colors.white,
         fontWeight: FontWeight.w700,
-        fontSize: 13,
+        fontSize: 12.5, // UPDATED: was 13
         letterSpacing: 0.15,
       ),
     ),
@@ -452,7 +541,7 @@ class _SampleIcon extends StatelessWidget {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
-    return Icon(iconData, size: 70, color: iconColor.withOpacity(0.85));
+    return Icon(iconData, size: 64, color: iconColor.withOpacity(0.85)); // UPDATED: size 70 -> 64
   }
 }
 
@@ -505,10 +594,10 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: SizedBox(
+          child: const SizedBox(
             width: 40,
             height: 40,
-            child: Center(child: icon),
+            child: Center(child: SizedBox.shrink()),
           ),
         ),
       ),
@@ -528,7 +617,7 @@ extension _StoryCompat on Story {
       if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
     } catch (_) {}
 
-    // 2) sometimes models attach extra/raw maps
+    // 2) fallback: maybe stored in an "extra"/"payload"/"raw" map
     try {
       final dyn = (this as dynamic);
       final extra = dyn.extra ?? dyn.metadata ?? dyn.payload ?? dyn.raw;
