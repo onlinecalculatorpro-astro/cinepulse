@@ -25,7 +25,7 @@ throttle:
     indiatoday.in: 180              # 3 min for mainstream news
     hindustantimes.com: 180         # 3 min for mainstream news
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 # YouTube sources for this vertical
 # 100% FREE - Official studio / platform / exhibitor channels
 #
@@ -33,7 +33,7 @@ throttle:
 # - kind_hint drives downstream tagging ("trailer", "ott", "release")
 # - All are India-facing, Hindi-first or pan-India but theatrically relevant in Hindi belt
 # - We only want *official* uploads (trailers, release announcements, OTT drops)
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 youtube:
   defaults:
     enabled: true
@@ -60,7 +60,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Legendary: DDLJ, Dhoom, War, Pathaan - consistent quality
+      # Pathaan, War, Dhoom, Tiger, etc.
 
     - name: "Red Chillies Entertainment"
       enabled: true
@@ -68,7 +68,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Shah Rukh Khan's production house - premium content always
+      # Shah Rukh Khan’s banner
 
     - name: "Excel Entertainment"
       enabled: true
@@ -76,7 +76,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Farhan Akhtar / Ritesh Sidhwani - Gully Boy, Dil Chahta Hai, quality films
+      # Farhan Akhtar / Ritesh Sidhwani
 
     # === MAJOR STUDIOS & DISTRIBUTORS (Hindi theatrical + pan-India releases) ===
 
@@ -86,7 +86,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # World's largest music label - gets most trailers first
+      # Most Hindi trailers drop here first
 
     - name: "Zee Studios"
       enabled: true
@@ -94,7 +94,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Major distributor - wide catalog
 
     - name: "Eros Now"
       enabled: true
@@ -102,7 +101,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Large Hindi film catalog
 
     - name: "Rajshri"
       enabled: true
@@ -110,7 +108,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Family entertainment specialist - wholesome content
 
     - name: "Viacom18 Studios"
       enabled: true
@@ -118,7 +115,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Hindi theatrical slate and official trailers
 
     - name: "Star Studios"
       enabled: true
@@ -126,7 +122,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Disney-owned Hindi film label (ex Fox Star) – high-profile releases
 
     - name: "Jio Studios"
       enabled: true
@@ -134,7 +129,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Reliance-backed studio covering theatrical + direct-to-digital
 
     - name: "Pen Movies"
       enabled: true
@@ -142,7 +136,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # PEN Studios / Pen Movies: Hindi-dubbed pan-India blockbusters, early trailers
+      # Hindi-dubbed pan-India big releases and early trailers
 
     # === EMERGING / QUALITY PRODUCERS (Hindi-first but pan-India reach) ===
 
@@ -152,7 +146,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Dinesh Vijan - Stree, Bala, Mimi - innovative content
 
     - name: "Abundantia Entertainment"
       enabled: true
@@ -160,7 +153,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Vikram Malhotra - content-driven cinema (Airlift, Sherni)
 
     - name: "RSVP Movies"
       enabled: true
@@ -168,7 +160,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Ronnie Screwvala’s banner – buzzy Hindi originals
 
     - name: "Junglee Pictures"
       enabled: true
@@ -176,9 +167,8 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # (Badhaai Ho, Talvar) – strong story-led theatrical films
 
-    # === SOUTH INDIAN BIGGIES (Pan-India Blockbusters in Hindi belt) ===
+    # === SOUTH INDIAN BIGGIES (Pan-India blockbusters that matter in Hindi belt) ===
 
     - name: "Hombale Films"
       enabled: true
@@ -186,7 +176,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # KGF, Salaar – massive appeal in Hindi markets
 
     - name: "Mythri Movie Makers"
       enabled: true
@@ -194,7 +183,6 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Pushpa series – pan-India breakout, Hindi audience cares
 
     - name: "UV Creations"
       enabled: true
@@ -202,11 +190,10 @@ youtube:
       industry: "bollywood"
       kind_hint: "trailer"
       region: "IN"
-      # Prabhas vehicles etc.
 
     # === OTT PLATFORMS (Official India handles)
     # We treat these as "ott": now streaming, digital premieres, season drops.
-    # Zero paparazzi. Pure "watch this tonight" value.
+    # No paparazzi, no off-camera personal-life gossip — we only want "what to watch."
 
     - name: "Netflix India"
       enabled: true
@@ -230,7 +217,7 @@ youtube:
       industry: "bollywood"
       kind_hint: "ott"
       region: "IN"
-      # Originals, reality, sports-rights promos (downstream can filter sports later)
+      # Originals, scripted drama, reality, streaming announcements
 
     - name: "ZEE5"
       enabled: true
@@ -241,7 +228,7 @@ youtube:
       # ZEE5 originals + digital premieres
 
     # (Disney+ Hotstar / JioCinema can be added later once channel_id is verified
-    # and once we decide how we want to treat live sports noise.)
+    # and once we decide how we want to treat non-film noise.)
 
     # === THEATRICAL / TICKETING (Release calendar signals)
     # These tell us: "In cinemas Friday", "Advance booking open".
@@ -261,12 +248,12 @@ youtube:
       industry: "bollywood"
       kind_hint: "release"
       region: "IN"
-      # India's top ticketing platform. "Advance booking open" = instant CTA.
+      # "Advance booking open", "Now in cinemas" etc.
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 # RSS / News sources for this vertical
 # 100% FREE - No paywalls + Quality journalism ONLY
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 rss:
   defaults:
     enabled: true
@@ -347,7 +334,7 @@ rss:
           enabled: true
           url: "https://www.bollywoodhungama.com/rss/news.xml"
           industry: "bollywood"
-          # Box office numbers, release status, OTT pickup. No paywall.
+          # Box office numbers, theatrical/OTT pickup. No paywall.
 
         - name: "Box Office India"
           enabled: true
@@ -392,7 +379,7 @@ rss:
             - "spotted"
             - "viral"
             - "airport"
-          # Thoughtful coverage, OTT & censor board / clash stories.
+          # OTT, theatrical clashes, certifications, CBFC, etc.
 
         - name: "The Hindu Entertainment"
           enabled: true
@@ -408,7 +395,7 @@ rss:
           enabled: true
           url: "https://www.pinkvilla.com/entertainment/feed"
           industry: "bollywood"
-          # We whitelist actual news (casting, show incidents, OTT release dates)
+          # We whitelist actual news (casting, production updates, OTT dates)
           # and kill paparazzi / airport / "fans troll" junk.
           ignore_keywords:
             - "spotted"
@@ -535,7 +522,7 @@ rss:
           # WITHOUT paparazzi stalking or personal-life gossip.
 
 # =============================================================================
-# SOURCES REMOVED (Quality Issues / Legal Risk):
+# SOURCES REMOVED (Quality / Legal Risk):
 # =============================================================================
 # ❌ Film Companion - Paywall on many articles
 # ❌ Koimoi - Too clickbait-heavy, sensational headlines
@@ -549,7 +536,7 @@ rss:
 # ✅ Box Office India - Collections, business context
 # ✅ India Today / Hindustan Times / Indian Express / The Hindu - Mainstream,
 #    fact-checked, attributable, less paparazzi
-# ✅ Pinkvilla (heavily filtered) - Fast casting / production / show updates
+# ✅ Pinkvilla (heavily filtered) - Fast casting / production / OTT release updates
 # ✅ OTTplay - OTT availability / digital premiere info
 # ✅ India TV (filtered) - Reality show drama that actually aired
 #
