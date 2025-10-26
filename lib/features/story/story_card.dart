@@ -1,22 +1,17 @@
 // lib/features/story/story_card.dart
 //
-// Updated layout + legal attribution:
+// Final layout:
 //
-// Row 1:  "News • Source: YouTube"
-// Row 2:  first timestamp          (publishedAt)
-// Row 3:  second timestamp (+gap)  (ingested/normalizedAt)
-// Row 4:  title
-// Row 5:  CTA row (Watch/Read + Save + Share)
-// Row 6:  "Source: YouTube / BollywoodHungama.com" in tiny muted text
+// Row A: "<Kind> • <publishedAt timestamp>"
+// Row B: second timestamp (ingested/normalizedAt with +gap)
+// Row C: title
+// Row D: CTA row (Watch/Read + Save + Share)
+// Row E: tiny footer attribution ("Source: koimoi.com")
 //
-// Notes:
-// - No summary in the card.
-// - We still show both timestamps.
-// - We clean any leading "rss:" from source / sourceDomain.
-// - Row 1 uses only the primary source ("Source: YouTube").
-// - Row 6 uses combined attribution ("YouTube / BollywoodHungama.com").
+// We DO NOT show "Source:" in Row A anymore. Source only appears once,
+// in Row E (small, muted).
 //
-// Image safety (proxying etc.) is still handled upstream in story_image_url.dart.
+// No summary in card. Hero image logic unchanged.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -64,12 +59,17 @@ class _StoryCardState extends State<StoryCard> {
     return u;
   }
 
+  // clean source string for comparisons
+  String _cleanSource(String? s) => (s ?? '').trim();
+
   bool get _isWatchCta {
     if (_videoUrl != null) return true;
 
     final host = _linkUrl?.host?.toLowerCase() ?? '';
     final byHost = host.contains('youtube.com') || host.contains('youtu.be');
+
     final byType = widget.story.kind.toLowerCase() == 'trailer';
+
     final bySource = _cleanSource(widget.story.source).toLowerCase() == 'youtube';
 
     return byHost || byType || bySource;
@@ -134,16 +134,16 @@ class _StoryCardState extends State<StoryCard> {
 
   // Month short names for timestamp formatting
   static const List<String> _mon = [
-    'Jan','Feb','Mar','Apr','May','Jun',
-    'Jul','Aug','Sep','Oct','Nov','Dec'
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
-  // "26 Oct 2025, 10:44 PM"
+  // 26 Oct 2025, 10:44 PM
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
-    final m   = _mon[d.month - 1];
-    final y   = d.year;
+    final m = _mon[d.month - 1];
+    final y = d.year;
     var h = d.hour % 12;
     if (h == 0) h = 12;
     final mm = d.minute.toString().padLeft(2, '0');
@@ -151,7 +151,7 @@ class _StoryCardState extends State<StoryCard> {
     return '$day $m $y, $h:$mm $ap';
   }
 
-  // "(+6h)" / "(+12h)"
+  // (+6h) / (+12h) etc
   String _formatGap(Duration d) {
     final abs = d.isNegative ? -d : d;
     if (abs.inMinutes < 60) return '${abs.inMinutes}m';
@@ -159,7 +159,7 @@ class _StoryCardState extends State<StoryCard> {
     return '${abs.inDays}d';
   }
 
-  // pill with clock + text
+  // Small row with clock + text
   Widget _timePill({required String emoji, required String text}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -188,39 +188,7 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Normalize source strings ("rss:bollywoodhungama.com" -> "bollywoodhungama.com")
-  String _cleanSource(String? raw) {
-    final s = (raw ?? '').trim();
-    if (s.isEmpty) return '';
-    if (s.toLowerCase().startsWith('rss:')) {
-      return s.substring(4).trim();
-    }
-    return s;
-  }
-
-  // Row 1 text: "News • Source: YouTube"
-  // - kind = "news" -> "News", "ott" -> "OTT", etc.
-  // - picks primary source (story.source first, else story.sourceDomain)
-  String _row1Label({
-    required String kind,
-    required Story story,
-  }) {
-    final kd = _kindDisplay(kind).trim();
-
-    final primarySrc = () {
-      final a = _cleanSource(story.source);
-      if (a.isNotEmpty) return a;
-      final b = _cleanSource(story.sourceDomain);
-      return b;
-    }();
-
-    if (kd.isEmpty && primarySrc.isEmpty) return '';
-    if (kd.isEmpty) return 'Source: $primarySrc';
-    if (primarySrc.isEmpty) return kd;
-    return '$kd • Source: $primarySrc';
-  }
-
-  // Capitalize kind ("news" -> "News", "ott" -> "OTT")
+  // Capitalize kind for display ("News", "OTT", "Release", "Trailer")
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -228,22 +196,30 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // Footer attribution: "Source: YouTube / BollywoodHungama.com"
-  // Combines story.source + story.sourceDomain without duplicates
-  String _sourceAttributionFull(Story s) {
-    final a = _cleanSource(s.source);
-    final b = _cleanSource(s.sourceDomain);
+  // Row A text: "News • 26 Oct 2025, 11:27 PM"
+  String _rowAText({
+    required String kind,
+    required String? published,
+  }) {
+    final kd = _kindDisplay(kind).trim();
+    final ts = (published ?? '').trim();
+    if (kd.isEmpty && ts.isEmpty) return '';
+    if (kd.isEmpty) return ts;
+    if (ts.isEmpty) return kd;
+    return '$kd • $ts';
+  }
 
-    if (a.isNotEmpty && b.isNotEmpty) {
-      final al = a.toLowerCase();
-      final bl = b.toLowerCase();
-      if (bl.contains(al) || al.contains(bl)) {
-        return 'Source: $a';
-      }
-      return 'Source: $a / $b';
+  // Bottom attribution "Source: koimoi.com"
+  String _sourceFooter() {
+    final src = _cleanSource(widget.story.source);
+    final dom = _cleanSource(widget.story.sourceDomain);
+    if (src.isNotEmpty && dom.isNotEmpty) {
+      // avoid "koimoi.com / koimoi.com"
+      final same = src.toLowerCase() == dom.toLowerCase();
+      return 'Source: ${same ? src : '$src / $dom'}';
     }
-    if (a.isNotEmpty) return 'Source: $a';
-    if (b.isNotEmpty) return 'Source: $b';
+    if (src.isNotEmpty) return 'Source: $src';
+    if (dom.isNotEmpty) return 'Source: $dom';
     return '';
   }
 
@@ -253,9 +229,9 @@ class _StoryCardState extends State<StoryCard> {
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final kindLower = widget.story.kind.toLowerCase();
+    final kind = widget.story.kind.toLowerCase();
 
-    // timestamps
+    // --- timestamps ---
     final DateTime? publishedAt = widget.story.publishedAt;
     final DateTime? addedAt =
         widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
@@ -270,11 +246,11 @@ class _StoryCardState extends State<StoryCard> {
                 : '')
         : null;
 
-    // 1st row text: "News • Source: YouTube"
-    final row1Text = _row1Label(kind: kindLower, story: widget.story);
+    // Row A label
+    final rowAText = _rowAText(kind: kind, published: publishedText);
 
-    // footer attribution
-    final footerText = _sourceAttributionFull(widget.story);
+    // bottom disclosure
+    final footerText = _sourceFooter();
 
     final hasUrl = _linkUrl != null;
 
@@ -284,14 +260,17 @@ class _StoryCardState extends State<StoryCard> {
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
+      transform: _hover
+          ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0))
+          : null,
       decoration: BoxDecoration(
         color: isDark
             ? const Color(0xFF181E2A).withOpacity(0.92)
             : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
+          color:
+              _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
           width: 1.5,
         ),
         boxShadow: [
@@ -317,13 +296,17 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // IMAGE / THUMB
+                  // ------------------------------------------------------------------
+                  // IMAGE / POSTER
+                  // ------------------------------------------------------------------
                   SizedBox(
                     height: mediaH,
                     child: Hero(
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(18),
+                        ),
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
@@ -332,8 +315,10 @@ class _StoryCardState extends State<StoryCard> {
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
                                 alignment: Alignment.center,
-                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
-                                fadeInDuration: const Duration(milliseconds: 160),
+                                memCacheWidth:
+                                    (w.isFinite ? (w * 2).toInt() : 1600),
+                                fadeInDuration:
+                                    const Duration(milliseconds: 160),
                                 errorWidget: (_, __, ___) => Container(
                                   decoration: BoxDecoration(
                                     gradient: LinearGradient(
@@ -342,10 +327,12 @@ class _StoryCardState extends State<StoryCard> {
                                       colors: [
                                         isDark
                                             ? const Color(0xFF0F1625)
-                                            : scheme.surfaceVariant.withOpacity(0.2),
+                                            : scheme.surfaceVariant
+                                                .withOpacity(0.2),
                                         isDark
                                             ? const Color(0xFF1E2433)
-                                            : scheme.surfaceVariant.withOpacity(0.4),
+                                            : scheme.surfaceVariant
+                                                .withOpacity(0.4),
                                       ],
                                     ),
                                   ),
@@ -363,10 +350,12 @@ class _StoryCardState extends State<StoryCard> {
                                     colors: [
                                       isDark
                                           ? const Color(0xFF0F1625)
-                                          : scheme.surfaceVariant.withOpacity(0.2),
+                                          : scheme.surfaceVariant
+                                              .withOpacity(0.2),
                                       isDark
                                           ? const Color(0xFF1E2433)
-                                          : scheme.surfaceVariant.withOpacity(0.4),
+                                          : scheme.surfaceVariant
+                                              .withOpacity(0.4),
                                     ],
                                   ),
                                 ),
@@ -395,17 +384,19 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // CONTENT
+                  // ------------------------------------------------------------------
+                  // META, TIMESTAMPS, TITLE, CTA, FOOTER
+                  // ------------------------------------------------------------------
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Row 1: "News • Source: YouTube"
-                          if (row1Text.isNotEmpty)
+                          // Row A: "News • 26 Oct 2025, 11:27 PM"
+                          if (rowAText.isNotEmpty)
                             Text(
-                              row1Text,
+                              rowAText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -417,16 +408,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 6),
 
-                          // Row 2: publishedAt
-                          if (publishedText != null)
-                            _timePill(
-                              emoji: '🕐',
-                              text: publishedText,
-                            ),
-
-                          const SizedBox(height: 4),
-
-                          // Row 3: ingested/normalizedAt (+gap)
+                          // Row B: second timestamp (ingested/normalized +gap)
                           if (addedText != null)
                             _timePill(
                               emoji: '🕐',
@@ -435,7 +417,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 8),
 
-                          // Row 4: Title
+                          // Row C: Title
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
@@ -447,15 +429,16 @@ class _StoryCardState extends State<StoryCard> {
                                 fontSize: 14.5,
                                 height: 1.26,
                                 fontWeight: FontWeight.w800,
-                                color:
-                                    isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                                color: isDark
+                                    ? Colors.white.withOpacity(0.96)
+                                    : scheme.onSurface,
                               ),
                             ),
                           ),
 
                           const Spacer(),
 
-                          // Row 5: CTA row
+                          // Row D: CTA row (Watch/Read + Save + Share)
                           Row(
                             children: [
                               Expanded(
@@ -468,7 +451,8 @@ class _StoryCardState extends State<StoryCard> {
                                       icon: _ctaLeading(),
                                       onPressed: hasUrl
                                           ? () {
-                                              if (_isWatchCta && _videoUrl != null) {
+                                              if (_isWatchCta &&
+                                                  _videoUrl != null) {
                                                 _openDetails(autoplay: true);
                                               } else {
                                                 _openExternalLink(context);
@@ -477,12 +461,16 @@ class _StoryCardState extends State<StoryCard> {
                                           : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
-                                        backgroundColor: const Color(0xFFdc2626),
+                                        backgroundColor:
+                                            const Color(0xFFdc2626),
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(8),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
                                         ),
-                                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                        ),
                                         textStyle: const TextStyle(
                                           fontWeight: FontWeight.w700,
                                           fontSize: 14,
@@ -497,11 +485,16 @@ class _StoryCardState extends State<StoryCard> {
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
-                                  final saved = SavedStore.instance.isSaved(widget.story.id);
+                                  final saved = SavedStore.instance
+                                      .isSaved(widget.story.id);
                                   return _ActionIconBox(
                                     tooltip: saved ? 'Saved' : 'Save',
-                                    onTap: () => SavedStore.instance.toggle(widget.story.id),
-                                    icon: const _Emoji(emoji: '🔖', size: 18),
+                                    onTap: () => SavedStore.instance
+                                        .toggle(widget.story.id),
+                                    icon: const _Emoji(
+                                      emoji: '🔖',
+                                      size: 18,
+                                    ),
                                   );
                                 },
                               ),
@@ -509,20 +502,23 @@ class _StoryCardState extends State<StoryCard> {
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
-                                icon: const _Emoji(emoji: '📤', size: 18),
+                                icon: const _Emoji(
+                                  emoji: '📤',
+                                  size: 18,
+                                ),
                               ),
                             ],
                           ),
 
-                          // Row 6: tiny footer attribution
+                          // Row E: footer attribution (tiny)
                           if (footerText.isNotEmpty) ...[
                             const SizedBox(height: 8),
                             Text(
                               footerText,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.inter(
-                                fontSize: 11.5,
+                              style: TextStyle(
+                                fontSize: 12,
                                 height: 1.3,
                                 fontWeight: FontWeight.w500,
                                 color: Colors.grey[500],
@@ -630,8 +626,9 @@ class _ActionIconBox extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color:
-            isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
+        color: isDark
+            ? Colors.white.withOpacity(0.08)
+            : Colors.black.withOpacity(0.06),
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
