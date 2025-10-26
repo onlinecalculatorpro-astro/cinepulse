@@ -15,11 +15,10 @@ router = APIRouter(
     tags=["img"],
 )
 
-# ------------------------------------------------------------------------------
-# Tunables / safety / perf knobs
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tunables / perf / safety
+# ---------------------------------------------------------------------------
 
-# Network timeouts: keep workers from hanging
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
 TOTAL_TIMEOUT = httpx.Timeout(
@@ -30,27 +29,25 @@ TOTAL_TIMEOUT = httpx.Timeout(
     pool=CONNECT_TIMEOUT,
 )
 
-# Redirect safety
 MAX_REDIRECTS = 5
 
-# Tell browsers / CDN edges "you can cache this thumbnail for 24h"
+# Cache hint to browsers / any CDN sitting in front of us.
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
-# Pretend to be a normal browser, not python-httpx
+# Pretend to be Chrome. Many celebrity/entertainment WP sites bot-block.
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
-# Obvious bad paths we never want to proxy
+# Paths we *never* fetch (login / logout / admin panels etc.)
 _BAD_PATH_PATTERNS = re.compile(
     r"/wp-login\.php|action=logout",
     flags=re.IGNORECASE,
 )
 
-# Hosts we refuse to fetch from (to avoid loops / internal hits)
-# NOTE: keep this list in sync with your public API hostnames / internal hostnames.
+# Domains we must never SSRF into (self, localhost, etc.)
 _BLOCKED_HOSTS = {
     "api.onlinecalculatorpro.org",
     "localhost",
@@ -60,25 +57,21 @@ _BLOCKED_HOSTS = {
 }
 
 
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Helpers
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def _host_is_private_ip_literal(host: str) -> bool:
     """
-    SSRF guard #1:
-    If the caller gives us a literal IP address, reject RFC1918, loopback,
-    link-local, reserved, etc.
-    We *do not* DNS-resolve hostnames here. This only fires if `host`
-    itself parses as an IP string.
+    If `host` itself is an IP literal, block RFC1918 / loopback / link-local /
+    multicast / reserved. We do NOT DNS-resolve normal hostnames here.
     """
     if not host:
         return True
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        # not an IP literal, probably a hostname -> handled later
-        return False
+        return False  # not an IP literal, so skip this check
 
     return (
         ip.is_private
@@ -91,8 +84,8 @@ def _host_is_private_ip_literal(host: str) -> bool:
 
 def _looks_like_image(content_type: Optional[str]) -> bool:
     """
-    We only stream if upstream says it's an image/* OR it's the infamous
-    'application/octet-stream' that a lot of CDNs use for jpg/webp.
+    We'll only stream if upstream said `image/*` *or* the infamous
+    application/octet-stream (some CDNs do this for jpg/webp).
     """
     if not content_type:
         return False
@@ -103,9 +96,10 @@ def _looks_like_image(content_type: Optional[str]) -> bool:
 def _build_headers_for_host(origin_host: str, *, alt: bool = False) -> dict[str, str]:
     """
     attempt 0 (alt=False):
-      - Spoof Referer=https://<origin_host>/ to bypass hotlink protection.
+      - Send Referer=https://<origin_host>/ (many WP installs demand this)
     attempt 1 (alt=True):
-      - Drop Referer, slightly looser Accept.
+      - Drop Referer, slightly looser Accept. Some CDNs fake-404 if Referer
+        doesn't match EXACTLY. Retrying w/ no Referer often works.
     """
     if not alt:
         return {
@@ -125,10 +119,8 @@ def _build_headers_for_host(origin_host: str, *, alt: bool = False) -> dict[str,
 
 def _is_blocked_hostname(host: str) -> bool:
     """
-    SSRF guard #2:
-    - don't allow direct hits back to ourselves / localhost / 127.0.0.1 etc.
-    - cheap sanity filter to avoid proxy loops like:
-        /v1/img?u=https://api.onlinecalculatorpro.org/v1/img?u=...
+    Avoid proxy loops (hitting ourselves via /v1/img?u=our_own_url),
+    and avoid obvious localhost-style targets.
     """
     if not host:
         return True
@@ -144,17 +136,17 @@ def _is_blocked_hostname(host: str) -> bool:
 
 def _parse_and_validate_source_url(raw_u: str) -> Tuple[str, str, str]:
     """
-    Take the ?u=... param from the query string, URL-decode it, and vet it.
+    Decode & vet the ?u=... param.
     Returns (full_url, scheme, host) or raises HTTPException.
     """
     if not raw_u:
         raise HTTPException(status_code=422, detail="missing 'u' param")
 
-    # Frontend sends encodeURIComponent(url)
+    # Frontend uses encodeURIComponent(url); undo that.
     full_url = unquote(raw_u).strip()
     p = urlparse(full_url)
 
-    # Must be http(s) and absolute
+    # Must be http(s), absolute URL
     if p.scheme not in {"http", "https"}:
         raise HTTPException(status_code=400, detail="only http/https allowed")
     if not p.netloc:
@@ -162,38 +154,43 @@ def _parse_and_validate_source_url(raw_u: str) -> Tuple[str, str, str]:
 
     host = (p.hostname or "").strip()
 
-    # Block localhost / 127.x / our own domain / obvious internal nets
+    # SSRF hard stops
     if _is_blocked_hostname(host):
         raise HTTPException(status_code=400, detail="forbidden host")
     if _host_is_private_ip_literal(host):
         raise HTTPException(status_code=400, detail="forbidden host (private ip literal)")
 
-    # Extra: short-circuit obvious "login/logged-out" traps
+    # Never fetch logins / logout actions etc.
     if _BAD_PATH_PATTERNS.search(p.path or ""):
         raise HTTPException(status_code=404, detail="not an image")
 
     return full_url, p.scheme, host
 
 
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Endpoint
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 @router.get("/img")
 async def proxy_img(
-    u: str = Query(..., description="Absolute image URL, URL-encoded with encodeURIComponent()"),
+    u: str = Query(
+        ...,
+        description="Absolute image URL, URL-encoded with encodeURIComponent()",
+    ),
 ):
     """
-    Public image proxy.
-    - Browser never hits random external domains. It only hits us.
-    - We attach Referer/User-Agent to dodge hotlink protection.
-    - We block internal/loopback/private targets to avoid SSRF.
-    - We stream back bytes with CORS + long cache headers.
+    CORS-safe image proxy for the CinePulse web client.
 
-    Responses:
-      200: image bytes stream + image/* content-type
-      404: upstream is not an image / anti-hotlink / not found / login page
-      502: true upstream failure or timeout
+    What we do:
+    - Browser hits *our* domain only (no mixed origins on the frontend).
+    - We fetch the real image with friendly UA/Referer to bypass hotlink blocks.
+    - We block private / loopback / self / localhost to avoid SSRF.
+    - We stream bytes straight back, with Cache-Control + permissive CORS.
+
+    Status codes we return:
+    - 200 = image stream OK
+    - 404 = not an image / blocked / genuinely missing
+    - 502 = upstream totally failed (timeout, DNS, 5xx, etc.)
     """
 
     full_url, _scheme, host = _parse_and_validate_source_url(u)
@@ -208,60 +205,74 @@ async def proxy_img(
         ),
     ) as client:
 
-        # attempt order:
-        #   1) send Referer spoofed to that host
-        #   2) retry without Referer if we got blocked (401/403/451)
+        # We'll try twice:
+        #   1. with spoofed Referer
+        #   2. without Referer
+        #
+        # Some WordPress/TagDiv CDNs fake-404 on the "wrong" Referer,
+        # not just 403. So we retry on 401/403/404/451.
         for attempt in (0, 1):
             try:
-                resp_up = await client.get(
+                upstream = await client.get(
                     full_url,
                     headers=_build_headers_for_host(host, alt=bool(attempt)),
                 )
             except httpx.RequestError:
-                # DNS fail / timeout / TCP reset / etc.
+                # DNS fail / timeout / TLS fail / etc.
                 if attempt == 0:
+                    # try alt headers once
                     continue
                 raise HTTPException(status_code=502, detail="upstream request failed")
 
-            # retry once on "forbidden" style codes from CDNs
-            if resp_up.status_code in (401, 403, 451) and attempt == 0:
+            # If origin said "go away", or "fake 404" on attempt 0,
+            # retry once without Referer:
+            if upstream.status_code in (401, 403, 404, 451) and attempt == 0:
                 continue
 
-            # handle final upstream status
-            if resp_up.status_code >= 500:
-                raise HTTPException(status_code=502, detail=f"upstream {resp_up.status_code}")
-            if resp_up.status_code == 404:
-                raise HTTPException(status_code=404, detail="not found")
-            if resp_up.status_code >= 400:
-                # treat remaining 4xx as "image unavailable"
-                raise HTTPException(status_code=404, detail=f"blocked ({resp_up.status_code})")
+            # Past this point, we treat whatever we got as final.
 
-            ctype = resp_up.headers.get("Content-Type", "")
+            if upstream.status_code >= 500:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"upstream {upstream.status_code}",
+                )
+
+            if upstream.status_code == 404:
+                raise HTTPException(status_code=404, detail="not found")
+
+            if upstream.status_code >= 400:
+                # Remaining 4xx become "image unavailable"
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"blocked ({upstream.status_code})",
+                )
+
+            ctype = upstream.headers.get("Content-Type", "")
             if not _looks_like_image(ctype):
                 raise HTTPException(status_code=404, detail="not an image")
 
-            # Stream upstream body directly
-            out = StreamingResponse(
-                resp_up.aiter_bytes(),
+            # Stream bytes right back to the client without buffering the whole file.
+            resp = StreamingResponse(
+                upstream.aiter_bytes(),
                 status_code=200,
                 media_type=ctype.split(";", 1)[0] if ctype else "application/octet-stream",
             )
 
-            # Surface content-length if upstream gave one
-            cl = resp_up.headers.get("Content-Length")
-            if cl:
-                out.headers["Content-Length"] = cl
+            # Pass along size hint if upstream gave us one.
+            clen = upstream.headers.get("Content-Length")
+            if clen:
+                resp.headers["Content-Length"] = clen
 
-            # Strong cache hint downstream
-            out.headers["Cache-Control"] = CACHE_CONTROL
+            # Strong cache so we don't re-fetch the same celebrity poster 200x/min.
+            resp.headers["Cache-Control"] = CACHE_CONTROL
 
-            # Wide-open CORS so <img src> and even fetch() from web works
-            out.headers["Access-Control-Allow-Origin"] = "*"
-            out.headers["Access-Control-Allow-Credentials"] = "true"
-            out.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-            out.headers["Access-Control-Allow-Headers"] = "*"
+            # CORS: allow any origin to <img src="..."> this file.
+            # We do NOT set Allow-Credentials together with "*".
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "*"
 
-            return out
+            return resp
 
-    # If we somehow escaped the loop with no return, treat as upstream failure
+    # Shouldn't get here, but just in case.
     raise HTTPException(status_code=502, detail="unexpected proxy failure")
