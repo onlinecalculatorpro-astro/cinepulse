@@ -13,13 +13,13 @@ import '../../core/models.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/smart_video_player.dart';
 import 'ott_badge.dart';
-import 'story_image_url.dart'; // <-- same helper as StoryCard
+import 'story_image_url.dart'; // <-- NEW import
 
 class StoryDetailsScreen extends StatefulWidget {
   const StoryDetailsScreen({
     super.key,
     required this.story,
-    this.autoplay = false, // autoplay only matters for inline video
+    this.autoplay = false,
   });
 
   final Story story;
@@ -30,11 +30,8 @@ class StoryDetailsScreen extends StatefulWidget {
 }
 
 class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
-  // we render the <SmartVideoPlayer> inline in the header hero when active
   bool _showPlayer = false;
   final _heroPlayerKey = GlobalKey();
-
-  /* ---------------- URL helpers ---------------- */
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
@@ -47,7 +44,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return u;
   }
 
-  /// Prefer an inline-playable URL (YouTube, etc.) over the article link.
   Uri? get _primaryUrl => _videoUrl ?? _canonicalUrl;
 
   bool get _hasVideo => _videoUrl != null;
@@ -94,8 +90,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-                Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
+            content: Text(
+              kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened',
+            ),
           ),
         );
       }
@@ -113,7 +110,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     if (!_hasVideo) return;
     setState(() => _showPlayer = true);
 
-    // after mounting the player, scroll hero back into view
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _heroPlayerKey.currentContext;
       if (ctx != null) {
@@ -136,8 +132,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     }
   }
 
-  /* ---------------- UI ---------------- */
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -147,9 +141,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // dynamic SliverAppBar height:
-    // - if player is showing: reserve 16:9 video box + controls row height
-    // - else: fixed hero height (taller on tablet/desktop)
     final double expandedHeight = _showPlayer
         ? (screenW * 9.0 / 16.0 + (isPhone ? 96.0 : 120.0))
         : (isPhone ? 260.0 : 340.0);
@@ -217,18 +208,17 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
             ),
           ),
 
-          // PAGE BODY
+          // main body
           SliverToBoxAdapter(
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
-                  // big bottom pad so the bottom nav doesn't cover CTA
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // headline
+                      // Title
                       Text(
                         widget.story.title,
                         style: GoogleFonts.inter(
@@ -240,7 +230,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // badges + meta line
+                      // badges / meta
                       Wrap(
                         crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 8,
@@ -250,16 +240,17 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           OttBadge.fromStory(widget.story, dense: true),
                           Text(
                             widget.story.metaLine,
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: cs.onSurfaceVariant,
-                                ),
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: cs.onSurfaceVariant),
                           ),
                         ],
                       ),
 
                       const SizedBox(height: 16),
 
-                      // summary
+                      // Summary
                       if ((widget.story.summary ?? '').isNotEmpty)
                         Text(
                           widget.story.summary!,
@@ -270,7 +261,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           ),
                         ),
 
-                      // optional language/genre facets
+                      // languages / genres
                       if (widget.story.languages.isNotEmpty ||
                           widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
@@ -281,12 +272,14 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                             if (widget.story.languages.isNotEmpty)
                               _Facet(
                                 label: 'Language',
-                                value: widget.story.languages.join(', '),
+                                value:
+                                    widget.story.languages.join(', '),
                               ),
                             if (widget.story.genres.isNotEmpty)
                               _Facet(
                                 label: 'Genre',
-                                value: widget.story.genres.join(', '),
+                                value:
+                                    widget.story.genres.join(', '),
                               ),
                           ],
                         ),
@@ -329,12 +322,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           AnimatedBuilder(
                             animation: SavedStore.instance,
                             builder: (_, __) {
-                              final saved =
-                                  SavedStore.instance.isSaved(widget.story.id);
+                              final saved = SavedStore.instance.isSaved(widget.story.id);
                               return IconButton.filledTonal(
-                                tooltip: saved
-                                    ? 'Remove from Saved'
-                                    : 'Save bookmark',
+                                tooltip:
+                                    saved ? 'Remove from Saved' : 'Save bookmark',
                                 onPressed: () =>
                                     SavedStore.instance.toggle(widget.story.id),
                                 icon: Icon(
@@ -359,11 +350,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   }
 }
 
-/* ---------------- HEADER HERO ----------------
-   This is the big top section in StoryDetails:
-   - Shows the same hero image as the StoryCard (for smooth Hero animation).
-   - Can swap that image out for an inline <SmartVideoPlayer>.
------------------------------------------------- */
+/* ---------------- HEADER HERO ---------------- */
 
 class _HeaderHero extends StatelessWidget {
   const _HeaderHero({
@@ -388,15 +375,15 @@ class _HeaderHero extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // CRUCIAL: same resolver as StoryCard so Hero uses the exact same URL.
-    final imgUrl = resolveStoryImageUrl(story.posterUrl, story.thumbUrl);
+    // ⬇️ use same resolver as StoryCard so detail header = card thumb
+    final imgUrl = resolveStoryImageUrl(story);
 
     return Hero(
       tag: 'thumb-${story.id}',
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // background image OR gradient fallback
+          // bg image OR gradient fallback
           if (imgUrl.isNotEmpty)
             CachedNetworkImage(
               imageUrl: imgUrl,
@@ -445,13 +432,16 @@ class _HeaderHero extends StatelessWidget {
               ),
             ),
 
-          // inline player overlay (if user tapped Watch)
+          // inline video player layer, if active
           if (showPlayer && (videoUrl?.isNotEmpty ?? false))
             Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
                     child: SmartVideoPlayer(
@@ -466,7 +456,7 @@ class _HeaderHero extends StatelessWidget {
               ),
             )
           else
-            // dark gradient at bottom so title/meta row sits on readable bg
+            // dark bottom gradient for readability
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
@@ -492,6 +482,7 @@ class _HeaderHero extends StatelessWidget {
 
 class _Facet extends StatelessWidget {
   const _Facet({required this.label, required this.value});
+
   final String label;
   final String value;
 
@@ -524,7 +515,7 @@ class _Facet extends StatelessWidget {
   }
 }
 
-/* ---------------- fallback icon (same vibe as StoryCard) ---------------- */
+/* ---------------- fallback icon ---------------- */
 
 class _SampleIcon extends StatelessWidget {
   const _SampleIcon({required this.kind});
