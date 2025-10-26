@@ -605,14 +605,20 @@ _BAD_IMG_RE = re.compile(
 )
 
 def _looks_bad_brand_card(u: str) -> bool:
+    """
+    Heuristic "is this just a branded/social card and not the real hero image?"
+    """
     l = u.lower()
 
+    # obvious junk patterns
     if _BAD_IMG_RE.search(l):
         return True
 
+    # tiny boilerplate sizes (logos, watermarks)
     if re.search(r"(\b|_)(1x1|64x64|100x100|150x150)(\b|_)", l):
         return True
 
+    # "default og/share/social" style share tiles
     if "default" in l and ("og" in l or "share" in l or "social" in l):
         return True
 
@@ -620,8 +626,8 @@ def _looks_bad_brand_card(u: str) -> bool:
 
 def _numeric_size_hint(u: str) -> int:
     """
-    Rough size signal from URL like 1200x630, _1080, etc.
-    Larger number == likely bigger/hero image.
+    Guess resolution from URL hints like 1200x630, -2048, _1080 etc.
+    Larger number = larger / more hero-like.
     """
     size = 0
     m = re.search(r'(\d{3,5})[xX_ -](\d{3,5})', u)
@@ -641,6 +647,10 @@ def _numeric_size_hint(u: str) -> int:
     return size
 
 def _same_origin_bonus(img_url: str, page_url: str) -> int:
+    """
+    Small boost if the image is from same domain or a known friendly CDN,
+    so it's less likely to 403.
+    """
     try:
         host_img = urlparse(img_url).netloc.lower().removeprefix("www.")
         host_pg  = urlparse(page_url).netloc.lower().removeprefix("www.")
@@ -652,42 +662,87 @@ def _same_origin_bonus(img_url: str, page_url: str) -> int:
         pass
     return 0
 
+def _is_tiny_wp_thumb(u: str) -> bool:
+    """
+    Detect classic WordPress sidebar thumbs like ...-150x79.jpg, ...-300x169.png.
+    These are usually "You may like" / "Trending" tiles, not the hero image.
+
+    We'll treat it as 'tiny' if BOTH dims are < 320px.
+    """
+    m = re.search(
+        r'[-_](\d{2,4})x(\d{2,4})\.(?:jpe?g|png|webp|gif|avif|bmp|jfif|pjpeg)(?:[?#].*)?$',
+        u,
+        flags=re.I,
+    )
+    if not m:
+        return False
+    try:
+        w = int(m.group(1))
+        h = int(m.group(2))
+    except Exception:
+        return False
+    return max(w, h) < 320
+
 def _score_image_for_card(img_url: str, page_url: str) -> int:
     """
-    Score candidates so we PREFER real article/inline photos
-    (like celebrity/still images) and AVOID branded social cards
-    (like KOIMOI's orange logo tile).
+    Score candidate images for story cards.
+    The goal:
+      - Strongly prefer the real hero/inline article image
+        (e.g. cast still, poster, scene photo).
+      - Aggressively punish sidebar thumbs like '...-150x79.jpg'
+        and generic social-share cards.
+
+    This is tuned to avoid the Koimoi "random unrelated tiny thumbnail"
+    problem.
     """
     score = 0
     l = img_url.lower()
 
-    # If it's obviously junk / watermark / social card -> huge penalty.
+    # 0. Hard penalties for obvious junk / branded social tiles.
     if _looks_bad_brand_card(img_url):
         score -= 5000
 
-    # Prefer real article images from WordPress/media uploads.
-    if "/wp-content/uploads/" in l or re.search(r"/(uploads|upload|gallery|media)/", l):
+    # Penalize classic tiny sidebar thumbs (150x79, 300x169, etc.).
+    if _is_tiny_wp_thumb(l):
+        score -= 4000
+
+    # Penalize obvious 'share card' or social preview art.
+    if re.search(r"(og|open[-_]?graph|social|share[_-]?img|share[_-]?card|shareimage)", l):
+        score -= 1000
+
+    # Penalize default/placeholder artwork.
+    if "default" in l or "placeholder" in l:
+        score -= 800
+
+    # 1. Boost WordPress / media library hero-style images.
+    # Koimoi etc. often serve real header photos from:
+    #   /wp-content/uploads/...
+    #   /wp-content/new-galleries/...
+    # We'll give those a big push.
+    if re.search(r"/wp-content/(uploads|new-galleries)/", l):
+        score += 1200
+    elif re.search(r"/(uploads|upload|gallery|galleries|media)/", l):
         score += 800
 
-    # Penalize obvious share/og/social words, which tend to be social cards.
-    if re.search(r"(og|open[-_]?graph|social|share[_-]?img|share[_-]?card|shareimage)", l):
-        score -= 400
+    # Small nudge if URL hints at poster/still/promo.
+    if re.search(r"(poster|stills?|first-look|promo|on-set|scene)", l):
+        score += 200
 
-    # Penalize "default"/"placeholder".
-    if "default" in l or "placeholder" in l:
-        score -= 400
+    # 2. Size heuristics: bigger image hints get more points.
+    dim_hint = _numeric_size_hint(l)
+    score += dim_hint
+    if dim_hint == 0:
+        # If we saw no size hint at all, often it's some tiny sprite.
+        score -= 50
 
-    # Tiny thumbs / pixel trackers get nuked.
-    if re.search(r"(1x1|64x64|100x100|150x150)", l):
-        score -= 500
+    # Super tiny thumbs? Nuke harder.
+    if _is_tiny_wp_thumb(l):
+        score -= 1000
 
-    # Bigger dimension hints get a boost (1200x630 etc.).
-    score += _numeric_size_hint(l)
-
-    # Prefer same origin / friendly CDNs.
+    # 3. Hosting preference: same-origin/friendly CDN gets a boost.
     score += _same_origin_bonus(img_url, page_url)
 
-    # Mild bonus if it's a standard photo extension.
+    # 4. Mild bonus for normal photo extensions.
     if re.search(r"\.(jpe?g|png|webp|gif|avif|bmp|jfif|pjpeg)(?:[?#]|$)", l):
         score += 50
 
@@ -695,28 +750,31 @@ def _score_image_for_card(img_url: str, page_url: str) -> int:
 
 def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
-    Score ALL candidates and choose the best, instead of blindly trusting og:image.
+    Score ALL candidates and choose the best.
+    We DO NOT blindly trust og:image anymore.
 
-    This fixes cases where og:image is a branded badge but the article body has
-    a real photo (the thing we actually want in the card).
+    This fixes cases where og:image or twitter:image is just a generic
+    brand tile or sidebar image, instead of the actual hero still/poster.
     """
     def _norm_one(u: Optional[str]) -> Optional[str]:
         if not u:
             return None
         return to_https(abs_url(u, page_url or u))
 
-    # Gather possible candidates
     raw_candidates: List[str] = []
 
+    # candidates scraped by extractors
     cand_list = payload.get("image_candidates")
     if isinstance(cand_list, list):
         for u in cand_list:
             if isinstance(u, str):
                 raw_candidates.append(u)
 
+    # feed-level thumb guess
     if thumb_hint:
         raw_candidates.insert(0, thumb_hint)
 
+    # direct enclosures like <enclosure type="image/...">
     for enc in (payload.get("enclosures") or []):
         if not isinstance(enc, dict):
             continue
@@ -730,34 +788,33 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
         )):
             raw_candidates.append(u)
 
+    # inline <img> in body HTML / summary
     for key in ("content_html", "description_html", "summary"):
         for u, _bias in _images_from_html_block(payload.get(key), page_url):
             raw_candidates.append(u)
 
-    # Normalize + dedupe
+    # normalize + dedupe
     normed_unique: Dict[str, int] = {}
     for raw in raw_candidates:
         nu = _norm_one(raw)
         if not nu:
             continue
         if nu not in normed_unique:
-            normed_unique[nu] = 0  # placeholder
+            normed_unique[nu] = 0
 
     if not normed_unique:
         return None
 
-    # Score each normalized candidate.
+    # score each
     scored: List[Tuple[int, str]] = []
     for u in normed_unique.keys():
         s = _score_image_for_card(u, page_url or "")
         scored.append((s, u))
 
-    # Pick highest score.
     scored.sort(key=lambda x: x[0], reverse=True)
     best_score, best_url = scored[0]
 
-    # Even if best_score is negative, we still return best_url,
-    # because it's better than nothing.
+    # even if best_score < 0, it's still "best we have"
     return best_url or None
 
 def _has_any_image(obj: Dict[str, Any]) -> bool:
@@ -839,7 +896,6 @@ def normalize_event(event: AdapterEventDict) -> dict:
     if not image_url and source == "youtube":
         image_url = _youtube_thumb(link)
 
-    # final_best is what we'll expose to frontend
     final_best = image_url or thumb_hint
 
     # --- SUMMARY -----------------------------------------------------
