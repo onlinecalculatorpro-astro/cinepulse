@@ -1,45 +1,52 @@
 # apps/sanitizer/sanitizer.py
 #
-# PIPELINE ROLE (this container = the "sanitize" RQ worker):
+# ROLE IN PIPELINE (runs in the "sanitize" RQ worker):
 #
 #   scheduler  → polls sources and enqueues ingest jobs
+#
 #   workers    → normalize_event() builds a canonical story dict:
-#                 - title, summary (already cleaned/pro)
-#                 - kind, kind_meta (trailer / release / ott / news details)
+#                 - title, summary (already cleaned / professional tone)
+#                 - kind, kind_meta (trailer / release / ott / news, etc.)
 #                 - verticals (["entertainment"], ["sports"], ...)
 #                 - tags (industry, ott, box-office, etc.)
 #                 - hero image fields (thumb_url/image/...)
 #                 - timestamps
 #               and enqueues sanitize_story(story) on the "sanitize" queue
 #
-#   sanitizer  → THIS FILE, running under rq worker "sanitize"
+#   sanitizer  → THIS FILE
 #               - final gatekeeper for the public feed:
-#                   * dedupe
-#                   * accept only the first version
-#                   * push to Redis FEED_KEY
+#                   * dedupe (first version wins forever)
+#                   * write to Redis FEED_KEY
 #                   * trim FEED_KEY
 #                   * broadcast realtime + optional push notification
 #
-#   api        → /v1/feed reads FEED_KEY
-#                supports /v1/feed?vertical=sports etc.
-#                by filtering story["verticals"]
+#   api        → /v1/feed reads FEED_KEY (newest-first list in Redis)
+#                and supports /v1/feed?vertical=sports etc. by inspecting story["verticals"]
 #
-# CRUCIAL RULES:
+# IMPORTANT PIPELINE RULES:
 # - workers DO NOT write to FEED_KEY
 # - workers DO NOT dedupe
 # - sanitizer is the ONLY thing that can publish to FEED_KEY
 #
-# DEDUPE STRATEGY:
-# - We canonicalize (title + summary) → strip hype words / boilerplate
-# - Hash that canonical text (sha1) → short signature
-# - Store that signature in Redis set SEEN_KEY
-# - If signature already seen → drop as "duplicate"
-# - We never "upgrade" an older story in-place. First one wins permanently.
+# DEDUPE STRATEGY (NEW TOPIC SIGNATURE VERSION):
+# 1. Clean title and summary (lowercase, remove hype words like "BREAKING",
+#    remove punctuation/emojis, remove footer junk like "read more at ...").
+# 2. Extract meaningful keywords from that cleaned text:
+#       - keep names / subjects / verbs ("salman", "joins", "bigg", "boss", "19")
+#       - keep "day5"/"day-5" style tokens (so Day 5 box office vs Day 6 is different)
+#       - drop generic glue words ("the", "and", "to", etc.)
+#       - drop pure numeric/money tokens ("505cr", "120", etc.) because they change hourly
+# 3. Sort + dedupe those keywords to build a stable "topic fingerprint".
+# 4. sha1 hash that fingerprint → 16-char signature.
+#
+# - We store signatures in Redis set SEEN_KEY.
+# - If we see the same signature again, it's "duplicate".
+# - We never "upgrade" an older story in-place. First accepted story wins permanently.
 #
 # sanitize_story() returns:
 #   "accepted"   -> published
-#   "duplicate"  -> dropped (already had essentially the same story)
-#   "invalid"    -> dropped (no meaningful canonical title)
+#   "duplicate"  -> dropped (basically the same topic already published)
+#   "invalid"    -> dropped (no meaningful canonical title / topic)
 #
 # ENV VARS:
 #   REDIS_URL, FEED_KEY, SEEN_KEY, MAX_FEED_LEN
@@ -48,13 +55,14 @@
 #   FALLBACK_VERTICAL (default "entertainment")
 #
 # NOTE:
-# - We lightly "finalize" the story before pushing:
-#     * ensure story["verticals"] exists
-#     * ensure story["thumb_url"] isn't empty
-#     * ensure story["kind_meta"] exists (in case worker was old)
-#     * ensure timestamps exist
-# - We don't strip debug fields like payload/image_candidates/etc.
-#   because they're used by backfill_repair_recent().
+# - Before pushing we "finalize" the story:
+#     * ensure story["verticals"] is non-empty list
+#     * ensure story["thumb_url"] exists
+#     * ensure story["kind_meta"] exists
+#     * ensure timestamps (normalized_at, ingested_at)
+#     * normalize tags format
+# - We do NOT strip debug fields (payload, image_candidates, etc.) because
+#   backfill_repair_recent() in workers may need them later.
 
 
 from __future__ import annotations
@@ -124,10 +132,10 @@ def _redis() -> Redis:
 
 
 # ------------------------------------------------------------------------------
-# Canonicalization helpers for dedupe
+# Canonicalization + topic-signature helpers for dedupe
 # ------------------------------------------------------------------------------
 
-# Words / hype / filler that shouldn't affect "is this basically the same story?"
+# High-drama / hype / filler words that shouldn't define uniqueness.
 _STOPWORDS = {
     "breaking",
     "exclusive",
@@ -170,7 +178,7 @@ _STOPWORDS = {
     "shocking",
     "omg",
     "🔥",
-    # box-office style hype words are often repeated too
+    # box-office hype-y words that repeat every day
     "box",
     "office",
     "collection",
@@ -180,7 +188,18 @@ _STOPWORDS = {
     "weekend",
 }
 
-# Footer-y junk to strip from summaries before hashing.
+# Extremely common glue words we don't want to make two stories "different".
+_COMMON_STOPWORDS = {
+    "the", "a", "an", "this", "that", "and", "or", "but", "if", "so",
+    "to", "for", "of", "on", "in", "at", "by", "with", "as", "from",
+    "about", "after", "before", "over", "under", "it", "its", "his",
+    "her", "their", "they", "you", "your", "we", "our", "is", "are",
+    "was", "were", "be", "been", "being", "will", "can", "could",
+    "should", "may", "might", "have", "has", "had", "do", "does",
+    "did", "not", "no", "yes",
+}
+
+# Footer-ish junk to strip from summaries before hashing.
 _SUMMARY_FOOTER_PATTERNS = [
     r"read (the )?full story.*$",
     r"click here.*$",
@@ -190,8 +209,17 @@ _SUMMARY_FOOTER_PATTERNS = [
     r"all rights reserved.*$",
 ]
 
-# Anything not alphanumeric or whitespace → space.
-_CLEAN_RE = re.compile(r"[^a-z0-9\s]+", re.IGNORECASE)
+# Anything not alphanumeric / dash / whitespace → space.
+_CLEAN_RE = re.compile(r"[^a-z0-9\s-]+", re.IGNORECASE)
+
+# Tokens like "day5", "day-5", "day_5" etc. We WANT to keep those,
+# because "Day 5 box office" vs "Day 6 box office" should count separately.
+_DAY_TOKEN_RE = re.compile(r"^day[-_]?(\d{1,2})$", re.I)
+
+# Tokens that are basically just numbers / money / raw numeric.
+# We usually DROP these (so "505cr", "120", "500crore" doesn't flip the topic),
+# but we keep day5-style tokens via _DAY_TOKEN_RE above.
+_NUMERICY_RE = re.compile(r"^\d+[a-z]*$", re.I)
 
 
 def _strip_noise_words(words: List[str]) -> List[str]:
@@ -211,8 +239,8 @@ def _strip_noise_words(words: List[str]) -> List[str]:
 
 def canonical_title(raw_title: str) -> str:
     """
-    Lowercase, strip punctuation/emojis, drop hype words, collapse whitespace.
-    If this ends up empty, we can't trust this story as uniquely identifiable.
+    Lowercase, remove punctuation/emojis, drop hype-y STOPWORDS, collapse whitespace.
+    If this ends up empty, we treat story as not uniquely identifiable.
     """
     t = (raw_title or "").lower()
     t = _CLEAN_RE.sub(" ", t)
@@ -223,10 +251,12 @@ def canonical_title(raw_title: str) -> str:
 
 def canonical_summary(raw_summary: Optional[str]) -> str:
     """
-    Same idea for summary:
-    - Strip footer CTAs
-    - Lowercase, scrub noise, drop hype words
-    - Collapse whitespace
+    Clean summary:
+    - Strip "read full story..." footers.
+    - Lowercase.
+    - Remove punctuation/emojis.
+    - Drop hype/filler STOPWORDS.
+    - Collapse whitespace.
     """
     if not raw_summary:
         return ""
@@ -242,11 +272,80 @@ def canonical_summary(raw_summary: Optional[str]) -> str:
     return " ".join(words).strip()
 
 
+def _keywords_for_signature(canon_title: str, canon_summary: str) -> List[str]:
+    """
+    Turn cleaned title+summary into a bag of meaningful keywords.
+
+    Rules:
+    - Start from canonical title + canonical summary (already de-hyped).
+    - Split into tokens.
+    - Throw away:
+        * COMMON_STOPWORDS like "the", "and", "to", etc.
+        * raw numeric / money-ish tokens: "505", "505cr", "120cr", etc.
+          (these change constantly in box office and sports score spam)
+    - KEEP:
+        * names, subjects, verbs ("salman", "joins", "bigg", "boss", "19")
+        * "day5"/"day-5" type tokens (so Day 5 vs Day 6 counts as different stories)
+
+    Return a list of tokens to represent the topic.
+    """
+    blob = f"{canon_title} {canon_summary}".strip()
+    tokens = blob.split()
+
+    out: List[str] = []
+    for tok in tokens:
+        t = tok.strip().lower()
+        if not t:
+            continue
+
+        # drop glue words
+        if t in _COMMON_STOPWORDS:
+            continue
+
+        # keep explicit "day5"/"day-5" tokens for box office day tracking
+        if _DAY_TOKEN_RE.match(t):
+            out.append(t)
+            continue
+
+        # drop generic numeric-ish tokens ("505cr", "120", "600crore")
+        if _NUMERICY_RE.match(t):
+            continue
+
+        out.append(t)
+
+    return out
+
+
+def _build_topic_signature_blob(canon_title: str, canon_summary: str) -> str:
+    """
+    Build a "topic fingerprint" string:
+      - extract filtered keywords
+      - dedupe them
+      - sort them alphabetically so word order changes don't matter
+    """
+    kw = _keywords_for_signature(canon_title, canon_summary)
+
+    if not kw:
+        # fallback to the raw canonical text if keyword extraction gave nothing
+        base = f"title:{canon_title}||summary:{canon_summary}".strip()
+        return base
+
+    uniq_sorted = sorted(set(kw))
+    return " ".join(uniq_sorted).strip()
+
+
 def story_signature(title: str, summary: Optional[str]) -> str:
     """
-    Produce a short deterministic signature for dedupe:
-      sig = sha1( "title:<canon_title>||summary:<canon_summary>" )[0:16]
-    If the canonical title is empty, return "" → invalid story.
+    Produce a short deterministic signature for dedupe based on TOPIC,
+    not exact wording.
+
+    Steps:
+      1. canonicalize title + summary (remove hype, junk)
+      2. extract + normalize topic keywords
+      3. sort + dedupe keywords into a stable blob
+      4. sha1(blob)[0:16]
+
+    If canonical title is empty, return "" → invalid story.
     """
     canon_t = canonical_title(title)
     canon_s = canonical_summary(summary)
@@ -254,8 +353,8 @@ def story_signature(title: str, summary: Optional[str]) -> str:
     if not canon_t:
         return ""
 
-    blob = f"title:{canon_t}||summary:{canon_s}"
-    digest = hashlib.sha1(blob.encode("utf-8")).hexdigest()
+    topic_blob = _build_topic_signature_blob(canon_t, canon_s)
+    digest = hashlib.sha1(topic_blob.encode("utf-8")).hexdigest()
     return digest[:16]
 
 
@@ -269,9 +368,9 @@ def _now_utc_iso() -> str:
 
 def _ensure_verticals(story: Dict[str, Any]) -> None:
     """
-    Workers should already attach a list like ["entertainment"] or ["sports"].
-    If it's missing or empty, fall back so API /v1/feed?vertical= still works.
-    We also normalize to list[str] of non-empty slugs.
+    Workers should already attach something like ["entertainment"] or ["sports"].
+    If it's missing or empty, fall back so /v1/feed?vertical= still works.
+    Also normalize to list[str] of non-empty slugs.
     """
     verts = story.get("verticals")
     if not isinstance(verts, list):
@@ -284,9 +383,9 @@ def _ensure_verticals(story: Dict[str, Any]) -> None:
 
 def _ensure_thumb_url(story: Dict[str, Any]) -> None:
     """
-    UI depends heavily on thumb_url.
-    Workers already try hard, but as a last line we fall back to any of the
-    other image-like fields if thumb_url is still empty.
+    Frontend expects story["thumb_url"].
+    Workers already try to pick a good hero, but as a last resort grab any
+    available image-like field.
     """
     if story.get("thumb_url"):
         return
@@ -297,14 +396,16 @@ def _ensure_thumb_url(story: Dict[str, Any]) -> None:
             return
 
 
-def _build_kind_meta_fallback(kind: str,
-                              ott_platform: Optional[str],
-                              is_theatrical: Any,
-                              is_upcoming: Any,
-                              release_date: Optional[str]) -> Dict[str, Any]:
+def _build_kind_meta_fallback(
+    kind: str,
+    ott_platform: Optional[str],
+    is_theatrical: Any,
+    is_upcoming: Any,
+    release_date: Optional[str],
+) -> Dict[str, Any]:
     """
-    Workers should already send story["kind_meta"].
-    But if they don't (older worker during rollout), build a minimal one here.
+    Workers SHOULD send story["kind_meta"], but in case this is an older worker
+    or a weird edge case, build a minimal fallback so clients don't crash.
     """
     if kind == "trailer":
         return {
@@ -336,7 +437,7 @@ def _build_kind_meta_fallback(kind: str,
 
 def _ensure_kind_meta(story: Dict[str, Any]) -> None:
     """
-    Guarantee story["kind_meta"] exists and is minimally structured.
+    Guarantee story["kind_meta"] exists.
     """
     if story.get("kind_meta"):
         return
@@ -353,7 +454,7 @@ def _ensure_kind_meta(story: Dict[str, Any]) -> None:
 def _ensure_timestamps(story: Dict[str, Any]) -> None:
     """
     We want normalized_at and ingested_at for clients / realtime fanout.
-    If workers forgot, patch them here.
+    If workers forgot them, patch them here.
     """
     if not story.get("normalized_at"):
         story["normalized_at"] = _now_utc_iso()
@@ -364,21 +465,20 @@ def _ensure_timestamps(story: Dict[str, Any]) -> None:
 def _finalize_story_shape(story: Dict[str, Any]) -> Dict[str, Any]:
     """
     Mutates + returns story.
-    This is the exact shape we write to Redis and broadcast.
+    This is exactly what we LPUSH to Redis and broadcast.
     """
     _ensure_verticals(story)
     _ensure_thumb_url(story)
     _ensure_kind_meta(story)
     _ensure_timestamps(story)
 
-    # tags should at least be a list or None for JSON cleanliness
+    # normalize tags to list[str] OR None
     tags_val = story.get("tags")
     if isinstance(tags_val, list):
         story["tags"] = [t for t in tags_val if isinstance(t, str) and t.strip()] or None
     elif tags_val is None:
         story["tags"] = None
     else:
-        # garbage -> squash
         story["tags"] = None
 
     return story
@@ -399,7 +499,7 @@ def _publish_realtime(conn: Redis, story: Dict[str, Any]) -> None:
         payload = {
             "id": story.get("id"),
             "kind": story.get("kind"),
-            "verticals": story.get("verticals"),  # new: expose verticals
+            "verticals": story.get("verticals"),
             "normalized_at": story.get("normalized_at"),
             "ingested_at": story.get("ingested_at"),
             "title": story.get("title"),
@@ -412,7 +512,7 @@ def _publish_realtime(conn: Redis, story: Dict[str, Any]) -> None:
         # Pub/Sub for websockets or live dashboards
         conn.publish(FEED_PUBSUB, json.dumps(payload, ensure_ascii=False))
 
-        # Capped stream for tailing
+        # Capped stream for tailing / dashboards
         try:
             conn.xadd(
                 FEED_STREAM,
@@ -425,7 +525,7 @@ def _publish_realtime(conn: Redis, story: Dict[str, Any]) -> None:
                 approximate=True,
             )
         except Exception:
-            # Don't let stream failure block ingest
+            # Stream failure shouldn't block publish
             pass
 
     except Exception as e:
@@ -462,20 +562,22 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
     Runs inside the "sanitize" queue worker.
 
     Flow:
-      1. Compute dedupe signature from (title, summary).
+      1. Build topic-based dedupe signature from (title, summary).
       2. If signature already in Redis -> "duplicate".
-      3. Else mark signature as seen, finalize story fields, LPUSH to FEED_KEY.
-      4. Trim FEED_KEY, broadcast realtime, optional push.
-
-    We DO NOT mutate any previous stories in FEED_KEY.
-    First accepted story about an event wins.
+      3. Else:
+           - mark signature in Redis (so future dupes get dropped),
+           - finalize the story (verticals, thumb, timestamps, etc.),
+           - LPUSH to FEED_KEY,
+           - TRIM FEED_KEY,
+           - broadcast realtime,
+           - maybe push.
     """
     conn = _redis()
 
     raw_title = (story.get("title") or "").strip()
     raw_summary = story.get("summary")
 
-    # 1. signature
+    # 1. topic signature
     sig = story_signature(raw_title, raw_summary)
     if not sig:
         print(f"[sanitizer] INVALID (no canonical title) -> {story.get('id')} | {raw_title}")
@@ -486,10 +588,10 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
         print(f"[sanitizer] DUPLICATE -> {story.get('id')} | {raw_title}")
         return "duplicate"
 
-    # 3a. mark signature so future duplicates get dropped
+    # 3a. mark signature so future duplicates are dropped
     conn.sadd(SEEN_KEY, sig)
 
-    # 3b. finalize story shape so feed+api have consistent fields
+    # 3b. finalize story shape so feed/api get consistent fields
     story = _finalize_story_shape(story)
 
     # 3c. LPUSH newest-first story JSON into the public feed list
