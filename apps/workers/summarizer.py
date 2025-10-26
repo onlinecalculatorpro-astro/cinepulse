@@ -11,7 +11,7 @@ from typing import List, Tuple
 
 # Target CinePulse tone:
 # - calm, factual, industry-style
-# - ~80 words, 1 tight paragraph
+# - ~80-100 words, 1 tight paragraph
 # - numbers, dates, platforms, deltas are GOOD
 # - hype, clickbait, CTA are BAD
 
@@ -23,6 +23,9 @@ SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "120"))
 # "passthrough mode" basically never fires unless it's extremely short
 PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "60"))
 PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "400"))
+
+# Headline constraints
+HEADLINE_MAX_CHARS = int(os.getenv("HEADLINE_MAX_CHARS", "110"))
 
 # =====================================================================
 # Regex library
@@ -129,13 +132,13 @@ _PROTECTED_ACRONYMS = {
 # We like factual / numeric / distributional info.
 # If a sentence has these, boost score.
 _FACTUAL_BONUS_RE = re.compile(
-    r"(\bday\s+\d+\b|"                # Day 5, Day 6, etc.
+    r"(\bday\s+\d+\b|"
     r"\bfirst\s+sunday\b|"
     r"\bopening\s+weekend\b|"
-    r"₹\s?\d+(\.\d+)?\s*(crore|cr|lakh|million)|"  # ₹40 crore, 40 cr, etc.
+    r"₹\s?\d+(\.\d+)?\s*(crore|cr|lakh|million)|"
     r"\b\d+(\.\d+)?\s*crore\b|"
     r"\b\d+(\.\d+)?\s*cr\b|"
-    r"\b\d+(\.\d+)?\s*%\b|"           # 12%, 10.5%
+    r"\b\d+(\.\d+)?\s*%\b|"
     r"\bpercent\b|"
     r"\bstream(?:ing)?\s+on\b|"
     r"\brelease[sd]?\s+on\b|"
@@ -149,6 +152,44 @@ _FACTUAL_BONUS_RE = re.compile(
     r")",
     re.I,
 )
+
+# =====================================================================
+# EXTRA REGEX FOR TITLE CLEANUP
+# =====================================================================
+
+# junk / tail clauses we don't want in card titles:
+# e.g. "— How It Stacks Up Against...", "— Detailed Report Inside", etc.
+_HEADLINE_TAIL_RE = re.compile(
+    r"\s*(--|—|–|:|\||\?)\s*(how\s+it\s+stacks\s+up.*|"
+    r"here'?s\s+how.*|"
+    r"full\s+report.*|"
+    r"detailed\s+report.*|"
+    r"explained.*|"
+    r"all\s+you\s+need\s+to\s+know.*|"
+    r"comparison.*|"
+    r"what\s+this\s+means.*|"
+    r"what\s+we\s+know.*|"
+    r"check\s+it\s+out.*)$",
+    re.I,
+)
+
+# hype / clickbait adjectives we don't want IN the title at all
+_HEADLINE_HYPE_RE = re.compile(
+    r"\b(shatters?|destroys?|goes\s+wild|goes\s+viral|"
+    r"unbelievable|insane|massive\s+mayhem|"
+    r"takes\s+over\s+the\s+internet|breaks\s+the\s+internet|"
+    r"fans\s+go\s+crazy|internet\s+reacts|"
+    r"epic\s+showdown|huge\s+clash|explosive\s+showdown|"
+    r"poised\s+to\s+dominate|set\s+to\s+rule|"
+    r"set\s+the\s+box\s+office\s+on\s+fire)\b",
+    re.I,
+)
+
+# generic split chars for multi-clause SEO headlines
+_HEADLINE_SPLIT_RE = re.compile(r"\s+(--|—|–|-{2,}|\||:)\s+")
+
+# strip filler words in titles too (same filler list as summary)
+_HEADLINE_FILLER_RE = _FILLER_WORDS_RE
 
 # =====================================================================
 # Small helpers
@@ -451,7 +492,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
         - score sentences for factual signal
         - pick best in ORIGINAL ARTICLE ORDER
         - ensure first sentence actually names the subject
-        - cap around ~80 words
+        - cap around ~80-100 words
     """
     body_text = _preclean_body_text(body_text or "")
     if not body_text:
@@ -547,7 +588,8 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
                     break
 
     # Tail prune:
-    # Drop weak last sentence if it's super short, trails off, or ends with redundant info.
+    # Drop weak last sentence if it's super short, trails off,
+    # or ends with redundant info.
     while len(chosen) > 1:
         tail = chosen[-1][1]
         tail_wc = len(tail.split())
@@ -577,9 +619,161 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
 def summarize_story(title: str, body_text: str) -> str:
     """
     Public entry point.
-    Returns a single polished paragraph ~80 words,
+    Returns a single polished paragraph ~80-100 words,
     neutral, trade-style, no hype.
     """
     sentences = _select_sentences(title, body_text)
     paragraph = _assemble_paragraph(sentences).strip()
     return paragraph
+
+
+# =====================================================================
+# HEADLINE GENERATION
+# =====================================================================
+
+def _shorten_title_chars(t: str, max_chars: int) -> str:
+    """
+    Trim headline to max_chars gracefully.
+    We prefer cutting at the last space and adding "…".
+    """
+    t = t.strip()
+    if len(t) <= max_chars:
+        return t
+    # leave a little room for the ellipsis
+    cut_limit = max_chars - 1
+    if cut_limit < 1:
+        return t[:max_chars]
+    cut_at = t.rfind(" ", 0, cut_limit)
+    if cut_at == -1:
+        cut_at = cut_limit
+    return t[:cut_at].rstrip(" ,;:-") + "…"
+
+
+def _clean_source_title(raw_title: str) -> str:
+    """
+    Take the scraped headline and strip clickbait tails, hype words,
+    filler, and SEO junk. Keep it factual. Keep money / day counts etc.
+    """
+    if not raw_title:
+        return ""
+
+    t = raw_title.strip()
+
+    # If it's an SEO Frankenstein like "Movie Title | Box Office Update",
+    # split on separators and keep first factual clause.
+    parts = _HEADLINE_SPLIT_RE.split(t)
+    if parts:
+        # parts is like ["Movie Title", "|", "Box Office Update"]
+        # we want the first textual chunk
+        t = parts[0].strip()
+
+    # Drop trailing "— How It Stacks Up..." / "— Full Report Inside" etc.
+    t = _HEADLINE_TAIL_RE.sub("", t).strip()
+
+    # Remove hype-y adjectives ("goes viral", "insane", etc.)
+    t = _HEADLINE_HYPE_RE.sub("", t)
+
+    # Remove filler words ("really", "very", "just", etc.)
+    t = _HEADLINE_FILLER_RE.sub("", t)
+
+    # Collapse extra whitespace after removals
+    t = re.sub(r"\s{2,}", " ", t).strip()
+
+    # Remove trailing punctuation like ":" "|" "-" "?" etc.
+    t = re.sub(r"[\s\-\|:]+$", "", t).strip()
+
+    # Normalize case for SHOUTY words but keep acronyms
+    fixed_words = [_clean_caps(w) for w in t.split()]
+    t = " ".join(fixed_words).strip()
+
+    # Ensure first char uppercase
+    if t and t[0].islower():
+        t = t[0].upper() + t[1:]
+
+    # Drop ending "?" if it's just clickbait ("Will X Beat Y?")
+    # Replace with neutral factual framing if it's purely speculative.
+    if t.endswith("?"):
+        t = t[:-1].strip()
+
+    return t
+
+
+def _best_fact_sentence(title: str, body_text: str) -> str:
+    """
+    As a fallback for headlines: grab the single highest-scoring,
+    most factual sentence from the article body.
+    We'll polish it, then strip final period for headline style.
+    """
+    clean_body = _preclean_body_text(body_text or "")
+    if not clean_body:
+        return ""
+
+    sentences = [s.strip() for s in _SENT_SPLIT_RE.split(clean_body) if s.strip()]
+    if not sentences:
+        return ""
+
+    title_kw = set(w.lower() for w in _word_list(title or ""))
+
+    scored: List[Tuple[int, str]] = []
+    for s in sentences:
+        sc = _score_sentence(title_kw, s)
+        scored.append((sc, s))
+
+    # sort best-first
+    scored.sort(key=lambda x: -x[0])
+
+    for score, sent in scored:
+        if score < 0:
+            # it's all garbage/hype? bail
+            continue
+        wc = len(sent.split())
+        if wc < 4:
+            continue
+        # polish it into professional tone
+        polished = _polish_sentence(sent).strip()
+        if polished.endswith("."):
+            polished = polished[:-1].strip()
+        if polished:
+            return polished
+
+    return ""
+
+
+def generate_clean_title(raw_title: str, body_text: str) -> str:
+    """
+    Public entry point for card headline.
+    Rules:
+    - Aim for clean, professional, factual.
+    - Keep numbers, performance metrics, platform, release/box office info.
+    - Remove hype, fan reaction, questions/teasers.
+    - <= HEADLINE_MAX_CHARS.
+    - If source title is useless after cleaning, fall back to factual
+      best sentence from body.
+    """
+    base = _clean_source_title(raw_title or "")
+
+    # If base is empty or too generic, try fallback from article body
+    too_short = len(base.split()) < 4  # e.g. "Big Update From X"
+    if not base or too_short:
+        fallback = _best_fact_sentence(raw_title, body_text)
+        if fallback:
+            base = fallback
+
+    # Safety: if it's STILL empty, use raw_title minimal
+    if not base:
+        base = (raw_title or "").strip()
+
+    # Final whitespace cleanup
+    base = re.sub(r"\s{2,}", " ", base).strip()
+
+    # Final length cap
+    base = _shorten_title_chars(base, HEADLINE_MAX_CHARS)
+
+    # Avoid trailing punctuation that looks sloppy in cards
+    base = re.sub(r"[.:;,\-–—]+$", "", base).strip()
+
+    # Capitalize first char if needed
+    if base and base[0].islower():
+        base = base[0].upper() + base[1:]
+
+    return base
