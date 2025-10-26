@@ -7,7 +7,12 @@ import time
 from enum import Enum
 from datetime import datetime, timezone
 from typing import Callable, Iterable, List, Optional, Tuple
-from urllib.parse import quote, unquote, urlparse, parse_qs
+from urllib.parse import (
+    quote,
+    unquote,
+    urlparse,
+    parse_qs,
+)
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -15,25 +20,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from apps.api.app.config import settings  # <- central env / config
+from apps.api.app.config import settings  # central env/config (redis_url, feed_key, etc.)
+
+# -----------------------------------------------------------------------------
+# Redis client (shared with sanitizer)
+# -----------------------------------------------------------------------------
 
 try:
     import redis  # type: ignore
 except Exception as e:  # pragma: no cover
     raise RuntimeError("redis package is required") from e
 
+# Scan / pagination tunables
 MAX_SCAN = int(os.getenv("MAX_SCAN", "400"))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "200"))
 
+# Per-IP rate limits
 RL_FEED_PER_MIN = int(os.getenv("RL_FEED_PER_MIN", "120"))
 RL_SEARCH_PER_MIN = int(os.getenv("RL_SEARCH_PER_MIN", "90"))
 RL_STORY_PER_MIN = int(os.getenv("RL_STORY_PER_MIN", "240"))
 
+# Public base URL for this API (used to build /v1/img?u=...)
 API_PUBLIC_BASE_URL = os.getenv(
     "API_PUBLIC_BASE_URL",
     "https://api.onlinecalculatorpro.org",
 ).strip().rstrip("/")
 
+# Redis connection
 _redis_client = redis.from_url(
     settings.redis_url,
     decode_responses=True,
@@ -41,41 +54,59 @@ _redis_client = redis.from_url(
     socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0")),
 )
 
-FEED_KEY = settings.feed_key
+FEED_KEY = settings.feed_key  # Redis LIST newest-first (LPUSH by sanitizer)
+
+# -----------------------------------------------------------------------------
+# Routers (realtime / push / img proxy)
+# -----------------------------------------------------------------------------
 
 from apps.api.app.realtime import router as realtime_router  # noqa: E402
 
 try:
-    from apps.api.app.push import router as push_router
+    from apps.api.app.push import router as push_router  # optional
 except Exception:
     push_router = None
 
 try:
-    from apps.api.app.img_proxy import router as img_proxy_router
+    from apps.api.app.img_proxy import router as img_proxy_router  # optional
 except Exception:
     img_proxy_router = None
 
+# -----------------------------------------------------------------------------
+# Pydantic response models
+# -----------------------------------------------------------------------------
 
 class Story(BaseModel):
+    # core story
     id: str
     kind: str
     title: str
     summary: Optional[str] = None
     published_at: Optional[str] = None
     source: Optional[str] = None
+
+    # visuals
     thumb_url: Optional[str] = None
+    poster_url: Optional[str] = None
+
+    # pipeline timestamps
     ingested_at: Optional[str] = None
     normalized_at: Optional[str] = None
+
+    # classification / filtering
     verticals: Optional[List[str]] = None
     kind_meta: Optional[dict] = None
     tags: Optional[List[str]] = None
+
+    # link info
     url: Optional[str] = None
     source_domain: Optional[str] = None
+
+    # release-ish metadata
     release_date: Optional[str] = None
     is_theatrical: Optional[bool] = None
     is_upcoming: Optional[bool] = None
     ott_platform: Optional[str] = None
-    poster_url: Optional[str] = None
 
 
 class FeedResponse(BaseModel):
@@ -106,6 +137,10 @@ class FeedTab(str, Enum):
     comingsoon = "comingsoon"
 
 
+# -----------------------------------------------------------------------------
+# FastAPI app + CORS
+# -----------------------------------------------------------------------------
+
 app = FastAPI(
     title="CinePulse API",
     version="0.5.2",
@@ -116,6 +151,8 @@ app = FastAPI(
     ),
 )
 
+# CORS:
+# We keep * here unless overridden by CORS_ORIGINS env.
 _cors = os.getenv("CORS_ORIGINS", "*").strip()
 if _cors == "*":
     app.add_middleware(
@@ -133,14 +170,20 @@ else:
         allow_headers=["*"],
     )
 
-app.include_router(realtime_router)
+# Attach routers
+app.include_router(realtime_router)           # /v1/realtime/*
 if push_router is not None:
-    app.include_router(push_router)
+    app.include_router(push_router)           # /v1/push/*
 if img_proxy_router is not None:
-    app.include_router(img_proxy_router)
+    app.include_router(img_proxy_router)      # /v1/img?u=...
 
+
+# -----------------------------------------------------------------------------
+# Error handlers
+# -----------------------------------------------------------------------------
 
 def _json_error(status_code: int, err: str, msg: str) -> JSONResponse:
+    """Uniform JSON error body for all exceptions."""
     return JSONResponse(
         status_code=status_code,
         content=ErrorBody(status=status_code, error=err, message=msg).model_dump(),
@@ -160,10 +203,16 @@ async def validation_exc_handler(_: Request, exc: RequestValidationError):
 
 @app.exception_handler(Exception)
 async def unhandled_exc_handler(_: Request, exc: Exception):
+    # Last-resort safety net
     return _json_error(500, exc.__class__.__name__, "Internal server error")
 
 
+# -----------------------------------------------------------------------------
+# Rate limiting helpers
+# -----------------------------------------------------------------------------
+
 def _client_ip(req: Request) -> str:
+    """Best-effort client IP extraction (respecting x-forwarded-for)."""
     xff = req.headers.get("x-forwarded-for", "")
     if xff:
         return xff.split(",")[0].strip()
@@ -171,6 +220,10 @@ def _client_ip(req: Request) -> str:
 
 
 def limiter(route: str, limit_per_min: int) -> Callable:
+    """
+    Very small per-IP, per-route, per-minute rate limiter backed by Redis INCR.
+    If Redis is down, we soft-allow instead of 500'ing everything.
+    """
     async def _limit_dep(req: Request):
         ip = _client_ip(req)
         now_bucket = int(time.time() // 60)
@@ -185,20 +238,31 @@ def limiter(route: str, limit_per_min: int) -> Callable:
                     detail=f"Rate limit exceeded for {route}; try again shortly",
                 )
         except redis.RedisError:
+            # If we can't rate-limit because Redis hiccuped,
+            # we don't block the request.
             return
     return _limit_dep
 
+
+# -----------------------------------------------------------------------------
+# Feed filtering logic
+# -----------------------------------------------------------------------------
 
 TRAILER_KINDS = {"trailer", "teaser", "clip", "featurette", "song", "poster"}
 OTT_ALIGNED_KINDS = {"release-ott", "ott", "acquisition"}
 THEATRICAL_KINDS = {"release-theatrical", "schedule-change", "re-release", "boxoffice"}
 
+# Hosts we refuse to serve images from (dead demo CDNs etc.)
 BAD_IMAGE_HOSTS = {
     "demo.tagdiv.com",
 }
 
 
 def _is_bad_image_host(u: str) -> bool:
+    """
+    Returns True if `u` points at a known junk / dead / demo CDN host
+    (e.g. demo.tagdiv.com), so we should drop it instead of proxying.
+    """
     try:
         p = urlparse(u)
         host = (p.hostname or "").lower()
@@ -214,6 +278,10 @@ def _is_bad_image_host(u: str) -> bool:
 
 
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    """
+    Parse timestamps written by the pipeline. Returns timezone-aware UTC datetimes.
+    Gracefully returns None on bad/missing input.
+    """
     if not s:
         return None
     try:
@@ -228,13 +296,21 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
 
 
 def _redis_lrange(key: str, start: int, stop: int) -> list[str]:
+    """Thin wrapper with error -> 503 if Redis is unhappy."""
     try:
         return _redis_client.lrange(key, start, stop)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
+        raise HTTPException(
+            status_code=503,
+            detail=f"Redis unavailable: {type(e).__name__}",
+        ) from e
 
 
 def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
+    """
+    Yields recent story dicts from Redis newest-first.
+    Used by /v1/search and /v1/story, where we don't need cursor paging.
+    """
     raw = _redis_lrange(FEED_KEY, 0, max(0, max_items - 1))
     for s in raw:
         try:
@@ -244,24 +320,37 @@ def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
 
 
 def _matches_vertical(item: dict, vertical: Optional[str]) -> bool:
+    """
+    Match vertical filter (?vertical=sports, entertainment, etc).
+    If no filter, always True.
+    """
     if not vertical:
         return True
     verts = item.get("verticals") or []
     if not isinstance(verts, list):
         return False
     vertical_l = vertical.strip().lower()
-    return any(isinstance(v, str) and v.strip().lower() == vertical_l for v in verts)
+    return any(
+        isinstance(v, str) and v.strip().lower() == vertical_l
+        for v in verts
+    )
 
 
 def _matches_tab(item: dict, tab: FeedTab) -> bool:
+    """
+    Legacy "tab" filter logic. Product may kill tabs later,
+    but existing clients still call tab=trailers/ott/etc.
+    """
     if tab == FeedTab.all:
         return True
 
     kind = (item.get("kind") or "").lower()
 
+    # Trailers
     if tab == FeedTab.trailers:
         return kind in TRAILER_KINDS
 
+    # OTT
     if tab == FeedTab.ott:
         return (
             kind in OTT_ALIGNED_KINDS
@@ -269,9 +358,11 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
             or bool(item.get("ott_platform"))
         )
 
+    # In Theatres
     if tab == FeedTab.intheatres:
         return kind in THEATRICAL_KINDS or item.get("is_theatrical") is True
 
+    # Coming Soon
     if tab == FeedTab.comingsoon:
         if item.get("is_upcoming") is True:
             return True
@@ -282,6 +373,10 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
 
 
 def _best_dt(item: dict) -> Optional[datetime]:
+    """
+    Pick the "effective" timestamp for sorting:
+    normalized_at > published_at > release_date.
+    """
     for fld in ("normalized_at", "published_at", "release_date"):
         dt = _parse_iso(item.get(fld))
         if dt:
@@ -290,6 +385,10 @@ def _best_dt(item: dict) -> Optional[datetime]:
 
 
 def _is_since(item: dict, since_iso: Optional[str]) -> bool:
+    """
+    Enforce ?since=... (RFC3339). We keep items whose effective timestamp
+    is >= the since timestamp.
+    """
     if not since_iso:
         return True
     since_dt = _parse_iso(since_iso)
@@ -301,27 +400,25 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
 
 def _to_proxy(u: Optional[str]) -> Optional[str]:
     """
-    Returns one of:
-      - fully-qualified proxy URL (/v1/img?u=...) if allowed
-      - None if we consider the upstream host "garbage / forbidden"
-      - the original string if it's already relative or data:
-    We ALSO unwrap already-proxied URLs and drop them if their inner `u` points
-    at a bad host like demo.tagdiv.com.
+    Return a proxy URL (/v1/img?u=...) for external images.
+    Also:
+    - Drop images from known junk hosts (demo.tagdiv.com etc.).
+    - If caller already gave us a proxy URL, unwrap its ?u= param and
+      re-check that upstream host isn't junk. If junk, return None.
+    - If relative / data:/... just return as-is.
     """
-
     if not u:
         return u
 
-    # 1. Is it already our proxy URL?
+    # Already proxied?
     if u.startswith("/v1/img?") or u.startswith(f"{API_PUBLIC_BASE_URL}/v1/img?"):
-        # Parse its query, pull inner u=..., and re-check.
         try:
             parsed_outer = urlparse(u)
             qs = parse_qs(parsed_outer.query)
             inner_list = qs.get("u") or qs.get("url") or []
             inner_raw = inner_list[0] if inner_list else ""
-            # inner_raw is still percent-encoded (that's fine for host check)
-            # host check works on decoded or encoded? We'll decode first.
+
+            # inner_raw is percent-encoded; decode for host check
             try:
                 from urllib.parse import unquote as _unq
                 inner_url = _unq(inner_raw)
@@ -329,31 +426,42 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
                 inner_url = inner_raw
 
             if _is_bad_image_host(inner_url):
-                return None  # nuke it instead of passing stale proxy back
+                # Junk; don't serve it
+                return None
 
-            # still good? keep the existing proxy URL
+            # Keep original proxy URL, it's fine
             return u
         except Exception:
-            # can't parse? keep original so we don't break legit thumbs
+            # If we can't parse it, just return it so we don't break legit thumbs
             return u
 
-    # 2. Absolute external URL?
+    # Absolute external URL -> wrap in proxy (unless host is junk)
     if u.startswith("http://") or u.startswith("https://"):
-        # Drop obviously junk/demo CDN images before proxying
         if _is_bad_image_host(u):
             return None
         return f"{API_PUBLIC_BASE_URL}/v1/img?u={quote(u, safe='')}"
 
-    # 3. data:, relative, etc — just let frontend use it directly.
+    # Relative path, data:, etc. We leave it alone.
     return u
 
 
 def _adapt_for_response(it: dict) -> dict:
+    """
+    Transform raw story dict (what sanitizer wrote) into the clean shape
+    we expose in API responses:
+      - Ensure poster_url / thumb_url.
+      - Fallback normalized_at <- ingested_at.
+      - Rewrite images through proxy, dropping dead demo CDN images so the
+        client doesn't even try them (prevents noisy 404 spam).
+      - Normalize tags to list[str] | None.
+    """
     obj = dict(it)
 
+    # poster_url fallback
     if not obj.get("poster_url") and obj.get("poster"):
         obj["poster_url"] = obj.get("poster")
 
+    # thumbnail fallback
     if not obj.get("thumb_url"):
         obj["thumb_url"] = (
             obj.get("image")
@@ -362,13 +470,15 @@ def _adapt_for_response(it: dict) -> dict:
             or None
         )
 
+    # normalized_at fallback
     if not obj.get("normalized_at"):
         obj["normalized_at"] = obj.get("ingested_at")
 
-    # reroute images through proxy (and drop demo.tagdiv junk even if pre-proxied)
+    # Route images through proxy (or drop them if host is junk)
     obj["thumb_url"] = _to_proxy(obj.get("thumb_url"))
     obj["poster_url"] = _to_proxy(obj.get("poster_url"))
 
+    # tags sanity
     tags_val = obj.get("tags")
     if not (tags_val is None or isinstance(tags_val, list)):
         obj["tags"] = None
@@ -383,17 +493,30 @@ def _scan_with_cursor(
     tab: FeedTab,
     since: Optional[str],
 ) -> Tuple[List[dict], Optional[int]]:
+    """
+    Cursor pagination for /v1/feed:
+      - We scan forward through the Redis LIST (LPUSH newest-first).
+      - We collect stories that pass filters.
+      - We sort them by effective timestamp desc.
+      - We return `limit` stories plus an integer cursor (next index in Redis).
+    """
 
+    # Bound the scan by total list length
     try:
         total_len = _redis_client.llen(FEED_KEY)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Redis unavailable: {type(e).__name__}") from e
+        raise HTTPException(
+            status_code=503,
+            detail=f"Redis unavailable: {type(e).__name__}",
+        ) from e
 
     total_len = int(total_len or 0)
     idx = max(0, start_idx)
 
     collected: List[dict] = []
     scanned = 0
+
+    # We over-collect so that after sorting we still have `limit` good ones
     target_collect = max(limit * 5, limit)
 
     while idx < total_len and scanned < MAX_SCAN and len(collected) < target_collect:
@@ -423,6 +546,7 @@ def _scan_with_cursor(
 
         idx = batch_end + 1
 
+    # Newest first by effective timestamp
     collected.sort(
         key=lambda d: (_best_dt(d) or datetime(1970, 1, 1, tzinfo=timezone.utc)),
         reverse=True,
@@ -433,8 +557,18 @@ def _scan_with_cursor(
     return (page, next_cursor)
 
 
+# -----------------------------------------------------------------------------
+# Endpoints
+# -----------------------------------------------------------------------------
+
 @app.get("/health")
 def health():
+    """
+    Basic health + some debug info:
+    - redis_ok
+    - feed_len
+    - current env/version
+    """
     try:
         ok = _redis_client.ping()
         feed_len = _redis_client.llen(FEED_KEY)
@@ -443,6 +577,7 @@ def health():
         ok = False
         feed_len = None
         err = f"{type(e).__name__}"
+
     return {
         "status": "ok" if ok else "degraded",
         "redis": settings.redis_url,
@@ -457,6 +592,7 @@ def health():
 
 @app.get("/v1/health", include_in_schema=False)
 def v1_health():
+    """Compatibility shim so /v1/health responds the same as /health."""
     return health()
 
 
@@ -467,7 +603,8 @@ def v1_health():
     description=(
         "Cursor-paginated feed. "
         "Use ?vertical=entertainment|sports to filter. "
-        "Sorted by effective timestamp (normalized_at > published_at > release_date). "
+        "Sorted by effective timestamp "
+        "(normalized_at > published_at > release_date). "
         "Use returned `next_cursor` for pagination."
     ),
 )
@@ -497,12 +634,14 @@ async def feed(
     ),
     _=Depends(limiter("feed", RL_FEED_PER_MIN)),
 ):
+    # Validate ?since= upfront so we can give a nice 422.
     if since is not None and _parse_iso(since) is None:
         raise HTTPException(
             status_code=422,
             detail="Invalid 'since' (use RFC3339, e.g. 2025-01-01T00:00:00Z)",
         )
 
+    # Decode cursor
     start_idx = 0
     if cursor:
         try:
@@ -534,9 +673,14 @@ async def search(
     limit: int = Query(10, ge=1, le=50),
     _=Depends(limiter("search", RL_SEARCH_PER_MIN)),
 ):
+    """
+    Naive substring search over the last MAX_SCAN stories' title+summary.
+    No vertical/tab filter here.
+    """
     ql = q.lower()
     res: list[dict] = []
     scanned = 0
+
     for it in _iter_feed():
         scanned += 1
         hay = f"{it.get('title','')} {(it.get('summary') or '')}".lower()
@@ -560,6 +704,10 @@ async def story_detail(
     story_id: str,
     _=Depends(limiter("story", RL_STORY_PER_MIN)),
 ):
+    """
+    Linear scan through recent feed items to find the item with this ID.
+    O(MAX_SCAN). Good enough for now.
+    """
     sid = unquote(story_id)
     for it in _iter_feed():
         if it.get("id") == sid:
