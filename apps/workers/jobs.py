@@ -10,7 +10,9 @@
 #
 #   sanitizer  → rq worker "sanitize"
 #                 - final safety gate before public feed
-#                 - rejects pure gossip (gossip_only)
+#                 - rejects pure gossip (gossip_only == True)
+#                 - BUT allows high-drama on-air reality content
+#                   (onscreen_drama == True, gossip_only forced False)
 #                 - fuzzy topic dedupe (first one wins)
 #                 - pushes accepted stories to Redis FEED_KEY
 #                 - trims FEED_KEY
@@ -30,10 +32,17 @@
 #     - remove clickbait / hype
 #     - soften or attribute unverified claims
 #     - inject "According to <domain> ..." for sensitive items
-# - We attach two booleans to every story:
-#     - is_risky     → True if there's legal/PR heat (raids, FIRs, etc.)
-#     - gossip_only  → True if it's basically personal drama / breakup / leaked chat
-#   The sanitizer will drop gossip_only stories so they never hit FEED_KEY.
+# - We attach THREE booleans to every story now:
+#     - is_risky        → True if there's legal/PR heat (accusations, FIRs, verbal fights on air)
+#     - gossip_only     → True if it's purely off-camera personal-life gossip (airport looks, who-was-seen-with-who)
+#                          sanitizer will DROP these 100%, never hits feed.
+#     - onscreen_drama  → True if it's televised/streamed reality show drama (fight, walkout, eviction, nomination, etc.)
+#                          that clearly happened ON CAMERA / IN EPISODE.
+#                          This is allowed to publish even if spicy, but must be attributed.
+#
+# CRITICAL:
+# - onscreen_drama implies: gossip_only must be False (even if it's spicy),
+#   and is_risky must be True so summarizer/title stay attributional.
 #
 # MAINTENANCE:
 # - backfill_repair_recent() can patch older feed items already in Redis
@@ -117,6 +126,10 @@ VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
             "bollywood", "hollywood", "tollywood", "kollywood",
             "film", "movie", "movie review", "film review",
             "cast announced", "actor", "actress", "director",
+            # reality / on-screen drama keywords that imply pop TV / streaming content
+            "bigg boss", "contestant", "captaincy task", "nomination",
+            "evicted", "eliminated", "finale", "winner",
+            "khatron ke khiladi", "indian idol", "reality show",
         ]
     },
     "sports": {
@@ -145,7 +158,7 @@ class AdapterEventDict(TypedDict, total=False):
     source: str                  # "youtube" | "rss:<domain>"
     source_event_id: str         # YouTube video ID OR hash of normalized RSS link
     title: str
-    kind: str                    # trailer | ott | news | release
+    kind: str                    # trailer | ott | news | release (hint from source)
     published_at: Optional[str]  # RFC3339 UTC-ish
     thumb_url: Optional[str]
     payload: dict                # raw scraped payload (link/html/etc.)
@@ -197,11 +210,12 @@ _CTA_NOISE_RE      = re.compile(
 _ELLIPSIS_TAIL_RE      = re.compile(r"(\[\s*(?:…|\.{3})\s*\]\s*)+$")
 _DANGLING_ELLIPSIS_RE  = re.compile(r"(?:…|\.{3})\s*$")
 
-# tag helpers
+# box office tags
 _BOX_OFFICE_RE = re.compile(
     r"\bbox\s*office\b|collection[s]?\b|opening\s+weekend\b|crore\b|gross(?:ed|es)?\b|earned\s+₹",
     re.I,
 )
+# sports tags
 _SPORT_RESULT_RE = re.compile(
     r"\b(beats|defeats|thrashes|edges\s+past|stuns|wins\s+by|clinches\s+(?:win|victory)|"
     r"scores\s+(?:a\s+)?hat[- ]?trick|scores\s+late\s+winner)\b",
@@ -225,6 +239,67 @@ MON_YR     = re.compile(rf"\b({_MN})\s+(\d{{4}})\b", re.I)
 
 # known-safe-ish CDNs for hero art
 _IMG_HOSTS_FRIENDLY = {"i0.wp.com", "i1.wp.com", "images.ctfassets.net"}
+
+# -----------------------------------------------------------------------------
+# NEW heuristics for on-screen drama vs off-camera gossip vs legal heat
+# -----------------------------------------------------------------------------
+
+# Reality-TV on-air drama signals. These imply "this happened ON SHOW"
+_ONSCREEN_CONTEXT_RE = re.compile(
+    r"\b("
+    r"bigg boss|khatron ke khiladi|indian idol|reality show|in the house|on stage|during the episode|"
+    r"captaincy task|nomination|nominated|evicted|eliminated|finale|winner|walks out|stormed out|"
+    r"heated argument|fight|fights with|shouted at|clash|called out|confronts|accuses|in tears|"
+    r"breaks down|breaks down in tears|breakdown on air"
+    r")\b",
+    re.I,
+)
+
+# Off-camera paparazzi / lifestyle gossip signals we NEVER ship
+_PRIVATE_GOSSIP_RE = re.compile(
+    r"\b("
+    r"spotted|airport look|gym look|airport appearance|poses with|seen with|seen together|"
+    r"late night dinner|dinner date|lunch date|party pics|birthday bash|birthday celebration|"
+    r"holiday|vacation|romantic getaway|cozy pics|hand[- ]in[- ]hand|flaunts|stuns in|"
+    r"looks stunning|looks hot|bold look|sizzling look|glam look|fans troll|gets trolled"
+    r")\b",
+    re.I,
+)
+
+# Stuff that implies legal / PR heat / accusations
+_LEGAL_HEAT_RE = re.compile(
+    r"\b("
+    r"fir\b|f\.i\.r\.|arrested|custody|detained|raid|raided|ed raid|ed\braid|"
+    r"tax raid|income tax raid|cbi|ncb|nia|protest|boycott|ban\b|banned|legal notice|"
+    r"controversy|accused|alleged|allegation|allegations|claims? that|claimed that|"
+    r"called out|slammed|backlash|censor board|cuts demanded"
+    r")\b",
+    re.I,
+)
+
+def _looks_like_on_air_drama(title: str, body: str) -> bool:
+    """
+    Heuristic: True if this is in-show / on-episode confrontation / eviction /
+    nomination / walkout / breakdown that aired publicly.
+    """
+    hay = f"{title}\n{body}".lower()
+    return bool(_ONSCREEN_CONTEXT_RE.search(hay))
+
+def _looks_like_private_gossip(title: str, body: str) -> bool:
+    """
+    Heuristic: True if this is purely off-screen paparazzi / relationship /
+    airport / outfit / party spotting etc.
+    """
+    hay = f"{title}\n{body}".lower()
+    return bool(_PRIVATE_GOSSIP_RE.search(hay))
+
+def _looks_like_legal_heat(title: str, body: str) -> bool:
+    """
+    Heuristic: True if story involves legal/PR exposure areas:
+    FIR, arrest, boycott, censorship fight, accusation, etc.
+    """
+    hay = f"{title}\n{body}".lower()
+    return bool(_LEGAL_HEAT_RE.search(hay))
 
 # =============================================================================
 # Time helpers
@@ -876,14 +951,15 @@ def normalize_event(event: AdapterEventDict) -> dict:
     Steps:
       1. Gather basic source info (rss/youtube), title, timestamps.
       2. Clean body text.
-      3. summarize_story_safe() → safe summary paragraph.
-      4. generate_safe_title() → safe headline.
-      5. Classify story.kind (trailer / ott / release / news).
-      6. Build kind_meta for frontend.
-      7. Derive verticals & tags.
-      8. Score images and pick a hero photo.
-      9. Attach is_risky / gossip_only flags.
-     10. Enqueue the final story to the "sanitize" queue.
+      3. Detect onscreen_drama / gossip_only / legal heat.
+      4. summarize_story_safe() → safe summary paragraph.
+      5. generate_safe_title() → safe headline.
+      6. Merge risk & gossip flags with onscreen_drama policy.
+      7. Classify story.kind (trailer / ott / release / news).
+      8. Build kind_meta for frontend.
+      9. Derive verticals & tags.
+     10. Score images and pick a hero photo.
+     11. Enqueue the final story (with flags) to "sanitize".
     """
     conn = _redis()
 
@@ -938,9 +1014,22 @@ def normalize_event(event: AdapterEventDict) -> dict:
 
     final_best = image_url or thumb_hint
 
+    # ----------------------------------------------------------------
+    # NEW: internal classification BEFORE summarization
+    # ----------------------------------------------------------------
+    # We want these booleans regardless of what summarizer says.
+    # - onscreen_drama: on-air fights / nominations / evictions on reality TV.
+    # - private_gossip_only: off-camera paparazzi / airport / who's-dating-who.
+    # - legal_heat: FIRs, arrests, boycott, accusations, censorship fights.
+    #
+    # We'll use these below to force is_risky / gossip_only.
+    onscreen_drama_flag = _looks_like_on_air_drama(title, raw_text)
+    private_gossip_flag = _looks_like_private_gossip(title, raw_text)
+    legal_heat_flag     = _looks_like_legal_heat(title, raw_text)
+
     # --- safe summary / title --------------------------------------
-    # summarize_story_safe() → (summary_text, is_risky, gossip_only)
-    summary_text, is_risky, gossip_only = summarize_story_safe(
+    # summarize_story_safe() → (summary_text, is_risky_s, gossip_only_s)
+    summary_text, is_risky_s, gossip_only_s = summarize_story_safe(
         title,
         raw_text,
         source_domain=source_domain,
@@ -955,9 +1044,29 @@ def normalize_event(event: AdapterEventDict) -> dict:
         source_type=source,
     )
 
-    # merge risk flags so sanitizer has the strongest signal
-    final_is_risky = bool(is_risky or is_risky_t)
-    final_gossip_only = bool(gossip_only or gossip_only_t)
+    # --- merge risk & gossip ---------------------------------------
+    # Base from summarizer/title
+    merged_is_risky = bool(is_risky_s or is_risky_t)
+    merged_gossip   = bool(gossip_only_s or gossip_only_t)
+
+    # Escalate is_risky for legal heat, accusations, or reality show confrontations.
+    if legal_heat_flag or onscreen_drama_flag:
+        merged_is_risky = True
+
+    # If it's obvious paparazzi personal-life content, mark gossip_only True.
+    if private_gossip_flag:
+        merged_gossip = True
+
+    # BUT: if this is onscreen_drama (happened on camera in a show episode),
+    # we explicitly allow it through the pipeline. So:
+    # - onscreen_drama_flag True → gossip_only MUST be False
+    #   (this is not "off-screen gossip", it's "what aired on TV")
+    if onscreen_drama_flag:
+        merged_gossip = False
+
+    final_is_risky = merged_is_risky
+    final_gossip_only = merged_gossip
+    final_onscreen_drama = bool(onscreen_drama_flag)
 
     # --- tags / verticals / kind_meta ------------------------------
     industry_base = _industry_tags(source, source_domain, title, raw_text, payload)
@@ -986,8 +1095,13 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "summary":       summary_text or None,
 
         # safety flags (sanitizer uses these)
-        "is_risky":      final_is_risky,
-        "gossip_only":   final_gossip_only,
+        # is_risky: True  → always write w/ attribution tone, may be legal/PR hot
+        # gossip_only: True → sanitizer will DROP (pure off-screen personal gossip)
+        # onscreen_drama: True → it's loud reality TV drama that aired on camera.
+        #   sanitizer SHOULD ALLOW this even if spicy, because it's not off-screen gossip.
+        "is_risky":        final_is_risky,
+        "gossip_only":     final_gossip_only,
+        "onscreen_drama":  final_onscreen_drama,
 
         # timestamps:
         # published_at  -> source's publish timestamp (site / YouTube)
