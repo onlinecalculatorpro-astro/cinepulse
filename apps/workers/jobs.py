@@ -3,6 +3,7 @@
 # PIPELINE OVERVIEW (runs in the "workers" container / RQ queue: events)
 #
 #   scheduler  → polls sources (RSS / YouTube) and enqueues AdapterEventDict jobs on "events"
+#
 #   workers    → THIS FILE, rq worker "events"
 #                 - normalize_event(): AdapterEventDict → canonical story dict
 #                 - enqueue that story onto the "sanitize" queue
@@ -27,6 +28,8 @@
 #     - de-clickbait / de-hype
 #     - soften unverified claims
 #     - add attribution ("According to <domain> ...") for risky items
+# - We also attach is_risky / gossip_only flags to every story so sanitizer
+#   can drop pure gossip and the client can badge sensitive stuff.
 #
 # MAINTENANCE:
 # - backfill_repair_recent() can patch older feed items in Redis
@@ -847,7 +850,7 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
         scored.append((s, u))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    best_score, best_url = scored[0]
+    _best_score, best_url = scored[0]
     return best_url or None
 
 
@@ -936,7 +939,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
 
     # --- SAFE SUMMARY for card body --------------------------------
     # summarize_story_safe() returns (text, is_risky, gossip_only)
-    summary_text, _is_risky, _gossip_only = summarize_story_safe(
+    summary_text, is_risky, gossip_only = summarize_story_safe(
         title,
         raw_text,
         source_domain=source_domain,
@@ -944,12 +947,16 @@ def normalize_event(event: AdapterEventDict) -> dict:
     )
 
     # --- SAFE TITLE for card headline ------------------------------
-    clean_title, _is_risky_t, _gossip_only_t = generate_safe_title(
+    clean_title, is_risky_t, gossip_only_t = generate_safe_title(
         title,
         raw_text,
         source_domain=source_domain,
         source_type=source,
     )
+
+    # union-of-flags so sanitizer and clients get the strongest signal
+    final_is_risky = bool(is_risky or is_risky_t)
+    final_gossip_only = bool(gossip_only or gossip_only_t)
 
     # --- TAGS / VERTICALS / KIND_META ------------------------------
     industry_base = _industry_tags(source, source_domain, title, raw_text, payload)
@@ -977,6 +984,10 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "title":         clean_title,
         "summary":       summary_text or None,
 
+        # risk metadata for sanitizer / clients
+        "is_risky":      final_is_risky,
+        "gossip_only":   final_gossip_only,
+
         # timestamps:
         # published_at  -> source's publish timestamp (Koimoi/YouTube/etc.)
         # ingested_at   -> when CinePulse pulled it
@@ -999,7 +1010,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "ott_platform":  ott_platform,
 
         # hero artwork for cards
-        # we fill ALL common keys so downstream (sanitizer → Redis → API → app)
+        # fill ALL common keys so downstream (sanitizer → Redis → API → app)
         # never ends up blank-thumbed
         "thumb_url":     final_best,
         "poster_url":    final_best,
