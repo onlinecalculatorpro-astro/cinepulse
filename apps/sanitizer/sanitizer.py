@@ -5,7 +5,7 @@
 #   scheduler  → polls sources and enqueues ingest jobs
 #
 #   workers    → normalize_event() builds a canonical story dict:
-#                 - title, summary (already cleaned / professional tone)
+#                 - title, summary (already cleaned / professional tone ~80 words)
 #                 - kind, kind_meta (trailer / release / ott / news, etc.)
 #                 - verticals (["entertainment"], ["sports"], ...)
 #                 - tags (industry, ott, box-office, etc.)
@@ -28,25 +28,25 @@
 # - workers DO NOT dedupe
 # - sanitizer is the ONLY thing that can publish to FEED_KEY
 #
-# DEDUPE STRATEGY (NEW TOPIC SIGNATURE VERSION):
-# 1. Clean title and summary (lowercase, remove hype words like "BREAKING",
-#    remove punctuation/emojis, remove footer junk like "read more at ...").
-# 2. Extract meaningful keywords from that cleaned text:
-#       - keep names / subjects / verbs ("salman", "joins", "bigg", "boss", "19")
-#       - keep "day5"/"day-5" style tokens (so Day 5 box office vs Day 6 is different)
-#       - drop generic glue words ("the", "and", "to", etc.)
-#       - drop pure numeric/money tokens ("505cr", "120", etc.) because they change hourly
-# 3. Sort + dedupe those keywords to build a stable "topic fingerprint".
-# 4. sha1 hash that fingerprint → 16-char signature.
+# DEDUPE STRATEGY (TOPIC SIGNATURE):
+# 1. Clean title and summary (lowercase, remove hype like "BREAKING",
+#    strip punctuation/emojis, drop "read more at ...").
+# 2. Extract meaningful keywords:
+#       - keep names / verbs ("salman", "joins", "bigg", "boss", "19")
+#       - keep "day5"/"day-5" tokens (so Day 5 box office != Day 6)
+#       - drop glue words ("the", "and", "to", etc.)
+#       - drop raw numeric money tokens ("505cr", "120cr") that change hourly
+# 3. Sort + dedupe those keywords → stable "topic fingerprint".
+# 4. sha1 that → 16-char signature.
 #
 # - We store signatures in Redis set SEEN_KEY.
 # - If we see the same signature again, it's "duplicate".
-# - We never "upgrade" an older story in-place. First accepted story wins permanently.
+# - We never "upgrade" an older story in-place. First accepted story wins.
 #
 # sanitize_story() returns:
 #   "accepted"   -> published
-#   "duplicate"  -> dropped (basically the same topic already published)
-#   "invalid"    -> dropped (no meaningful canonical title / topic)
+#   "duplicate"  -> dropped (topic already covered)
+#   "invalid"    -> dropped (no canonical title / unusable)
 #
 # ENV VARS:
 #   REDIS_URL, FEED_KEY, SEEN_KEY, MAX_FEED_LEN
@@ -54,16 +54,20 @@
 #   ENABLE_PUSH_NOTIFICATIONS
 #   FALLBACK_VERTICAL (default "entertainment")
 #
-# NOTE:
-# - Before pushing we "finalize" the story:
-#     * ensure story["verticals"] is non-empty list
-#     * ensure story["thumb_url"] exists
-#     * ensure story["kind_meta"] exists
-#     * ensure timestamps (normalized_at, ingested_at)
-#     * normalize tags format
-# - We do NOT strip debug fields (payload, image_candidates, etc.) because
-#   backfill_repair_recent() in workers may need them later.
-
+# BEFORE WE PUBLISH INTO FEED_KEY:
+# - ensure story["verticals"] is non-empty list
+# - ensure story["thumb_url"] exists
+# - ensure story["kind_meta"] exists
+# - ensure timestamps (normalized_at, ingested_at)
+# - normalize tags format
+# - ADD camelCase aliases that the Flutter app expects:
+#       publishedAt / normalizedAt / ingestedAt
+#       thumbUrl / posterUrl
+#       releaseDate / isTheatrical / isUpcoming
+#       ottPlatform / sourceDomain
+#
+# We do NOT drop debug fields (payload, image_candidates, etc.)
+# because workers.backfill_repair_recent() may repair thumbnails later.
 
 from __future__ import annotations
 
@@ -119,7 +123,7 @@ FALLBACK_VERTICAL = os.getenv("FALLBACK_VERTICAL", "entertainment")
 
 def _redis() -> Redis:
     """
-    Build a Redis client for:
+    Redis client for:
       - dedupe set (SEEN_KEY)
       - feed list writes
       - pub/sub + stream fanout
@@ -212,13 +216,13 @@ _SUMMARY_FOOTER_PATTERNS = [
 # Anything not alphanumeric / dash / whitespace → space.
 _CLEAN_RE = re.compile(r"[^a-z0-9\s-]+", re.IGNORECASE)
 
-# Tokens like "day5", "day-5", "day_5" etc. We WANT to keep those,
-# because "Day 5 box office" vs "Day 6 box office" should count separately.
+# Tokens like "day5", "day-5", "day_5" etc.
+# We WANT those to survive because "Day 5 box office" vs "Day 6 box office"
+# are separate beats.
 _DAY_TOKEN_RE = re.compile(r"^day[-_]?(\d{1,2})$", re.I)
 
 # Tokens that are basically just numbers / money / raw numeric.
-# We usually DROP these (so "505cr", "120", "500crore" doesn't flip the topic),
-# but we keep day5-style tokens via _DAY_TOKEN_RE above.
+# We DROP these so tiny ₹ deltas don't create new topics, unless it's a dayN token.
 _NUMERICY_RE = re.compile(r"^\d+[a-z]*$", re.I)
 
 
@@ -252,7 +256,7 @@ def canonical_title(raw_title: str) -> str:
 def canonical_summary(raw_summary: Optional[str]) -> str:
     """
     Clean summary:
-    - Strip "read full story..." footers.
+    - Strip "read full story..." style tails.
     - Lowercase.
     - Remove punctuation/emojis.
     - Drop hype/filler STOPWORDS.
@@ -281,13 +285,11 @@ def _keywords_for_signature(canon_title: str, canon_summary: str) -> List[str]:
     - Split into tokens.
     - Throw away:
         * COMMON_STOPWORDS like "the", "and", "to", etc.
-        * raw numeric / money-ish tokens: "505", "505cr", "120cr", etc.
-          (these change constantly in box office and sports score spam)
+        * raw numeric / money-ish tokens "505cr", "120cr"
+          (box office and sports scores fluctuate constantly)
     - KEEP:
-        * names, subjects, verbs ("salman", "joins", "bigg", "boss", "19")
-        * "day5"/"day-5" type tokens (so Day 5 vs Day 6 counts as different stories)
-
-    Return a list of tokens to represent the topic.
+        * names / entities / verbs ("salman", "joins", "bigg", "boss", "injured")
+        * "day5"/"day-5" tokens so Day 5 vs Day 6 box office are distinct
     """
     blob = f"{canon_title} {canon_summary}".strip()
     tokens = blob.split()
@@ -298,11 +300,11 @@ def _keywords_for_signature(canon_title: str, canon_summary: str) -> List[str]:
         if not t:
             continue
 
-        # drop glue words
+        # drop glue/common words
         if t in _COMMON_STOPWORDS:
             continue
 
-        # keep explicit "day5"/"day-5" tokens for box office day tracking
+        # always keep "day5"-style tokens
         if _DAY_TOKEN_RE.match(t):
             out.append(t)
             continue
@@ -326,7 +328,7 @@ def _build_topic_signature_blob(canon_title: str, canon_summary: str) -> str:
     kw = _keywords_for_signature(canon_title, canon_summary)
 
     if not kw:
-        # fallback to the raw canonical text if keyword extraction gave nothing
+        # Fallback to canonical text itself if we got nothing useful.
         base = f"title:{canon_title}||summary:{canon_summary}".strip()
         return base
 
@@ -383,13 +385,12 @@ def _ensure_verticals(story: Dict[str, Any]) -> None:
 
 def _ensure_thumb_url(story: Dict[str, Any]) -> None:
     """
-    Frontend expects story["thumb_url"].
-    Workers already try to pick a good hero, but as a last resort grab any
-    available image-like field.
+    Frontend expects a hero image. Workers try to pick one, but in case
+    thumb_url is missing, fall back to any of the known artwork keys.
     """
     if story.get("thumb_url"):
         return
-    for k in ("image", "poster", "thumbnail", "media"):
+    for k in ("image", "poster", "thumbnail", "media", "poster_url"):
         v = story.get(k)
         if v:
             story["thumb_url"] = v
@@ -404,8 +405,8 @@ def _build_kind_meta_fallback(
     release_date: Optional[str],
 ) -> Dict[str, Any]:
     """
-    Workers SHOULD send story["kind_meta"], but in case this is an older worker
-    or a weird edge case, build a minimal fallback so clients don't crash.
+    Workers SHOULD send story["kind_meta"], but if they somehow didn't,
+    create a minimal structure so the frontend has badges/chips.
     """
     if kind == "trailer":
         return {
@@ -462,6 +463,54 @@ def _ensure_timestamps(story: Dict[str, Any]) -> None:
         story["ingested_at"] = story["normalized_at"]
 
 
+def _add_frontend_aliases(story: Dict[str, Any]) -> None:
+    """
+    Duplicate important snake_case fields into camelCase keys that
+    the Flutter app expects. We do this before LPUSH so Redis already
+    stores an app-ready object.
+
+    Frontend cares about:
+      publishedAt / ingestedAt / normalizedAt
+      releaseDate / isTheatrical / isUpcoming
+      ottPlatform / sourceDomain
+      thumbUrl / posterUrl
+    """
+    # timestamps
+    if "published_at" in story and "publishedAt" not in story:
+        story["publishedAt"] = story["published_at"]
+    if "ingested_at" in story and "ingestedAt" not in story:
+        story["ingestedAt"] = story["ingested_at"]
+    if "normalized_at" in story and "normalizedAt" not in story:
+        story["normalizedAt"] = story["normalized_at"]
+
+    # release info
+    if "release_date" in story and "releaseDate" not in story:
+        story["releaseDate"] = story["release_date"]
+    if "is_theatrical" in story and "isTheatrical" not in story:
+        story["isTheatrical"] = story["is_theatrical"]
+    if "is_upcoming" in story and "isUpcoming" not in story:
+        story["isUpcoming"] = story["is_upcoming"]
+
+    # OTT / platform info
+    if "ott_platform" in story and "ottPlatform" not in story:
+        story["ottPlatform"] = story["ott_platform"]
+
+    # source domain
+    if "source_domain" in story and "sourceDomain" not in story:
+        story["sourceDomain"] = story["source_domain"]
+
+    # hero art
+    # workers populate thumb_url & poster_url; alias them so Flutter can
+    # read story.posterUrl / story.thumbUrl directly.
+    if "thumb_url" in story and "thumbUrl" not in story:
+        story["thumbUrl"] = story["thumb_url"]
+    if "poster_url" in story and "posterUrl" not in story:
+        story["posterUrl"] = story["poster_url"]
+    # Safety: if posterUrl is still missing but we have thumbUrl, mirror it
+    if "posterUrl" not in story and story.get("thumbUrl"):
+        story["posterUrl"] = story["thumbUrl"]
+
+
 def _finalize_story_shape(story: Dict[str, Any]) -> Dict[str, Any]:
     """
     Mutates + returns story.
@@ -480,6 +529,9 @@ def _finalize_story_shape(story: Dict[str, Any]) -> Dict[str, Any]:
         story["tags"] = None
     else:
         story["tags"] = None
+
+    # add camelCase mirrors so Flutter can bind directly
+    _add_frontend_aliases(story)
 
     return story
 
@@ -566,7 +618,7 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
       2. If signature already in Redis -> "duplicate".
       3. Else:
            - mark signature in Redis (so future dupes get dropped),
-           - finalize the story (verticals, thumb, timestamps, etc.),
+           - finalize the story (verticals, thumb, timestamps, aliases),
            - LPUSH to FEED_KEY,
            - TRIM FEED_KEY,
            - broadcast realtime,
@@ -591,7 +643,7 @@ def sanitize_story(story: Dict[str, Any]) -> Literal["accepted", "duplicate", "i
     # 3a. mark signature so future duplicates are dropped
     conn.sadd(SEEN_KEY, sig)
 
-    # 3b. finalize story shape so feed/api get consistent fields
+    # 3b. finalize story shape so feed/api get consistent + Flutter-ready fields
     story = _finalize_story_shape(story)
 
     # 3c. LPUSH newest-first story JSON into the public feed list
