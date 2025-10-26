@@ -1,5 +1,5 @@
 // lib/core/models.dart
-import 'dart:collection'; // for UnmodifiableListView (when callers pass it)
+import 'dart:collection'; // for UnmodifiableListView
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
@@ -15,22 +15,24 @@ class Story {
   final String id;              // e.g. "youtube:GgMWu_oqJ6c" (never empty)
   final String kind;            // "trailer" | "ott" | "release" | "news" | ...
   final String title;
-  final String? summary;
+  final String? summary;        // ~80-word cleaned CinePulse summary
 
   final DateTime? publishedAt;  // RFC3339 → DateTime UTC
   final DateTime? releaseDate;  // theatrical/OTT release date
-  final DateTime? normalizedAt; // server ingest time (optional)
+  final DateTime? normalizedAt; // server ingest time (pipeline timestamp)
 
   final String? source;         // e.g. "youtube"
   final String? url;            // canonical/watch URL
-  final String? sourceDomain;   // e.g. "youtube.com" / "variety.com"
+  final String? sourceDomain;   // e.g. "youtube.com" / "koimoi.com"
   final String? ottPlatform;    // e.g. "Netflix", "Prime Video"
   final String? ratingCert;     // e.g. "U", "U/A", "A"
 
   final int? runtimeMinutes;    // duration if known
+
   final List<String> languages; // immutable
   final List<String> genres;    // immutable
   final List<String> tags;      // immutable
+  final List<String> verticals; // immutable, e.g. ["entertainment"], ["sports"]
 
   final String? thumbUrl;       // small image (card/list)
   final String? posterUrl;      // larger image (detail)
@@ -39,7 +41,6 @@ class Story {
   final bool? isTheatricalFlag;
   final bool? isUpcomingFlag;
 
-  // NOTE: not `const` (we normalize lists at runtime)
   Story({
     required this.id,
     required this.kind,
@@ -57,13 +58,15 @@ class Story {
     List<String>? languages,
     List<String>? genres,
     List<String>? tags,
+    List<String>? verticals,
     this.thumbUrl,
     this.posterUrl,
     this.isTheatricalFlag,
     this.isUpcomingFlag,
   })  : languages = _immutable(languages ?? const <String>[]),
         genres = _immutable(genres ?? const <String>[]),
-        tags = _immutable(tags ?? const <String>[]);
+        tags = _immutable(tags ?? const <String>[]),
+        verticals = _immutable(verticals ?? const <String>[]);
 
   /* ----------------------------- parsing helpers ----------------------------- */
 
@@ -76,14 +79,14 @@ class Story {
       return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
     }
     if (v is String) {
-      final s = v.trim();
-      if (s.isEmpty) return null;
-      try {
-        // Allow trailing Z or explicit offsets.
-        return DateTime.parse(s.endsWith('Z') ? s : s).toUtc();
-      } catch (_) {
-        return null;
-      }
+        final s = v.trim();
+        if (s.isEmpty) return null;
+        try {
+          // Allow trailing Z or explicit offsets.
+          return DateTime.parse(s.endsWith('Z') ? s : s).toUtc();
+        } catch (_) {
+          return null;
+        }
     }
     return null;
   }
@@ -118,6 +121,7 @@ class Story {
       );
     }
     if (v is String && v.trim().isNotEmpty) {
+      // support either comma or pipe separated strings
       final sep = v.contains('|') ? '|' : ',';
       return List<String>.unmodifiable(
         v.split(sep).map((e) => e.trim()).where((e) => e.isNotEmpty),
@@ -130,13 +134,13 @@ class Story {
       v is UnmodifiableListView<String> ? v : List<String>.unmodifiable(v);
 
   static String _fallbackId(Map<String, dynamic> j, DateTime? publishedAt) {
-    // If source is YouTube, try to synthesize "youtube:<id>"
+    // If source is YouTube, synthesize "youtube:<id>" if possible
     final src = (j['source'] ?? j['sourceName'] ?? '').toString().toLowerCase();
     final youtubeId = (j['youtube_id'] ?? j['video_id'])?.toString();
     if (src == 'youtube' && youtubeId != null && youtubeId.isNotEmpty) {
       return 'youtube:$youtubeId';
     }
-    // Otherwise a stable-ish generated id
+    // Otherwise stable-ish hash using title and timestamp
     final title = (j['title'] ?? '').toString();
     final ts = (publishedAt ?? DateTime.now().toUtc()).millisecondsSinceEpoch;
     return 'gen:${title.hashCode}@$ts';
@@ -166,24 +170,31 @@ class Story {
 
     dynamic _read(dynamic a, [String? b]) => j[a] ?? (b != null ? j[b] : null);
 
+    // timestamps (snake_case OR camelCase)
     final publishedRaw  = _read('published_at', 'publishedAt');
     final releaseRaw    = _read('release_date', 'releaseDate');
     final normalizedRaw = _read('normalized_at', 'normalizedAt');
 
-    final langsRaw  = _read('languages', 'language') ?? _read('langs');
-    final genresRaw = _read('genres', 'genre');
-    final tagsRaw   = _read('tags', 'tag');
+    // lists / chips
+    final langsRaw   = _read('languages', 'language') ?? _read('langs');
+    final genresRaw  = _read('genres', 'genre');
+    final tagsRaw    = _read('tags', 'tag');
+    final vertsRaw   = _read('verticals', 'vertical');
 
+    // boolean-ish flags
     final theatrical = _read('is_theatrical', 'isTheatrical');
     final upcoming   = _read('is_upcoming', 'isUpcoming');
 
+    // choose ID
     final published = _parseDate(publishedRaw);
     final idRaw = _readS('id');
     final idEffective = idRaw.isNotEmpty ? idRaw : _fallbackId(j, published);
 
+    // kind fallback
     final kindRaw = _readS('kind');
     final kindEffective = kindRaw.isNotEmpty ? kindRaw : 'news';
 
+    // link + domain
     final url = _readSOpt('url');
     final sourceDomainRaw = _readSOpt('source_domain', 'sourceDomain');
     final sourceDomain = sourceDomainRaw ?? _domainFromUrl(url);
@@ -208,6 +219,7 @@ class Story {
       languages: _parseStringList(langsRaw),
       genres: _parseStringList(genresRaw),
       tags: _parseStringList(tagsRaw),
+      verticals: _parseStringList(vertsRaw),
 
       thumbUrl: _readSOpt('thumb_url', 'thumbUrl'),
       posterUrl: _readSOpt('poster_url', 'posterUrl'),
@@ -238,6 +250,7 @@ class Story {
         if (languages.isNotEmpty) 'languages': languages,
         if (genres.isNotEmpty) 'genres': genres,
         if (tags.isNotEmpty) 'tags': tags,
+        if (verticals.isNotEmpty) 'verticals': verticals,
         if (thumbUrl != null) 'thumb_url': thumbUrl,
         if (posterUrl != null) 'poster_url': posterUrl,
         if (isTheatricalFlag != null) 'is_theatrical': isTheatricalFlag,
@@ -250,7 +263,7 @@ class Story {
   /// - Prefer "youtube:<videoId>" in `id`
   /// - Else try to parse from `url` when it points to YouTube
   String? get youtubeVideoId {
-    // From ID prefix
+    // From explicit source+id
     if ((source ?? '').toLowerCase() == 'youtube') {
       final p = id.split(':');
       if (p.length >= 2 && p.first == 'youtube' && p.last.isNotEmpty) {
@@ -306,10 +319,10 @@ class Story {
     return db.compareTo(da); // newest first
   }
 
-  /// Human label for kind (title-cased), e.g., "News", "Trailer".
+  /// Human label for kind, e.g., "News", "Trailer".
   String get kindLabel => _titleCase(kind);
 
-  /// Hide origin host entirely (UI will not show a site).
+  /// We currently hide site branding in the UI, so this is blank.
   String get originHost => '';
 
   /// Localized pretty timestamp; falls back: published → release → normalized.
@@ -329,7 +342,10 @@ class Story {
     return parts.join(' • ');
   }
 
-  /// Compact “meta” that can still be used elsewhere if needed.
+  /// Compact “meta”.
+  /// If OTT platform is known, show that.
+  /// Else show cert/runtime if we have them.
+  /// Else fallback to source/kind.
   String get primaryMeta {
     if ((ottPlatform ?? '').isNotEmpty) return _titleCase(ottPlatform!);
     if (ratingCert != null && runtimeMinutes != null) {
@@ -371,6 +387,7 @@ class Story {
     List<String>? languages,
     List<String>? genres,
     List<String>? tags,
+    List<String>? verticals,
     String? thumbUrl,
     String? posterUrl,
     bool? isTheatricalFlag,
@@ -393,6 +410,7 @@ class Story {
       languages: languages ?? this.languages,
       genres: genres ?? this.genres,
       tags: tags ?? this.tags,
+      verticals: verticals ?? this.verticals,
       thumbUrl: thumbUrl ?? this.thumbUrl,
       posterUrl: posterUrl ?? this.posterUrl,
       isTheatricalFlag: isTheatricalFlag ?? this.isTheatricalFlag,
