@@ -445,6 +445,24 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
     return u
 
 
+def _clean_summary_text(s: Optional[str]) -> Optional[str]:
+    """
+    Light normalization pass for summary text before we send it to clients.
+
+    - Collapse repeated whitespace/newlines to single spaces.
+    - Trim ends.
+    - Ensure it ends with basic punctuation so UI copy feels finished.
+    """
+    if s is None:
+        return None
+    t = " ".join(s.split()).strip()
+    if not t:
+        return None
+    if t[-1] not in ".!?":
+        t = t + "."
+    return t
+
+
 def _adapt_for_response(it: dict) -> dict:
     """
     Transform raw story dict (what sanitizer wrote) into the clean shape
@@ -454,6 +472,7 @@ def _adapt_for_response(it: dict) -> dict:
       - Rewrite images through proxy, dropping dead demo CDN images so the
         client doesn't even try them (prevents noisy 404 spam).
       - Normalize tags to list[str] | None.
+      - Polish summary text (spacing / final period).
     """
     obj = dict(it)
 
@@ -482,6 +501,9 @@ def _adapt_for_response(it: dict) -> dict:
     tags_val = obj.get("tags")
     if not (tags_val is None or isinstance(tags_val, list)):
         obj["tags"] = None
+
+    # summary polish
+    obj["summary"] = _clean_summary_text(obj.get("summary"))
 
     return obj
 
