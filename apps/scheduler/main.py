@@ -1,64 +1,133 @@
 # apps/scheduler/main.py
 #
-# RUNTIME ROLE (this container = the "scheduler" process)
+# ─────────────────────────────────────────────────────────────────────
+# SCHEDULER ROLE (this process = "scheduler" container / cron brain)
+# ─────────────────────────────────────────────────────────────────────
 #
-# PIPELINE RECAP
-#   scheduler  → decides *what to poll* and *when*, then calls:
-#                  - youtube_rss_poll(...)
-#                  - rss_poll(...)
-#                those pollers enqueue AdapterEventDict jobs into the "events" RQ queue
+# FULL PIPELINE (must NEVER be broken):
 #
-#   workers    → (rq worker "events")
-#                normalize_event() turns AdapterEventDict → canonical story dict
-#                and enqueues sanitize_story() onto the "sanitize" queue
+#   1. scheduler
+#        - decides WHAT to poll and WHEN
+#        - calls:
+#              youtube_rss_poll(channel_id=…)
+#              rss_poll(url=…)
+#          those functions DO NOT publish to the public feed.
+#          they just enqueue AdapterEventDict jobs on the "events" RQ queue.
 #
-#   sanitizer  → (rq worker "sanitize")
-#                - dedupe (first unique version wins forever)
-#                - publish to Redis feed list
-#                - fanout (pubsub, stream)
-#                - optional push notifications
+#   2. workers  (rq worker "events")
+#        - normalize_event()
+#              AdapterEventDict → canonical story dict
+#              adds:
+#                • cleaned headline (generate_safe_title)
+#                • neutral summary paragraph (summarize_story_safe)
+#                • kind / kind_meta / timestamps
+#                • verticals / tags
+#                • hero image
+#                • safety flags:
+#                    - is_risky: legal/PR heat (raids, FIR, leaked chat, etc.)
+#                    - gossip_only: relationship / breakup / outrage bait
+#                                   with no OTT / release / box office / match-result context
+#          then it enqueues sanitize_story() on the "sanitize" queue.
 #
-#   api        → serves /v1/feed from Redis
+#   3. sanitizer  (rq worker "sanitize")
+#        - FINAL GATEKEEPER
+#            • rejects pure gossip (gossip_only == True)
+#            • fuzzy topic dedupe (first unique version wins, later repeats dropped)
+#            • LPUSH accepted stories to Redis FEED_KEY (newest first)
+#            • LTRIM FEED_KEY (keeps feed bounded)
+#            • realtime fanout + optional push
 #
-# GUARANTEES:
-# - scheduler never writes to the public feed list.
-# - scheduler never dedupes.
-# - scheduler just keeps feeding fresh source content into the pipeline.
+#   4. api
+#        - /v1/feed reads FEED_KEY
 #
-# CONFIG SOURCES
-# - env vars (.env from docker compose)
-# - /app/infra/source.yml  (mounted in the image)
-#      ├─ global knobs:
-#      │    scheduler: {...}, throttle: {...}, etc.
-#      │    include_verticals:
-#      │      - verticals/entertainment.yml
-#      │      - verticals/sports.yml
-#      │      ...
-#      └─ each vertical YAML defines:
-#           youtube:
-#             defaults: {...}
-#             channels: [...]
-#           rss:
-#             defaults: {...}
-#             buckets: { bucketA: {enabled: true, feeds:[...]}, ... }
+# HARD GUARANTEES FOR LEGAL / TRUST:
+#   - scheduler MUST NEVER write to FEED_KEY directly.
+#   - scheduler MUST NEVER bypass normalize_event() or sanitize_story().
+#   - scheduler MUST NEVER try to be clever about dedupe or gossip.
+#     That all lives in sanitizer so we keep one source of truth.
 #
-# The scheduler now MERGES all vertical YAMLs into one combined view:
-#   - all youtube.channels become one big list
-#   - all rss buckets/feeds become one big list/map
-#   - throttle.per_domain_min_seconds gets merged (max seconds wins per host)
+# WHY THIS MATTERS:
+#   The safety promises we make (no raw gossip, no un-attributed accusations,
+#   "According to <source>…", no spammy dupes) only hold if every single story
+#   flows through:
+#       scheduler → workers.normalize_event() → sanitizer.sanitize_story()
+#   and NOTHING jumps the line.
 #
-# REQUIRED RUNTIME KNOBS (must be set either via env or YAML scheduler.*):
-#   POLL_INTERVAL_MIN          → how often to run a full poll cycle
-#   PUBLISHED_AFTER_HOURS      → ignore items older than this window
+# ─────────────────────────────────────────────────────────────────────
+# CONFIG INPUTS
+# ─────────────────────────────────────────────────────────────────────
 #
-# LOOP:
+# We load one root YAML file (default /app/infra/source.yml). That file:
+#
+#   scheduler.poll_interval_min
+#   scheduler.published_after_hours        (freshness window for YouTube)
+#   scheduler.per_run_limits.youtube_channels / rss_feeds
+#   scheduler.rss_buckets_enabled          (optional allowlist of RSS buckets)
+#
+#   throttle.per_domain_min_seconds:
+#       polite crawl pacing per origin ("pinkvilla.com": 240, "default": 180, …)
+#
+#   include_verticals:
+#       - verticals/entertainment.yml
+#       - verticals/sports.yml
+#       ...
+#
+# Each vertical YAML contributes:
+#
+#   youtube:
+#     defaults: { max_items_per_poll, ... }
+#     channels:
+#       - { name: "...", channel_id: "...", enabled: true, ... }
+#
+#   rss:
+#     defaults: { kind_hint: "news", max_items_per_poll: 12, ... }
+#     buckets:
+#       buzzdesk / boxoffice / ott_streaming / mainstream / sports_results ...
+#       with each feed defined as:
+#         - name: "...",
+#           url: "https://....rss",
+#           enabled: true,
+#           kind_hint: "news" | "release" | "ott" | etc.
+#
+# We MERGE all of those vertical YAMLs into one combined config so we get:
+#   • one flat list of YouTube channels (enabled only)
+#   • one flat list of RSS feeds (enabled only, respecting bucket allowlist)
+#   • merged throttle map (max seconds wins per domain = safest / politest)
+#
+# We also allow fallback env vars in dev:
+#   YT_CHANNELS="UCabc...,UCxyz..."
+#   RSS_FEEDS="https://site/feed|news,https://other/rss|ott"
+#
+# In production, YAML is expected to be the source of truth.
+#
+# ─────────────────────────────────────────────────────────────────────
+# RUNTIME LOOP
+# ─────────────────────────────────────────────────────────────────────
+#
 #   while True:
-#       pick which YT channels / RSS feeds to poll this cycle (respect per_run limits)
-#       throttle so we don't hammer the same origin
-#       call youtube_rss_poll(...) / rss_poll(...)
-#       sleep until next cycle (+ jitter)
+#       - choose which YouTube channels & RSS feeds to poll this cycle
+#         (shuffle for fairness, slice by per_run_limit_yt/per_run_limit_rss)
+#       - enforce polite throttle per domain
+#       - call youtube_rss_poll(...) / rss_poll(...)
+#           ↳ those functions enqueue normalize_event() jobs on the "events" queue
+#       - sleep until next poll window (+ jitter)
 #
-# If ONE_SHOT=1, do one cycle then exit.
+#   If ONE_SHOT=1 → run one cycle and exit (useful for testing).
+#
+# ─────────────────────────────────────────────────────────────────────
+# LEGAL / SAFETY REMINDER:
+#   The scheduler is ALLOWED to pull spicy / high-buzz sources
+#   (ex: Bollywood Hungama box office, Pinkvilla filtered "buzzdesk",
+#   Star Sports match result headlines), *but only because* downstream:
+#     - summarize_story_safe() strips hype, tones down accusations,
+#       and adds attribution like "According to <domain>: …"
+#     - generate_safe_title() removes clickbait
+#     - sanitizer.sanitize_story() will DROP pure gossip (gossip_only=True)
+#       so breakup / leaked chat / "fans slammed" with no work context
+#       NEVER reaches users.
+#
+#   DO NOT EVER short-circuit that.
+#
 
 from __future__ import annotations
 
@@ -72,7 +141,7 @@ from urllib.parse import urlparse
 
 from apps.workers.jobs import youtube_rss_poll, rss_poll
 
-# YAML is allowed to fail gracefully (container should still boot)
+# YAML is optional in some dev shells; scheduler should still boot.
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
@@ -80,7 +149,7 @@ except Exception:  # pragma: no cover
 
 
 # -------------------------------------------------------------------
-# basic helpers / logging
+# small helpers / logging
 # -------------------------------------------------------------------
 
 def _utc_now() -> datetime:
@@ -89,15 +158,15 @@ def _utc_now() -> datetime:
 
 
 def _log(msg: str) -> None:
-    """UTC timestamp prefix so logs from scheduler/workers/sanitizer correlate."""
+    """Prefix logs with UTC for easier cross-service debugging."""
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[scheduler] {ts}Z  {msg}")
 
 
 def _domain_from_url(url: str) -> str:
     """
-    Extract host from URL (e.g. https://www.pinkvilla.com/x -> pinkvilla.com).
-    Used for per-domain throttling.
+    Extract host from a URL.
+    "https://www.pinkvilla.com/x" -> "pinkvilla.com"
     """
     try:
         netloc = urlparse(url).netloc.lower()
@@ -108,8 +177,8 @@ def _domain_from_url(url: str) -> str:
 
 def _env_list(name: str) -> List[str]:
     """
-    Parse comma/newline-separated env vars, ignore blanks / lines starting '#'.
-    Returns cleaned list of strings.
+    Parse comma/newline-separated env vars into a clean list.
+    Lines starting with "#" are ignored.
     """
     raw = os.getenv(name, "")
     out: List[str] = []
@@ -124,12 +193,14 @@ def _env_list(name: str) -> List[str]:
 
 def _parse_rss_specs(specs: Iterable[str]) -> List[Tuple[str, str]]:
     """
-    Convert:
+    Turn env-style strings into [(url, kind_hint)].
+    Example:
         "https://site.com/feed|news"
-        "https://other.com/rss"
-    into:
-        [("https://site.com/feed", "news"),
-         ("https://other.com/rss", "news")]
+        "https://other.com/rss"         (defaults to "news")
+    →  [
+         ("https://site.com/feed", "news"),
+         ("https://other.com/rss", "news"),
+       ]
     """
     items: List[Tuple[str, str]] = []
     for s in specs:
@@ -142,44 +213,44 @@ def _parse_rss_specs(specs: Iterable[str]) -> List[Tuple[str, str]]:
 
 
 # -------------------------------------------------------------------
-# config dataclasses
+# dataclasses for runtime config
 # -------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class YTSpec:
     channel_id: str
-    max_items: Optional[int] = None  # per-channel override for max items/poll
+    max_items: Optional[int] = None  # per-channel override for max items / poll
 
 
 @dataclass(frozen=True)
 class RSSSpec:
     url: str
     kind_hint: str = "news"
-    max_items: Optional[int] = None  # per-feed override for max items/poll
+    max_items: Optional[int] = None  # per-feed override for max items / poll
 
 
 @dataclass(frozen=True)
 class Config:
-    # which sources to poll
+    # sources to poll (already merged from all vertical YAMLs)
     yt: List[YTSpec]
     rss: List[RSSSpec]
 
-    # cadence / pacing
-    poll_every_min: int            # required: run a full cycle this often
-    published_after_hours: float   # required: skip content older than this
-    spread_seconds: float          # optional: pause between individual polls
-    jitter_seconds: float          # optional: random pad between cycles
-    one_shot: bool                 # run one cycle then exit
+    # cadence / pacing knobs
+    poll_every_min: int            # run a full cycle this often
+    published_after_hours: float   # ignore YouTube uploads older than this window
+    spread_seconds: float          # pause between individual polls inside a cycle
+    jitter_seconds: float          # random pad between cycles
+    one_shot: bool                 # run one cycle then exit (for tests)
 
-    # global caps applied if a channel/feed doesn't override max_items
+    # global caps if channel/feed doesn't override its own max_items
     yt_global_max_items: Optional[int]
     rss_global_max_items: Optional[int]
 
-    # per-cycle limits (avoid hammering 200+ feeds every loop)
+    # we don't hammer 200 feeds every loop; we slice per run
     per_run_limit_yt: Optional[int]
     per_run_limit_rss: Optional[int]
 
-    # throttle map: {domain -> min_seconds_between_hits}
+    # polite crawl throttle map: { "pinkvilla.com": 240, "default": 180, ... }
     throttle_per_domain: Dict[str, int]
 
     # feature toggles
@@ -193,7 +264,9 @@ class Config:
 
 def _safe_load_yaml(path: str) -> Dict[str, Any]:
     """
-    Read YAML file → dict. Return {} if missing / unreadable / invalid.
+    Read YAML → dict.
+    If the file is missing / invalid / yaml lib missing, we return {}.
+    Scheduler MUST still boot, even in degraded mode.
     """
     if not yaml:
         return {}
@@ -210,40 +283,27 @@ def _safe_load_yaml(path: str) -> Dict[str, Any]:
 
 def _merge_verticals(global_cfg: Dict[str, Any], root_path: str) -> Dict[str, Any]:
     """
-    Take the root /app/infra/source.yml (global_cfg), read each file listed in
-    include_verticals:, and merge them into one combined structure.
+    Combine root source.yml + each vertical YAML under include_verticals
+    into ONE merged config the scheduler can act on.
 
-    We produce something that *looks like* the old single-file layout, so the
-    rest of the scheduler code doesn't have to change:
-
-        {
-          "scheduler": {...},
-          "throttle": {"per_domain_min_seconds": {...}},
-          "youtube": {
-            "defaults": {...},
-            "channels": [ {channel_id, enabled, ...}, ... ]
-          },
-          "rss": {
-            "defaults": {...},
-            "feeds":    [ ... ],           # optional flat list
-            "buckets":  { name: {enabled, feeds:[...]}, ... }
-          }
-        }
-
-    merge rules:
-      - youtube.channels from all verticals are concatenated if enabled:true
-      - rss.buckets.<bucket>.feeds are concatenated (enabled feeds only)
-      - throttle.per_domain_min_seconds picks the *max* delay we've seen
-        for a given host, which is safest/politest.
+    Merge rules:
+      • throttle.per_domain_min_seconds:
+          take the MAX value per domain → safest (slowest) wins.
+      • youtube.channels:
+          concat all channels where enabled == true.
+      • rss.buckets / rss.feeds:
+          concat all feeds where enabled == true.
+          You can also whitelist bucket names using
+          scheduler.rss_buckets_enabled in the root YAML. Anything
+          not whitelisted is skipped.
     """
     base_dir = os.path.dirname(root_path)
 
-    # read list of vertical yamls
     include_verticals = global_cfg.get("include_verticals") or []
     if not isinstance(include_verticals, list):
         include_verticals = []
 
-    # accumulators
+    # accumulators while merging
     yt_defaults: Dict[str, Any] = {}
     yt_channels: List[Dict[str, Any]] = []
 
@@ -254,7 +314,7 @@ def _merge_verticals(global_cfg: Dict[str, Any], root_path: str) -> Dict[str, An
     throttle_map: Dict[str, int] = {}
 
     def _merge_throttle(block: Dict[str, Any]) -> None:
-        """merge throttle.per_domain_min_seconds with 'max wins'."""
+        """Merge throttle.per_domain_min_seconds using 'max wins'."""
         tcfg = block.get("throttle")
         if not isinstance(tcfg, dict):
             return
@@ -271,7 +331,10 @@ def _merge_verticals(global_cfg: Dict[str, Any], root_path: str) -> Dict[str, An
                 throttle_map[host] = val
 
     def _merge_block(block: Dict[str, Any]) -> None:
-        """pull youtube/rss/throttle from one YAML (either root or a vertical)."""
+        """
+        Pull youtube/rss/throttle from one YAML (root or per-vertical).
+        Only keep enabled:true entries.
+        """
         nonlocal yt_defaults, yt_channels, rss_defaults, rss_feeds_flat, rss_buckets
 
         # throttle
@@ -297,8 +360,7 @@ def _merge_verticals(global_cfg: Dict[str, Any], root_path: str) -> Dict[str, An
                 rss_defaults.update(rb["defaults"])
 
             # flat feeds mode
-            feeds_list = rb.get("feeds") or []
-            for fd in feeds_list:
+            for fd in rb.get("feeds") or []:
                 if not isinstance(fd, dict):
                     continue
                 if not fd.get("enabled", True):
@@ -328,7 +390,6 @@ def _merge_verticals(global_cfg: Dict[str, Any], root_path: str) -> Dict[str, An
                             "feeds": list(incoming_feeds),
                         }
                     else:
-                        # merge feeds
                         rss_buckets[bname]["enabled"] = (
                             rss_buckets[bname].get("enabled", True) or True
                         )
@@ -337,13 +398,13 @@ def _merge_verticals(global_cfg: Dict[str, Any], root_path: str) -> Dict[str, An
     # merge root/global first
     _merge_block(global_cfg)
 
-    # then merge each vertical file
+    # merge each vertical file listed under include_verticals
     for rel_path in include_verticals:
         full = os.path.join(base_dir, str(rel_path))
         vert_cfg = _safe_load_yaml(full)
         _merge_block(vert_cfg)
 
-    # build final combined dict
+    # final combined dict looks structurally like a single vertical file
     combined: Dict[str, Any] = {
         "scheduler": global_cfg.get("scheduler") or {},
         "throttle": {"per_domain_min_seconds": throttle_map},
@@ -365,13 +426,13 @@ def _merge_verticals(global_cfg: Dict[str, Any], root_path: str) -> Dict[str, An
 
 
 # -------------------------------------------------------------------
-# config loader
+# config ingestion
 # -------------------------------------------------------------------
 
 def _require_number(val: object | None, name: str) -> float:
     """
-    Enforce that poll cadence knobs are explicitly configured.
-    We DO NOT silently invent these in code.
+    poll_every_min and published_after_hours are mandatory.
+    We don't silently invent them in code because cadence is a product/legal knob.
     """
     if val is None or val == "":
         raise RuntimeError(
@@ -383,26 +444,24 @@ def _require_number(val: object | None, name: str) -> float:
 
 def _read_config() -> Config:
     """
-    1. load /app/infra/source.yml (or SOURCES_FILE env)
-    2. merge in all vertical YAMLs listed under include_verticals
-    3. read env overrides for timing / feature flags
-    4. return a Config the rest of the scheduler can use
+    Load + normalize runtime config:
+      1. read SOURCES_FILE (default /app/infra/source.yml)
+      2. merge include_verticals into one combined view
+      3. pull scheduler.* knobs
+      4. build YTSpec[] and RSSSpec[] lists
+      5. attach throttle, limits, toggles
     """
     sources_path = os.getenv("SOURCES_FILE") or "/app/infra/source.yml"
 
-    # read the root YAML
+    # root YAML
     root_yaml = _safe_load_yaml(sources_path)
 
-    # merge vertical YAMLs (entertainment, sports, etc.) into one dict
+    # merge vertical YAMLs (entertainment, sports, etc.)
     merged_cfg = _merge_verticals(root_yaml, sources_path)
-
-    # this is what downstream logic expects:
-    #   merged_cfg["scheduler"], merged_cfg["throttle"],
-    #   merged_cfg["youtube"],   merged_cfg["rss"]
 
     scheduler_yaml = merged_cfg.get("scheduler") or {}
 
-    # ---- cadence / windows (required) ---------------------------------
+    # ===== cadence / freshness =====
     poll_every_min = int(
         _require_number(
             os.getenv("POLL_INTERVAL_MIN", scheduler_yaml.get("poll_interval_min")),
@@ -411,14 +470,11 @@ def _read_config() -> Config:
     )
 
     published_after_hours = _require_number(
-        os.getenv(
-            "PUBLISHED_AFTER_HOURS",
-            scheduler_yaml.get("published_after_hours"),
-        ),
+        os.getenv("PUBLISHED_AFTER_HOURS", scheduler_yaml.get("published_after_hours")),
         "PUBLISHED_AFTER_HOURS / scheduler.published_after_hours",
     )
 
-    # ---- pacing (optional) -------------------------------------------
+    # ===== pacing (optional) =====
     spread_env = os.getenv("POLL_SPREAD_SEC")
     jitter_env = os.getenv("POLL_JITTER_SEC")
 
@@ -428,23 +484,23 @@ def _read_config() -> Config:
     jitter_seconds = float(jitter_env) if jitter_env not in (None, "") \
         else float(scheduler_yaml.get("poll_jitter_sec") or 0)
 
-    # ---- run mode ----------------------------------------------------
+    # ===== mode =====
     one_shot = os.getenv("ONE_SHOT", "").lower() in ("1", "true", "yes")
 
-    # ---- global max_items per poll call (optional) -------------------
+    # ===== global max_items per poll (optional) =====
     yt_global_max_items = int(os.getenv("YT_MAX_ITEMS")) if os.getenv("YT_MAX_ITEMS") else None
     rss_global_max_items = int(os.getenv("RSS_MAX_ITEMS")) if os.getenv("RSS_MAX_ITEMS") else None
 
-    # ---- feature toggles ---------------------------------------------
+    # ===== feature toggles =====
     enable_youtube = os.getenv("ENABLE_YOUTUBE_INGEST", "true").lower() not in ("0", "false", "no")
     enable_rss     = os.getenv("ENABLE_RSS_INGEST", "true").lower()     not in ("0", "false", "no")
 
-    # ---- per-run limits ----------------------------------------------
+    # ===== per-run caps =====
     per_run_limits_yaml = scheduler_yaml.get("per_run_limits") or {}
     per_run_limit_yt  = int(per_run_limits_yaml["youtube_channels"]) if "youtube_channels" in per_run_limits_yaml else None
     per_run_limit_rss = int(per_run_limits_yaml["rss_feeds"])        if "rss_feeds"        in per_run_limits_yaml else None
 
-    # ---- throttle map ------------------------------------------------
+    # ===== throttle map =====
     throttle_per_domain: Dict[str, int] = {}
     throttle_root = merged_cfg.get("throttle") or {}
     per_dom = throttle_root.get("per_domain_min_seconds") or {}
@@ -455,7 +511,7 @@ def _read_config() -> Config:
             except Exception:
                 pass
 
-    # ---- YouTube channels --------------------------------------------
+    # ===== YouTube channels =====
     yt_specs: List[YTSpec] = []
     yt_cfg = merged_cfg.get("youtube") or {}
     if isinstance(yt_cfg, dict):
@@ -478,21 +534,24 @@ def _read_config() -> Config:
                 )
             )
 
-    # Fallback to env if absolutely nothing made it in
+    # DEV FALLBACK:
+    # If YAML gave us nothing (like a local env sandbox), allow env-based
+    # YT_CHANNELS list just so the pipeline can still run.
     if not yt_specs:
         yt_specs = [YTSpec(cid) for cid in _env_list("YT_CHANNELS")]
 
-    # ---- RSS feeds ---------------------------------------------------
+    # ===== RSS feeds =====
     #
-    # merged_cfg["rss"] can be:
+    # merged_cfg["rss"] may have:
     #   {
     #     "defaults": {...},
-    #     "feeds": [...],          # flat
-    #     "buckets": { ... }       # bucketed
+    #     "feeds": [...],        # flat mode
+    #     "buckets": {...}       # bucketed mode
     #   }
     #
-    # We also respect scheduler_yaml["rss_buckets_enabled"] if present,
-    # which is a whitelist of bucket names to actually poll.
+    # We respect scheduler.rss_buckets_enabled (optional allowlist)
+    # so product/legal can temporarily disable an entire bucket like
+    # "buzzdesk" if it starts drifting into pure-personal gossip.
     #
     def _collect_group_feeds(top: Dict[str, Any]) -> List[RSSSpec]:
         out: List[RSSSpec] = []
@@ -505,7 +564,7 @@ def _read_config() -> Config:
         def_kind = str(defaults.get("kind_hint") or "news")
         def_max  = defaults.get("max_items_per_poll")
 
-        # flat feeds (if any)
+        # flat feeds
         for feed in rb.get("feeds", []) or []:
             if not isinstance(feed, dict) or not feed.get("enabled", True):
                 continue
@@ -525,7 +584,7 @@ def _read_config() -> Config:
         # bucketed feeds
         buckets = rb.get("buckets") or {}
         if isinstance(buckets, dict):
-            # whitelist (scheduler.rss_buckets_enabled) if provided
+            # whitelist if provided
             enabled_list = scheduler_yaml.get("rss_buckets_enabled")
             bucket_allow = set(enabled_list) if enabled_list else set(buckets.keys())
 
@@ -534,6 +593,7 @@ def _read_config() -> Config:
                     continue
                 if not isinstance(bucket, dict) or not bucket.get("enabled", True):
                     continue
+
                 for feed in bucket.get("feeds") or []:
                     if not isinstance(feed, dict) or not feed.get("enabled", True):
                         continue
@@ -549,11 +609,14 @@ def _read_config() -> Config:
                             max_items=int(mi) if mi else None,
                         )
                     )
+
         return out
 
     rss_specs = _collect_group_feeds(merged_cfg)
 
-    # fallback to env if YAML ended up empty
+    # DEV FALLBACK:
+    # If YAML had nothing (like local sandbox), allow env RSS_FEEDS so dev
+    # can still smoke test the pipeline. In prod we expect YAML to be non-empty.
     if not rss_specs:
         rss_specs = [
             RSSSpec(url=u, kind_hint=k)
@@ -579,18 +642,24 @@ def _read_config() -> Config:
 
 
 # -------------------------------------------------------------------
-# throttling (per-domain courtesy)
+# polite throttle gate
 # -------------------------------------------------------------------
 
 class _Throttle:
     """
-    Throttle calls to the same host so we don't blast someone's origin.
+    Per-domain courtesy. We don't hammer anyone.
 
-    Example throttle map:
-        { "default": 5, "pinkvilla.com": 20 }
-    means:
-        - wait at least 5s before hitting any unknown domain
-        - wait at least 20s between hits to pinkvilla.com
+    Example throttle_per_domain:
+        {
+            "default": 180,
+            "youtube.com": 120,
+            "pinkvilla.com": 240,
+        }
+
+    Meaning:
+        - wait at least 180s between hits to hosts not explicitly listed
+        - wait at least 120s between hits to YouTube
+        - wait at least 240s between hits to pinkvilla.com
     """
     def __init__(self, per_domain: Dict[str, int]):
         self.rules = per_domain or {}
@@ -607,7 +676,7 @@ class _Throttle:
         now = time.monotonic()
         last = self.last_hit.get(host)
 
-        # first time -> just record time
+        # first time -> just record timestamp
         if last is None:
             self.last_hit[host] = now
             return
@@ -626,21 +695,21 @@ class _Throttle:
 
 def _poll_once(cfg: Config) -> None:
     """
-    Execute one poll pass:
-      - shuffle sources so we don't always starve the tail
-      - obey per_run_limit_*
-      - throttle per domain
-      - call youtube_rss_poll(...) / rss_poll(...)
-
-    NOTE:
-    We ONLY enqueue work into RQ ("events"). We do not write feed or dedupe.
-    Sanitizer downstream is the single source of truth for publishing.
+    Do ONE pass of polling:
+      1. shuffle YT + RSS so tail feeds get a turn
+      2. slice to per_run_limit_* so we don't crawl every single source each cycle
+      3. enforce throttle per domain
+      4. call youtube_rss_poll / rss_poll
+         NOTE: those functions push jobs to the "events" RQ queue.
+               From there, normalize_event() + sanitize_story() handle safety.
+               Scheduler NEVER touches FEED_KEY.
     """
     if not cfg.enable_youtube and not cfg.enable_rss:
         _log("all ingestion toggles disabled; skipping poll")
         return
 
-    # freshness cutoff for YouTube videos (ignore old uploads)
+    # Freshness cutoff for YouTube:
+    # We'll ignore uploads older than `published_after_hours`.
     cutoff_since: Optional[datetime] = (
         _utc_now() - timedelta(hours=cfg.published_after_hours)
         if cfg.published_after_hours and cfg.published_after_hours > 0
@@ -650,11 +719,11 @@ def _poll_once(cfg: Config) -> None:
     yt_list = list(cfg.yt) if cfg.enable_youtube else []
     rss_list = list(cfg.rss) if cfg.enable_rss else []
 
-    # randomize order each cycle for fairness
+    # Shuffle so we don't starve sources that happen to sit at the bottom.
     random.shuffle(yt_list)
     random.shuffle(rss_list)
 
-    # optional per-cycle caps
+    # Slice per-cycle so we don't hammer 200 feeds every loop.
     if cfg.per_run_limit_yt is not None:
         yt_list = yt_list[: max(0, int(cfg.per_run_limit_yt))]
     if cfg.per_run_limit_rss is not None:
@@ -662,34 +731,35 @@ def _poll_once(cfg: Config) -> None:
 
     throttle = _Throttle(cfg.throttle_per_domain)
 
-    # --- YouTube channels -------------------------------------------
+    # --- poll YouTube channels --------------------------------------
     for ch in yt_list:
         try:
             throttle.wait_for("youtube.com")
 
-            # pick max_items override
             max_items = ch.max_items if ch.max_items is not None else cfg.yt_global_max_items
 
             if max_items is None:
-                youtube_rss_poll(
+                emitted = youtube_rss_poll(
                     ch.channel_id,
                     published_after=cutoff_since,
                 )
             else:
-                youtube_rss_poll(
+                emitted = youtube_rss_poll(
                     ch.channel_id,
                     published_after=cutoff_since,
                     max_items=int(max_items),
                 )
 
+            _log(f"yt poll channel={ch.channel_id} -> emitted={emitted}")
+
         except Exception as e:
             _log(f"ERROR polling YouTube channel={ch.channel_id}: {e!r}")
 
-        # spread out bursts in a single cycle
+        # Small delay between polls in the same cycle so bursts feel gentler.
         if cfg.spread_seconds and cfg.spread_seconds > 0:
             time.sleep(cfg.spread_seconds)
 
-    # --- RSS feeds ---------------------------------------------------
+    # --- poll RSS feeds ---------------------------------------------
     for feed in rss_list:
         try:
             host = _domain_from_url(feed.url)
@@ -698,16 +768,18 @@ def _poll_once(cfg: Config) -> None:
             max_items = feed.max_items if feed.max_items is not None else cfg.rss_global_max_items
 
             if max_items is None:
-                rss_poll(
+                emitted = rss_poll(
                     feed.url,
                     kind_hint=feed.kind_hint,
                 )
             else:
-                rss_poll(
+                emitted = rss_poll(
                     feed.url,
                     kind_hint=feed.kind_hint,
                     max_items=int(max_items),
                 )
+
+            _log(f"rss poll url={feed.url} host={host} -> emitted={emitted}")
 
         except Exception as e:
             _log(f"ERROR polling RSS url={feed.url}: {e!r}")
@@ -727,15 +799,15 @@ def main() -> None:
         "boot: "
         f"{len(cfg.yt)} yt_channels, {len(cfg.rss)} rss_feeds | "
         f"interval={cfg.poll_every_min}m "
-        f"window={cfg.published_after_hours}h "
+        f"fresh_window={cfg.published_after_hours}h "
         f"spread={cfg.spread_seconds}s "
         f"jitter≤{cfg.jitter_seconds}s "
         f"one_shot={cfg.one_shot}"
     )
 
-    # If config is effectively empty, just idle instead of spinning hot.
+    # If config is basically empty, we idle instead of spinning hot.
     if (not cfg.enable_youtube and not cfg.enable_rss) or (not cfg.yt and not cfg.rss):
-        _log("no enabled sources; sleeping forever (scheduler idle mode)")
+        _log("no enabled sources; going into idle sleep loop")
         while True:
             time.sleep(300)
 
@@ -750,7 +822,8 @@ def main() -> None:
 
         elapsed = time.monotonic() - cycle_start
 
-        # target: start each cycle roughly every poll_every_min (+ jitter)
+        # Aim for poll_every_min (+ jitter). We don't try to 'catch up' if slow;
+        # we're fine being slightly slower rather than hammering sources.
         base_period = float(cfg.poll_every_min) * 60.0
         jitter = random.uniform(
             0.0,
