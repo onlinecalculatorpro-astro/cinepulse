@@ -12,7 +12,10 @@ from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/v1", tags=["img"])
 
-# ---------- Tunables ----------
+# ---------------------------------------------------------------------------
+# Tunables
+# ---------------------------------------------------------------------------
+
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
 TOTAL_TIMEOUT = httpx.Timeout(
@@ -24,6 +27,7 @@ TOTAL_TIMEOUT = httpx.Timeout(
 )
 
 MAX_REDIRECTS = 5
+
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
 BROWSER_UA = (
@@ -32,9 +36,13 @@ BROWSER_UA = (
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
+# obvious "don't proxy this" traps
 _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
-_TRAILING_COLON_NUM = re.compile(r":\d+$")  # e.g. ".../image.jpg:1"
 
+# Chrome sometimes appends :1 to image URLs. Strip that.
+_TRAILING_COLON_NUM = re.compile(r":\d+$")
+
+# never allow hitting ourselves / localhost / private IP literal
 _BLOCKED_HOSTS = {
     "api.onlinecalculatorpro.org",
     "localhost",
@@ -43,13 +51,22 @@ _BLOCKED_HOSTS = {
     "0.0.0.0",
 }
 
-# ---------- Helpers ----------
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _host_is_private_ip_literal(host: str) -> bool:
+    """
+    If caller passes a literal IP, block RFC1918 / loopback / etc.
+    We don't do DNS resolution here (intentionally).
+    """
     if not host:
         return True
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
+        # it's a hostname, not an IP literal
         return False
     return (
         ip.is_private
@@ -59,21 +76,50 @@ def _host_is_private_ip_literal(host: str) -> bool:
         or ip.is_multicast
     )
 
+
 def _looks_like_image(content_type: Optional[str]) -> bool:
     if not content_type:
         return False
     ct = content_type.lower().split(";", 1)[0].strip()
     return ct.startswith("image/") or ct == "application/octet-stream"
 
-def _build_headers(origin_host: str, *, alt: bool = False) -> dict[str, str]:
+
+def _first_path_segment(path: str) -> str:
+    """
+    For '/newspaper/wp-content/uploads/x.jpg' -> 'newspaper'.
+    For '/' or '' -> ''.
+    """
+    if not path.startswith("/"):
+        return ""
+    parts = path.split("/")
+    # ['','newspaper','wp-content',...]
+    if len(parts) > 1 and parts[1]:
+        return parts[1]
+    return ""
+
+
+def _build_headers(origin_host: str, origin_path: str, *, alt: bool) -> dict[str, str]:
+    """
+    alt = False  -> send spoofed Referer
+    alt = True   -> no Referer (some CDNs freak out if we spoof)
+    We now include the first path segment in Referer so
+    https://demo.tagdiv.com/newspaper/... gets Referer: https://demo.tagdiv.com/newspaper/
+    instead of just https://demo.tagdiv.com/
+    """
+    seg = _first_path_segment(origin_path)
     if not alt:
+        referer_base = f"https://{origin_host}/"
+        if seg:
+            referer_base = f"https://{origin_host}/{seg}/"
         return {
             "User-Agent": BROWSER_UA,
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Referer": f"https://{origin_host}/",
+            "Referer": referer_base,
             "Connection": "keep-alive",
         }
+
+    # alt headers (no Referer)
     return {
         "User-Agent": BROWSER_UA,
         "Accept": "image/*,*/*;q=0.5",
@@ -81,60 +127,111 @@ def _build_headers(origin_host: str, *, alt: bool = False) -> dict[str, str]:
         "Connection": "keep-alive",
     }
 
-def _is_blocked_hostname(host: str) -> bool:
-    if not host:
-        return True
-    h = host.lower().strip()
-    if h in _BLOCKED_HOSTS:
-        return True
-    return any(h.endswith("." + b) for b in _BLOCKED_HOSTS)
 
-def _sanitize_full_url(full_url: str) -> str:
-    """Strip a trailing :<digits> off the PATH (e.g., .../pic.jpg:1)."""
+def _sanitize_tail_colon(full_url: str) -> str:
+    """
+    Strip a trailing :<digits> from the *path* portion.
+    e.g. .../couple.jpg:1 -> .../couple.jpg
+    """
     p = urlparse(full_url)
-    path = p.path or ""
-    if _TRAILING_COLON_NUM.search(path):
-        path = _TRAILING_COLON_NUM.sub("", path)
-        p = p._replace(path=path)
+    new_path = _TRAILING_COLON_NUM.sub("", p.path or "")
+    if new_path != p.path:
+        p = p._replace(path=new_path)
         return urlunparse(p)
     return full_url
 
-def _parse_source_url(raw_u: str) -> Tuple[str, str, str]:
+
+def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
+    """
+    Decode ?u=..., validate scheme/host/path, block SSRF.
+    Return (original_full_url, sanitized_full_url, host, path).
+    """
     if not raw_u:
         raise HTTPException(status_code=422, detail="missing 'u'")
 
-    full_url = unquote(raw_u).strip()
-    p = urlparse(full_url)
+    orig_full = unquote(raw_u).strip()
+    p = urlparse(orig_full)
 
     if p.scheme not in {"http", "https"}:
         raise HTTPException(status_code=400, detail="only http/https allowed")
     if not p.netloc:
         raise HTTPException(status_code=400, detail="invalid URL")
 
-    host = (p.hostname or "").strip()
+    host = (p.hostname or "").strip().lower()
+    path = p.path or ""
 
-    if _is_blocked_hostname(host) or _host_is_private_ip_literal(host):
+    # SSRF guard 1: block obviously sensitive hosts
+    if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
         raise HTTPException(status_code=400, detail="forbidden host")
 
-    if _BAD_PATH_PATTERNS.search(p.path or ""):
+    # SSRF guard 2: block literal private IPs
+    if _host_is_private_ip_literal(host):
+        raise HTTPException(status_code=400, detail="forbidden host")
+
+    # Kill obvious login/logout bait
+    if _BAD_PATH_PATTERNS.search(path):
         raise HTTPException(status_code=404, detail="not an image")
 
-    return full_url, p.scheme, host
+    sanitized_full = _sanitize_tail_colon(orig_full)
+    return orig_full, sanitized_full, host, path
 
-# ---------- Endpoint ----------
+
+async def _try_fetch(
+    client: httpx.AsyncClient,
+    full_url: str,
+    host: str,
+    path: str,
+    alt: bool,
+) -> Optional[httpx.Response]:
+    """
+    alt=False -> with Referer
+    alt=True  -> without Referer
+    Return Response if it's a good candidate, else None to indicate "try next".
+    """
+    try:
+        r = await client.get(full_url, headers=_build_headers(host, path, alt=alt))
+    except httpx.RequestError:
+        # DNS/TLS/timeout/etc -> treat as "keep trying"
+        return None
+
+    # A TON of WordPress demo CDNs respond with fake 404 or 403 when
+    # hotlink-protected, so we only accept success-ish <400 here.
+    if r.status_code in (401, 403, 404, 451):
+        return None
+
+    if r.status_code >= 500:
+        # hard upstream failure -> surface as 502 immediately
+        raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
+
+    if r.status_code >= 400:
+        # other 4xx after we've tried all tricks -> we will treat as 404 later
+        return r
+
+    return r
+
+
+# ---------------------------------------------------------------------------
+# Endpoint
+# ---------------------------------------------------------------------------
+
 @router.get("/img")
 async def proxy_img(
-    u: str = Query(..., description="Absolute image URL, URL-encoded"),
+    u: str = Query(..., description="Absolute image URL (URL-encoded)"),
 ):
     """
-    CORS-safe image proxy:
-      - blocks SSRF
-      - retries around anti-hotlink 4xx (including fake 404)
-      - sanitizes accidental ':<digits>' suffixes in path
-      - streams bytes back with day-long cache
+    CORS-safe image proxy for thumbnails/posters.
+    Strategy:
+      1. Build up to 4 attempts:
+         a) original URL + spoofed Referer
+         b) original URL + no Referer
+         c) sanitized URL (strip :1) + spoofed Referer
+         d) sanitized URL + no Referer
+      2. First response <400 wins.
+      3. If final response is still 4xx, we give 404.
+      4. We only stream if Content-Type looks like image/*.
     """
-    original_url, _scheme, host = _parse_source_url(u)
-    sanitized_url = _sanitize_full_url(original_url)
+
+    orig_url, sani_url, host, path = _parse_source_url(u)
 
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
@@ -142,61 +239,50 @@ async def proxy_img(
         max_redirects=MAX_REDIRECTS,
         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
     ) as client:
-
-        # We'll try up to 4 attempts in worst case:
-        #  1) original + referer
-        #  2) original + no referer
-        #  3) sanitized + referer (only if sanitized differs)
-        #  4) sanitized + no referer (only if sanitized differs)
         attempts: list[tuple[str, bool]] = [
-            (original_url, False),
-            (original_url, True),
+            (orig_url, False),
+            (orig_url, True),
         ]
-        if sanitized_url != original_url:
+        if sani_url != orig_url:
             attempts.extend([
-                (sanitized_url, False),
-                (sanitized_url, True),
+                (sani_url, False),
+                (sani_url, True),
             ])
 
-        for idx, (url, alt_headers) in enumerate(attempts):
-            try:
-                r = await client.get(url, headers=_build_headers(host, alt=alt_headers))
-            except httpx.RequestError:
-                # DNS/TLS/timeout — keep trying remaining variants
+        winner: Optional[httpx.Response] = None
+        for full_url, alt in attempts:
+            r = await _try_fetch(client, full_url, host, path, alt)
+            if r is None:
+                # means "not good yet, keep looping"
                 continue
+            winner = r
+            # got something that is NOT one of the fake-hotlink 4xx codes
+            break
 
-            # If the first variant got 401/403/404/451, we'll automatically
-            # keep iterating to the next strategy (no referer / sanitized).
-            if r.status_code in (401, 403, 404, 451) and idx + 1 < len(attempts):
-                continue
+        if winner is None:
+            # everything was 401/403/404/451 or network error → treat as "not found"
+            raise HTTPException(status_code=404, detail="not found")
 
-            if r.status_code >= 500:
-                # treat hard 5xx as upstream failure
-                raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
+        # At this point winner.status_code could still be 4xx (other than those fakes)
+        if winner.status_code >= 400:
+            raise HTTPException(status_code=404, detail=f"blocked ({winner.status_code})")
 
-            if r.status_code >= 400:
-                # after exhausting strategies, 4xx means "not available"
-                raise HTTPException(status_code=404, detail=f"blocked ({r.status_code})")
+        ct = winner.headers.get("Content-Type", "")
+        if not _looks_like_image(ct):
+            raise HTTPException(status_code=404, detail="not an image")
 
-            ct = r.headers.get("Content-Type", "")
-            if not _looks_like_image(ct):
-                # fetched something unexpected (HTML, etc.)
-                raise HTTPException(status_code=404, detail="not an image")
+        resp = StreamingResponse(
+            winner.aiter_bytes(),
+            status_code=200,
+            media_type=ct.split(";", 1)[0] if ct else "application/octet-stream",
+        )
 
-            resp = StreamingResponse(
-                r.aiter_bytes(),
-                status_code=200,
-                media_type=ct.split(";", 1)[0] if ct else "application/octet-stream",
-            )
+        if "Content-Length" in winner.headers:
+            resp.headers["Content-Length"] = winner.headers["Content-Length"]
 
-            if "Content-Length" in r.headers:
-                resp.headers["Content-Length"] = r.headers["Content-Length"]
+        resp.headers["Cache-Control"] = CACHE_CONTROL
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "*"
 
-            resp.headers["Cache-Control"] = CACHE_CONTROL
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "*"
-            return resp
-
-    # Nothing worked
-    raise HTTPException(status_code=404, detail="not found")
+        return resp
