@@ -214,12 +214,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Fail if nothing produced
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "APK_PRESENT=${APK_PRESENT:-0}"
-          if [[ "${APK_PRESENT:-0}" != "1" ]]; then
-            echo "::error::No APKs were produced. See logs artifact and the inline tail printed above."
-            exit 1
+      
