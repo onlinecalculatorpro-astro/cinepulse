@@ -16,6 +16,7 @@ import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
 import 'story_details.dart';
+import 'story_image_url.dart'; // <-- NEW import for resolveStoryImageUrl()
 
 class StoryCard extends StatefulWidget {
   const StoryCard({super.key, required this.story});
@@ -93,9 +94,9 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  Widget _ctaLeading() =>
-      _isWatchCta ? const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white)
-                  : const _Emoji(emoji: '📖', size: 18);
+  Widget _ctaLeading() => _isWatchCta
+      ? const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white)
+      : const _Emoji(emoji: '📖', size: 18);
 
   String _stripKindPrefix(String meta) {
     var out = meta;
@@ -108,14 +109,15 @@ class _StoryCardState extends State<StoryCard> {
 
   // ---------- Time helpers ----------
   static const List<String> _mon = [
-    'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
-    final m   = _mon[d.month - 1];
-    final y   = d.year;
+    final m = _mon[d.month - 1];
+    final y = d.year;
     var h = d.hour % 12;
     if (h == 0) h = 12;
     final mm = d.minute.toString().padLeft(2, '0');
@@ -154,34 +156,6 @@ class _StoryCardState extends State<StoryCard> {
   }
   // -----------------------------------
 
-  // ---------- Image URL sanitizer ----------
-  String _cleanImageUrl() {
-    final cand = (widget.story.posterUrl?.isNotEmpty == true)
-        ? widget.story.posterUrl!
-        : (widget.story.thumbUrl ?? '');
-
-    if (cand.isEmpty) return '';
-
-    // 1. If the URL contains demo.tagdiv.com anywhere -> reject.
-    if (cand.contains('demo.tagdiv.com')) return '';
-
-    // 2. If it's our proxy style /v1/img?u=..., extract inner u=... and
-    //    reject if THAT host is demo.tagdiv.com
-    final uri = Uri.tryParse(cand);
-    if (uri != null) {
-      final isProxy = uri.path.contains('/v1/img');
-      if (isProxy) {
-        final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
-        if (inner.contains('demo.tagdiv.com')) {
-          return '';
-        }
-      }
-    }
-
-    // Looks fine
-    return cand;
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -194,25 +168,37 @@ class _StoryCardState extends State<StoryCard> {
     final metaText = _stripKindPrefix(rawMeta);
 
     final DateTime? publishedAt = widget.story.publishedAt;
-    final DateTime? addedAt = widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
+    final DateTime? addedAt =
+        widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
     final String? addedText = (addedAt != null)
         ? _formatMetaLike(addedAt) +
-            (publishedAt != null ? ' (+${_formatGap(addedAt.difference(publishedAt))})' : '')
+            (publishedAt != null
+                ? ' (+${_formatGap(addedAt.difference(publishedAt))})'
+                : '')
         : null;
 
     final hasUrl = _linkUrl != null;
-    final imageUrl = _cleanImageUrl(); // <-- use sanitizer here
+
+    // ⬇⬇⬇ NEW: resolveStoryImageUrl() instead of local _cleanImageUrl()
+    final imageUrl = resolveStoryImageUrl(
+      widget.story.posterUrl,
+      widget.story.thumbUrl,
+    );
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
+      transform:
+          _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92)
-                      : scheme.surface.withOpacity(0.97),
+        color: isDark
+            ? const Color(0xFF181E2A).withOpacity(0.92)
+            : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
+          color: _hover
+              ? const Color(0x33dc2626)
+              : Colors.white.withOpacity(0.08),
           width: 1.5,
         ),
         boxShadow: [
@@ -227,7 +213,8 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => _openDetails(autoplay: _isWatchCta && _videoUrl != null),
+          onTap: () =>
+              _openDetails(autoplay: _isWatchCta && _videoUrl != null),
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
@@ -242,7 +229,9 @@ class _StoryCardState extends State<StoryCard> {
                     child: Hero(
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(18),
+                        ),
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
@@ -251,8 +240,10 @@ class _StoryCardState extends State<StoryCard> {
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
                                 alignment: Alignment.center,
-                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
-                                fadeInDuration: const Duration(milliseconds: 160),
+                                memCacheWidth:
+                                    (w.isFinite ? (w * 2).toInt() : 1600),
+                                fadeInDuration:
+                                    const Duration(milliseconds: 160),
                                 errorWidget: (_, __, ___) => Container(
                                   decoration: BoxDecoration(
                                     gradient: LinearGradient(
@@ -261,15 +252,18 @@ class _StoryCardState extends State<StoryCard> {
                                       colors: [
                                         isDark
                                             ? const Color(0xFF0F1625)
-                                            : scheme.surfaceVariant.withOpacity(0.2),
+                                            : scheme.surfaceVariant
+                                                .withOpacity(0.2),
                                         isDark
                                             ? const Color(0xFF1E2433)
-                                            : scheme.surfaceVariant.withOpacity(0.4),
+                                            : scheme.surfaceVariant
+                                                .withOpacity(0.4),
                                       ],
                                     ),
                                   ),
                                   child: Center(
-                                    child: _SampleIcon(kind: widget.story.kind),
+                                    child: _SampleIcon(
+                                        kind: widget.story.kind),
                                   ),
                                 ),
                               )
@@ -282,14 +276,19 @@ class _StoryCardState extends State<StoryCard> {
                                     colors: [
                                       isDark
                                           ? const Color(0xFF0F1625)
-                                          : scheme.surfaceVariant.withOpacity(0.2),
+                                          : scheme.surfaceVariant
+                                              .withOpacity(0.2),
                                       isDark
                                           ? const Color(0xFF1E2433)
-                                          : scheme.surfaceVariant.withOpacity(0.4),
+                                          : scheme.surfaceVariant
+                                              .withOpacity(0.4),
                                     ],
                                   ),
                                 ),
-                                child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                                child: Center(
+                                  child:
+                                      _SampleIcon(kind: widget.story.kind),
+                                ),
                               ),
                             Positioned.fill(
                               child: DecoratedBox(
@@ -316,7 +315,8 @@ class _StoryCardState extends State<StoryCard> {
                   Expanded(
                     child: Padding(
                       // tighter padding than original
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -329,11 +329,18 @@ class _StoryCardState extends State<StoryCard> {
                                 child: Wrap(
                                   spacing: 10,
                                   runSpacing: 4,
-                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  crossAxisAlignment:
+                                      WrapCrossAlignment.center,
                                   children: [
-                                    _timePill(emoji: '🕐', text: metaText),
+                                    _timePill(
+                                      emoji: '🕐',
+                                      text: metaText,
+                                    ),
                                     if (addedText != null)
-                                      _timePill(emoji: '🕐', text: addedText),
+                                      _timePill(
+                                        emoji: '🕐',
+                                        text: addedText,
+                                      ),
                                   ],
                                 ),
                               ),
@@ -351,7 +358,9 @@ class _StoryCardState extends State<StoryCard> {
                                 fontSize: 14.5,
                                 height: 1.26,
                                 fontWeight: FontWeight.w800,
-                                color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                                color: isDark
+                                    ? Colors.white.withOpacity(0.96)
+                                    : scheme.onSurface,
                               ),
                             ),
                           ),
@@ -361,28 +370,35 @@ class _StoryCardState extends State<StoryCard> {
                               Expanded(
                                 child: Semantics(
                                   button: true,
-                                  label: '${_ctaLabel} ${widget.story.title}',
+                                  label:
+                                      '${_ctaLabel} ${widget.story.title}',
                                   child: SizedBox(
                                     height: 40,
                                     child: ElevatedButton.icon(
                                       icon: _ctaLeading(),
                                       onPressed: hasUrl
                                           ? () {
-                                              if (_isWatchCta && _videoUrl != null) {
-                                                _openDetails(autoplay: true);
+                                              if (_isWatchCta &&
+                                                  _videoUrl != null) {
+                                                _openDetails(
+                                                    autoplay: true);
                                               } else {
-                                                _openExternalLink(context);
+                                                _openExternalLink(
+                                                    context);
                                               }
                                             }
                                           : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
-                                        backgroundColor: const Color(0xFFdc2626),
+                                        backgroundColor:
+                                            const Color(0xFFdc2626),
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(8),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
                                         ),
-                                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 12),
                                         textStyle: const TextStyle(
                                           fontWeight: FontWeight.w700,
                                           fontSize: 14,
@@ -397,11 +413,17 @@ class _StoryCardState extends State<StoryCard> {
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
-                                  final saved = SavedStore.instance.isSaved(widget.story.id);
+                                  final saved =
+                                      SavedStore.instance.isSaved(
+                                          widget.story.id);
                                   return _ActionIconBox(
                                     tooltip: saved ? 'Saved' : 'Save',
-                                    onTap: () => SavedStore.instance.toggle(widget.story.id),
-                                    icon: const _Emoji(emoji: '🔖', size: 18),
+                                    onTap: () => SavedStore.instance
+                                        .toggle(widget.story.id),
+                                    icon: const _Emoji(
+                                      emoji: '🔖',
+                                      size: 18,
+                                    ),
                                   );
                                 },
                               ),
@@ -409,7 +431,10 @@ class _StoryCardState extends State<StoryCard> {
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
-                                icon: const _Emoji(emoji: '📤', size: 18),
+                                icon: const _Emoji(
+                                  emoji: '📤',
+                                  size: 18,
+                                ),
                               ),
                             ],
                           ),
@@ -546,7 +571,8 @@ class _ActionIconBox extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
+        color:
+            isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
@@ -554,7 +580,7 @@ class _ActionIconBox extends StatelessWidget {
           child: const SizedBox(
             width: 36,
             height: 36,
-            child: Center(child: null), // icon drawn below with Stack
+            child: Center(child: null), // (icon drawn with Stack in caller if needed)
           ),
         ),
       ),
