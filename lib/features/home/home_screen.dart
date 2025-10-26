@@ -562,8 +562,8 @@ class _FeedListState extends State<_FeedList>
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
-      mainAxisSpacing: 16,
-      crossAxisSpacing: 16,
+      mainAxisSpacing: 12,     //adjust this for padding
+      crossAxisSpacing: 12,    //adjust this for padding
       childAspectRatio: ratio,
     );
   }
@@ -582,7 +582,7 @@ class _FeedListState extends State<_FeedList>
             final textScale = MediaQuery.textScaleFactorOf(context);
             final gridDelegate = _gridDelegateFor(w, textScale);
 
-            final horizontalPad = 16.0;
+            final horizontalPad = 12.0;  //adjust this for padding
             final topPad = 0.0;
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
