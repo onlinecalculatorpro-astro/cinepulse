@@ -13,12 +13,13 @@ import '../../core/models.dart';
 import '../../widgets/kind_badge.dart';
 import '../../widgets/smart_video_player.dart';
 import 'ott_badge.dart';
+import 'story_image_url.dart'; // <-- same helper as StoryCard
 
 class StoryDetailsScreen extends StatefulWidget {
   const StoryDetailsScreen({
     super.key,
     required this.story,
-    this.autoplay = false, // autoplay is only relevant for inline video
+    this.autoplay = false, // autoplay only matters for inline video
   });
 
   final Story story;
@@ -29,7 +30,7 @@ class StoryDetailsScreen extends StatefulWidget {
 }
 
 class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
-  // video player is mounted inline in the hero/header when active
+  // we render the <SmartVideoPlayer> inline in the header hero when active
   bool _showPlayer = false;
   final _heroPlayerKey = GlobalKey();
 
@@ -46,7 +47,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return u;
   }
 
-  /// Prefer an inline playable URL (YouTube etc.) over just the article link.
+  /// Prefer an inline-playable URL (YouTube, etc.) over the article link.
   Uri? get _primaryUrl => _videoUrl ?? _canonicalUrl;
 
   bool get _hasVideo => _videoUrl != null;
@@ -56,9 +57,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final host = _primaryUrl?.host.toLowerCase() ?? '';
     final kind = widget.story.kind.toLowerCase();
     final source = (widget.story.source ?? '').toLowerCase();
-    final isYoutube = host.contains('youtube.com') ||
-        host.contains('youtu.be') ||
-        source == 'youtube';
+    final isYoutube =
+        host.contains('youtube.com') || host.contains('youtu.be') || source == 'youtube';
     return isYoutube || kind == 'trailer';
   }
 
@@ -94,9 +94,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened',
-            ),
+            content:
+                Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
           ),
         );
       }
@@ -148,7 +147,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // dynamic app bar height:
+    // dynamic SliverAppBar height:
     // - if player is showing: reserve 16:9 video box + controls row height
     // - else: fixed hero height (taller on tablet/desktop)
     final double expandedHeight = _showPlayer
@@ -178,16 +177,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                 builder: (_, __) {
                   final saved = SavedStore.instance.isSaved(widget.story.id);
                   return IconButton(
-                    tooltip: saved
-                        ? 'Remove from Saved'
-                        : 'Save bookmark',
-                    onPressed: () =>
-                        SavedStore.instance.toggle(widget.story.id),
-                    icon: Icon(
-                      saved
-                          ? Icons.bookmark
-                          : Icons.bookmark_add_outlined,
-                    ),
+                    tooltip: saved ? 'Remove from Saved' : 'Save bookmark',
+                    onPressed: () => SavedStore.instance.toggle(widget.story.id),
+                    icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
                   );
                 },
               ),
@@ -225,23 +217,18 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
             ),
           ),
 
-          // body content
+          // PAGE BODY
           SliverToBoxAdapter(
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
                   // big bottom pad so the bottom nav doesn't cover CTA
-                  padding: const EdgeInsets.fromLTRB(
-                    16,
-                    16,
-                    16,
-                    96,
-                  ),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // title
+                      // headline
                       Text(
                         widget.story.title,
                         style: GoogleFonts.inter(
@@ -253,26 +240,17 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // badges row
+                      // badges + meta line
                       Wrap(
                         crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 8,
                         runSpacing: 6,
                         children: [
-                          KindBadge(
-                            widget.story.kindLabel ??
-                                widget.story.kind,
-                          ),
-                          OttBadge.fromStory(
-                            widget.story,
-                            dense: true,
-                          ),
+                          KindBadge(widget.story.kindLabel ?? widget.story.kind),
+                          OttBadge.fromStory(widget.story, dense: true),
                           Text(
                             widget.story.metaLine,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                                   color: cs.onSurfaceVariant,
                                 ),
                           ),
@@ -281,7 +259,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 16),
 
-                      // summary / description
+                      // summary
                       if ((widget.story.summary ?? '').isNotEmpty)
                         Text(
                           widget.story.summary!,
@@ -292,7 +270,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           ),
                         ),
 
-                      // optional language / genre chips
+                      // optional language/genre facets
                       if (widget.story.languages.isNotEmpty ||
                           widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
@@ -303,14 +281,12 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                             if (widget.story.languages.isNotEmpty)
                               _Facet(
                                 label: 'Language',
-                                value: widget.story.languages
-                                    .join(', '),
+                                value: widget.story.languages.join(', '),
                               ),
                             if (widget.story.genres.isNotEmpty)
                               _Facet(
                                 label: 'Genre',
-                                value: widget.story.genres
-                                    .join(', '),
+                                value: widget.story.genres.join(', '),
                               ),
                           ],
                         ),
@@ -331,17 +307,14 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                       if (_hasVideo) {
                                         _openPlayerInHeader();
                                       } else {
-                                        _openExternalPrimary(
-                                          context,
-                                        );
+                                        _openExternalPrimary(context);
                                       }
                                     }
                                   : null,
                               icon: Icon(
                                 _isWatchCta
                                     ? Icons.play_arrow_rounded
-                                    : Icons
-                                        .open_in_new_rounded,
+                                    : Icons.open_in_new_rounded,
                               ),
                               label: Text(_ctaLabel),
                             ),
@@ -356,15 +329,14 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           AnimatedBuilder(
                             animation: SavedStore.instance,
                             builder: (_, __) {
-                              final saved = SavedStore.instance
-                                  .isSaved(widget.story.id);
+                              final saved =
+                                  SavedStore.instance.isSaved(widget.story.id);
                               return IconButton.filledTonal(
                                 tooltip: saved
                                     ? 'Remove from Saved'
                                     : 'Save bookmark',
                                 onPressed: () =>
-                                    SavedStore.instance
-                                        .toggle(widget.story.id),
+                                    SavedStore.instance.toggle(widget.story.id),
                                 icon: Icon(
                                   saved
                                       ? Icons.bookmark
@@ -387,7 +359,11 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   }
 }
 
-/* ---------------- HEADER HERO (image + optional player) ---------------- */
+/* ---------------- HEADER HERO ----------------
+   This is the big top section in StoryDetails:
+   - Shows the same hero image as the StoryCard (for smooth Hero animation).
+   - Can swap that image out for an inline <SmartVideoPlayer>.
+------------------------------------------------ */
 
 class _HeaderHero extends StatelessWidget {
   const _HeaderHero({
@@ -407,53 +383,20 @@ class _HeaderHero extends StatelessWidget {
   final VoidCallback onEndedPlayer;
   final ValueChanged<Object> onErrorPlayer;
 
-  // same idea as StoryCard._cleanImageUrl(), plus stricter /v1/img rejection
-  String _cleanImageUrlForStory(Story s) {
-    // prefer posterUrl, fallback to thumbUrl
-    final cand = (s.posterUrl?.isNotEmpty == true)
-        ? s.posterUrl!
-        : (s.thumbUrl ?? '');
-
-    if (cand.isEmpty) return '';
-
-    // 1. nuke obvious garbage domains
-    if (cand.contains('demo.tagdiv.com')) return '';
-
-    final uri = Uri.tryParse(cand);
-    if (uri != null) {
-      final pathLower = uri.path.toLowerCase();
-
-      // 2. if it's our proxy (/v1/img?...), just don't use it in detail header.
-      //    on web this causes CORS + 404 noise.
-      if (pathLower.contains('/v1/img')) {
-        return '';
-      }
-
-      // 3. if proxy-style URL has an inner "u"/"url" param that points to
-      //    demo.tagdiv.com, also reject
-      final inner =
-          uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
-      if (inner.contains('demo.tagdiv.com')) {
-        return '';
-      }
-    }
-
-    return cand;
-  }
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final imgUrl = _cleanImageUrlForStory(story);
+    // CRUCIAL: same resolver as StoryCard so Hero uses the exact same URL.
+    final imgUrl = resolveStoryImageUrl(story.posterUrl, story.thumbUrl);
 
     return Hero(
       tag: 'thumb-${story.id}',
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. background image OR gradient fallback
+          // background image OR gradient fallback
           if (imgUrl.isNotEmpty)
             CachedNetworkImage(
               imageUrl: imgUrl,
@@ -502,16 +445,13 @@ class _HeaderHero extends StatelessWidget {
               ),
             ),
 
-          // 2. if player is active, overlay the player
+          // inline player overlay (if user tapped Watch)
           if (showPlayer && (videoUrl?.isNotEmpty ?? false))
             Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
                     child: SmartVideoPlayer(
@@ -526,7 +466,7 @@ class _HeaderHero extends StatelessWidget {
               ),
             )
           else
-            // 3. otherwise dark gradient at bottom so title area is readable
+            // dark gradient at bottom so title/meta row sits on readable bg
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
@@ -552,7 +492,6 @@ class _HeaderHero extends StatelessWidget {
 
 class _Facet extends StatelessWidget {
   const _Facet({required this.label, required this.value});
-
   final String label;
   final String value;
 
