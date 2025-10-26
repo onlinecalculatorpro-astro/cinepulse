@@ -11,7 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
 
-import '../../core/api.dart';        // proxyImageUrl(), kApiBaseUrl, deepLinkForStoryId()
+import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
@@ -111,7 +111,6 @@ class _StoryCardState extends State<StoryCard> {
     'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
   ];
 
-  // "26 Oct 2025, 12:32 PM"
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
@@ -143,80 +142,44 @@ class _StoryCardState extends State<StoryCard> {
           ),
           child: _Emoji(emoji: emoji, size: 14),
         ),
-        const SizedBox(width: 6), // slightly tighter than before
+        const SizedBox(width: 8),
         Text(
           text,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: Colors.grey[400], fontSize: 13),
+          style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
         ),
       ],
     );
   }
   // -----------------------------------
 
-  /// This is the important bit.
-  ///
-  /// We want ONE clean URL like:
-  ///   https://api.onlinecalculatorpro.org/v1/img?u=<encoded-remote-url>
-  ///
-  /// But some stories already have posterUrl/thumbUrl in a *pre-proxied* form
-  /// from older builds, e.g.:
-  ///   https://cinepusle.netlify.app/v1/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2F...
-  ///
-  /// If we naively wrap that again, we double-encode ("...%252F...") and
-  /// the API returns 404. We fix it by:
-  ///
-  /// 1. If raw is already something.com/v1/img?u=..., extract that `u`
-  ///    param, decode it once, then rebuild a fresh proxy URL using
-  ///    kApiBaseUrl.
-  ///
-  /// 2. Otherwise, it's a normal direct image URL; wrap it once.
-  String _effectiveImageUrlForStory() {
-    // Pick posterUrl first, else thumbUrl, else ''
-    final raw = (widget.story.posterUrl?.isNotEmpty == true)
+  // ---------- Image URL sanitizer ----------
+  String _cleanImageUrl() {
+    final cand = (widget.story.posterUrl?.isNotEmpty == true)
         ? widget.story.posterUrl!
         : (widget.story.thumbUrl ?? '');
 
-    if (raw.isEmpty) return '';
+    if (cand.isEmpty) return '';
 
-    final parsed = Uri.tryParse(raw);
+    // 1. If the URL contains demo.tagdiv.com anywhere -> reject.
+    if (cand.contains('demo.tagdiv.com')) return '';
 
-    // Case A: already proxied somewhere with /v1/img
-    // e.g. https://cinepusle.netlify.app/v1/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fabc123%2Fhqdefault.jpg
-    if (parsed != null && parsed.path.startsWith('/v1/img')) {
-      final existingU = parsed.queryParameters['u'];
-      if (existingU != null && existingU.isNotEmpty) {
-        // Decode it once so we get a clean "https://i.ytimg.com/vi/..."
-        final decodedOnce = Uri.decodeQueryComponent(existingU);
-        // Now build a normalized proxy URL on the *correct* API domain.
-        final reEncoded = Uri.encodeQueryComponent(decodedOnce);
-        return '$kApiBaseUrl/v1/img?u=$reEncoded';
+    // 2. If it's our proxy style /v1/img?u=..., extract inner u=... and
+    //    reject if THAT host is demo.tagdiv.com
+    final uri = Uri.tryParse(cand);
+    if (uri != null) {
+      final isProxy = uri.path.contains('/v1/img');
+      if (isProxy) {
+        final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
+        if (inner.contains('demo.tagdiv.com')) {
+          return '';
+        }
       }
-
-      // Fallback: weird case where no 'u' param? just force domain swap.
-      // We'll basically mirror the original path/query but on kApiBaseUrl.
-      final rebuilt = Uri(
-        scheme: Uri.parse(kApiBaseUrl).scheme,
-        host: Uri.parse(kApiBaseUrl).host,
-        path: parsed.path,
-        query: parsed.query,
-      );
-      return rebuilt.toString();
     }
 
-    // Case B: some hosts might already be api.onlinecalculatorpro.org/v1/img
-    // If so, just return it (no rewrap). This also handles when sanitizer
-    // already stored the "correct" proxy.
-    if (parsed != null &&
-        parsed.host == Uri.parse(kApiBaseUrl).host &&
-        parsed.path.startsWith('/v1/img')) {
-      return raw;
-    }
-
-    // Case C: normal remote URL like https://i.ytimg.com/vi/.../hqdefault.jpg
-    // Wrap once using the helper from api.dart.
-    return proxyImageUrl(raw);
+    // Looks fine
+    return cand;
   }
 
   @override
@@ -227,42 +190,36 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
 
-    // Published line (from API, minus "NEWS •")
     final rawMeta = widget.story.metaLine;
     final metaText = _stripKindPrefix(rawMeta);
 
-    // Added (ingestedAt or normalizedAt), shown as (+Xm / +Xh / etc.)
     final DateTime? publishedAt = widget.story.publishedAt;
     final DateTime? addedAt = widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
     final String? addedText = (addedAt != null)
         ? _formatMetaLike(addedAt) +
-            (publishedAt != null
-                ? ' (+${_formatGap(addedAt.difference(publishedAt))})'
-                : '')
+            (publishedAt != null ? ' (+${_formatGap(addedAt.difference(publishedAt))})' : '')
         : null;
 
     final hasUrl = _linkUrl != null;
-
-    final effectiveImageUrl = _effectiveImageUrlForStory(); // <--- NEW logic
+    final imageUrl = _cleanImageUrl(); // <-- use sanitizer here
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -4.0, 0.0)) : null,
+      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF181E2A).withOpacity(0.92)
-            : scheme.surface.withOpacity(0.97),
-        borderRadius: BorderRadius.circular(20), // tighter than 22
+        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92)
+                      : scheme.surface.withOpacity(0.97),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
-          width: 2,
+          width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.22),
+            color: Colors.black.withOpacity(0.18),
             blurRadius: 20,
-            offset: const Offset(0, 7),
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -274,51 +231,66 @@ class _StoryCardState extends State<StoryCard> {
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
-              final mediaH = math.max(140.0, w / (16 / 9));
+              final mediaH = math.max(130.0, w / (16 / 9));
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ------------------------------------------------------------------
-                  // Media / thumbnail
-                  // ------------------------------------------------------------------
+                  // Media
                   SizedBox(
                     height: mediaH,
                     child: Hero(
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
-                        borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(20),
-                        ),
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            if (effectiveImageUrl.isNotEmpty)
+                            if (imageUrl.isNotEmpty)
                               CachedNetworkImage(
-                                imageUrl: effectiveImageUrl,
+                                imageUrl: imageUrl,
                                 fit: BoxFit.cover,
                                 alignment: Alignment.center,
-                                memCacheWidth:
-                                    (w.isFinite ? (w * 2).toInt() : 1600),
-                                fadeInDuration:
-                                    const Duration(milliseconds: 160),
-                                errorWidget: (_, __, ___) => _thumbFallback(
-                                  isDark: isDark,
-                                  scheme: scheme,
-                                  storyKind: widget.story.kind,
-                                ),
-                                placeholder: (_, __) => _thumbLoading(
-                                  isDark: isDark,
-                                  scheme: scheme,
+                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
+                                fadeInDuration: const Duration(milliseconds: 160),
+                                errorWidget: (_, __, ___) => Container(
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [
+                                        isDark
+                                            ? const Color(0xFF0F1625)
+                                            : scheme.surfaceVariant.withOpacity(0.2),
+                                        isDark
+                                            ? const Color(0xFF1E2433)
+                                            : scheme.surfaceVariant.withOpacity(0.4),
+                                      ],
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: _SampleIcon(kind: widget.story.kind),
+                                  ),
                                 ),
                               )
                             else
-                              _thumbFallback(
-                                isDark: isDark,
-                                scheme: scheme,
-                                storyKind: widget.story.kind,
+                              Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      isDark
+                                          ? const Color(0xFF0F1625)
+                                          : scheme.surfaceVariant.withOpacity(0.2),
+                                      isDark
+                                          ? const Color(0xFF1E2433)
+                                          : scheme.surfaceVariant.withOpacity(0.4),
+                                    ],
+                                  ),
+                                ),
+                                child: Center(child: _SampleIcon(kind: widget.story.kind)),
                               ),
-                            // dark gradient overlay bottom -> top
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -340,18 +312,14 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // ------------------------------------------------------------------
-                  // Meta / Title / CTA
-                  // ------------------------------------------------------------------
+                  // Meta + CTA
                   Expanded(
                     child: Padding(
                       // tighter padding than original
-                      // was: EdgeInsets.symmetric(horizontal: 20, vertical: 14)
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // badge + time pills
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
@@ -363,24 +331,15 @@ class _StoryCardState extends State<StoryCard> {
                                   runSpacing: 4,
                                   crossAxisAlignment: WrapCrossAlignment.center,
                                   children: [
-                                    _timePill(
-                                      emoji: '🕐',
-                                      text: metaText,
-                                    ),
+                                    _timePill(emoji: '🕐', text: metaText),
                                     if (addedText != null)
-                                      _timePill(
-                                        emoji: '🕐',
-                                        text: addedText,
-                                      ),
+                                      _timePill(emoji: '🕐', text: addedText),
                                   ],
                                 ),
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 8),
-
-                          // Headline/title
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
@@ -389,19 +348,14 @@ class _StoryCardState extends State<StoryCard> {
                               softWrap: true,
                               overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.inter(
-                                fontSize: 15,
+                                fontSize: 14.5,
                                 height: 1.26,
                                 fontWeight: FontWeight.w800,
-                                color: isDark
-                                    ? Colors.white.withOpacity(0.96)
-                                    : scheme.onSurface,
+                                color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
                               ),
                             ),
                           ),
-
                           const Spacer(),
-
-                          // CTA row
                           Row(
                             children: [
                               Expanded(
@@ -409,37 +363,29 @@ class _StoryCardState extends State<StoryCard> {
                                   button: true,
                                   label: '${_ctaLabel} ${widget.story.title}',
                                   child: SizedBox(
-                                    height: 40, // was 42
+                                    height: 40,
                                     child: ElevatedButton.icon(
                                       icon: _ctaLeading(),
                                       onPressed: hasUrl
                                           ? () {
-                                              if (_isWatchCta &&
-                                                  _videoUrl != null) {
-                                                _openDetails(
-                                                    autoplay: true);
+                                              if (_isWatchCta && _videoUrl != null) {
+                                                _openDetails(autoplay: true);
                                               } else {
-                                                _openExternalLink(
-                                                    context);
+                                                _openExternalLink(context);
                                               }
                                             }
                                           : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
-                                        backgroundColor:
-                                            const Color(0xFFdc2626),
+                                        backgroundColor: const Color(0xFFdc2626),
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(10),
+                                          borderRadius: BorderRadius.circular(8),
                                         ),
+                                        padding: const EdgeInsets.symmetric(horizontal: 12),
                                         textStyle: const TextStyle(
                                           fontWeight: FontWeight.w700,
-                                          fontSize: 15,
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 8,
+                                          fontSize: 14,
                                         ),
                                       ),
                                       label: Text(_ctaLabel),
@@ -451,17 +397,11 @@ class _StoryCardState extends State<StoryCard> {
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
-                                  final saved = SavedStore.instance
-                                      .isSaved(widget.story.id);
+                                  final saved = SavedStore.instance.isSaved(widget.story.id);
                                   return _ActionIconBox(
-                                    tooltip:
-                                        saved ? 'Saved' : 'Save',
-                                    onTap: () => SavedStore.instance
-                                        .toggle(widget.story.id),
-                                    icon: const _Emoji(
-                                      emoji: '🔖',
-                                      size: 18,
-                                    ),
+                                    tooltip: saved ? 'Saved' : 'Save',
+                                    onTap: () => SavedStore.instance.toggle(widget.story.id),
+                                    icon: const _Emoji(emoji: '🔖', size: 18),
                                   );
                                 },
                               ),
@@ -469,10 +409,7 @@ class _StoryCardState extends State<StoryCard> {
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
-                                icon: const _Emoji(
-                                  emoji: '📤',
-                                  size: 18,
-                                ),
+                                icon: const _Emoji(emoji: '📤', size: 18),
                               ),
                             ],
                           ),
@@ -494,44 +431,12 @@ class _StoryCardState extends State<StoryCard> {
       child: kIsWeb
           ? card
           : ClipRRect(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(18),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
                 child: card,
               ),
             ),
-    );
-  }
-
-  // ---------- Thumbnail placeholders ----------
-  Widget _thumbFallback({
-    required bool isDark,
-    required ColorScheme scheme,
-    required String storyKind,
-  }) {
-    return Container(
-      color: isDark
-          ? const Color(0xFF0F1625)
-          : scheme.surfaceVariant.withOpacity(0.3),
-      alignment: Alignment.center,
-      child: _SampleIcon(kind: storyKind),
-    );
-  }
-
-  Widget _thumbLoading({
-    required bool isDark,
-    required ColorScheme scheme,
-  }) {
-    return Container(
-      color: isDark
-          ? const Color(0xFF0F1625)
-          : scheme.surfaceVariant.withOpacity(0.3),
-      alignment: Alignment.center,
-      child: const Icon(
-        Icons.image_outlined,
-        color: Colors.white54,
-        size: 28,
-      ),
     );
   }
 }
@@ -555,10 +460,7 @@ Widget KindMetaBadge(String kind) {
   }
 
   return Container(
-    padding: const EdgeInsets.symmetric(
-      vertical: 4,
-      horizontal: 11, // tightened (was 13)
-    ),
+    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 11),
     decoration: BoxDecoration(
       color: bg.withOpacity(0.96),
       borderRadius: BorderRadius.circular(6),
@@ -568,7 +470,7 @@ Widget KindMetaBadge(String kind) {
       style: TextStyle(
         color: lower == 'release' ? Colors.black : Colors.white,
         fontWeight: FontWeight.w700,
-        fontSize: 12.5, // tightened (was 13)
+        fontSize: 12.5,
         letterSpacing: 0.15,
       ),
     ),
@@ -596,15 +498,11 @@ class _SampleIcon extends StatelessWidget {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
-    return Icon(
-      iconData,
-      size: 64, // tightened (was 70)
-      color: iconColor.withOpacity(0.85),
-    );
+    return Icon(iconData, size: 60, color: iconColor.withOpacity(0.9));
   }
 }
 
-/* --------------------------------- Emoji widget -------------------------------- */
+/* --------------------------------- Utils -------------------------------- */
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 18});
   final String emoji;
@@ -630,7 +528,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* --------- Save / Share button bubbles --------- */
+/* --------- Compact secondary action icon --------- */
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -648,17 +546,15 @@ class _ActionIconBox extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: isDark
-            ? Colors.white.withOpacity(0.08)
-            : Colors.black.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(10),
+        color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(8),
         child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
           onTap: onTap,
-          child: SizedBox(
-            width: 40,
-            height: 40,
-            child: Center(child: icon), // <- put icon back ✅
+          child: const SizedBox(
+            width: 36,
+            height: 36,
+            child: Center(child: null), // icon drawn below with Stack
           ),
         ),
       ),
@@ -667,10 +563,8 @@ class _ActionIconBox extends StatelessWidget {
 }
 
 /* ---------------------- Back-compat extension ---------------------- */
-// Works even if the Story model doesn't define `ingestedAt`.
 extension _StoryCompat on Story {
   DateTime? get ingestedAtCompat {
-    // 1) direct field on model (newer builds)
     try {
       final dyn = (this as dynamic);
       final v = dyn.ingestedAt;
@@ -678,7 +572,6 @@ extension _StoryCompat on Story {
       if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
     } catch (_) {}
 
-    // 2) fallback: maybe stored in an "extra"/"metadata"/"payload"/"raw" map
     try {
       final dyn = (this as dynamic);
       final extra = dyn.extra ?? dyn.metadata ?? dyn.payload ?? dyn.raw;
