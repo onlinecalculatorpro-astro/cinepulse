@@ -11,7 +11,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
 
-import '../../core/api.dart';        // proxyImageUrl(), deepLinkForStoryId()
+import '../../core/api.dart';        // proxyImageUrl(), kApiBaseUrl, deepLinkForStoryId()
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
@@ -111,7 +111,7 @@ class _StoryCardState extends State<StoryCard> {
     'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
   ];
 
-  // Format like: 26 Oct 2025, 12:32 PM
+  // "26 Oct 2025, 12:32 PM"
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
@@ -143,7 +143,7 @@ class _StoryCardState extends State<StoryCard> {
           ),
           child: _Emoji(emoji: emoji, size: 14),
         ),
-        const SizedBox(width: 6), // UPDATED: was 8, tighten pill spacing
+        const SizedBox(width: 6), // slightly tighter than before
         Text(
           text,
           maxLines: 1,
@@ -155,6 +155,70 @@ class _StoryCardState extends State<StoryCard> {
   }
   // -----------------------------------
 
+  /// This is the important bit.
+  ///
+  /// We want ONE clean URL like:
+  ///   https://api.onlinecalculatorpro.org/v1/img?u=<encoded-remote-url>
+  ///
+  /// But some stories already have posterUrl/thumbUrl in a *pre-proxied* form
+  /// from older builds, e.g.:
+  ///   https://cinepusle.netlify.app/v1/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2F...
+  ///
+  /// If we naively wrap that again, we double-encode ("...%252F...") and
+  /// the API returns 404. We fix it by:
+  ///
+  /// 1. If raw is already something.com/v1/img?u=..., extract that `u`
+  ///    param, decode it once, then rebuild a fresh proxy URL using
+  ///    kApiBaseUrl.
+  ///
+  /// 2. Otherwise, it's a normal direct image URL; wrap it once.
+  String _effectiveImageUrlForStory() {
+    // Pick posterUrl first, else thumbUrl, else ''
+    final raw = (widget.story.posterUrl?.isNotEmpty == true)
+        ? widget.story.posterUrl!
+        : (widget.story.thumbUrl ?? '');
+
+    if (raw.isEmpty) return '';
+
+    final parsed = Uri.tryParse(raw);
+
+    // Case A: already proxied somewhere with /v1/img
+    // e.g. https://cinepusle.netlify.app/v1/img?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2Fabc123%2Fhqdefault.jpg
+    if (parsed != null && parsed.path.startsWith('/v1/img')) {
+      final existingU = parsed.queryParameters['u'];
+      if (existingU != null && existingU.isNotEmpty) {
+        // Decode it once so we get a clean "https://i.ytimg.com/vi/..."
+        final decodedOnce = Uri.decodeQueryComponent(existingU);
+        // Now build a normalized proxy URL on the *correct* API domain.
+        final reEncoded = Uri.encodeQueryComponent(decodedOnce);
+        return '$kApiBaseUrl/v1/img?u=$reEncoded';
+      }
+
+      // Fallback: weird case where no 'u' param? just force domain swap.
+      // We'll basically mirror the original path/query but on kApiBaseUrl.
+      final rebuilt = Uri(
+        scheme: Uri.parse(kApiBaseUrl).scheme,
+        host: Uri.parse(kApiBaseUrl).host,
+        path: parsed.path,
+        query: parsed.query,
+      );
+      return rebuilt.toString();
+    }
+
+    // Case B: some hosts might already be api.onlinecalculatorpro.org/v1/img
+    // If so, just return it (no rewrap). This also handles when sanitizer
+    // already stored the "correct" proxy.
+    if (parsed != null &&
+        parsed.host == Uri.parse(kApiBaseUrl).host &&
+        parsed.path.startsWith('/v1/img')) {
+      return raw;
+    }
+
+    // Case C: normal remote URL like https://i.ytimg.com/vi/.../hqdefault.jpg
+    // Wrap once using the helper from api.dart.
+    return proxyImageUrl(raw);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -163,31 +227,24 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
 
-    // Published line, cleaned
+    // Published line (from API, minus "NEWS •")
     final rawMeta = widget.story.metaLine;
     final metaText = _stripKindPrefix(rawMeta);
 
-    // Added time (ingested or normalized), formatted like meta
+    // Added (ingestedAt or normalizedAt), shown as (+Xm / +Xh / etc.)
     final DateTime? publishedAt = widget.story.publishedAt;
     final DateTime? addedAt = widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
     final String? addedText = (addedAt != null)
         ? _formatMetaLike(addedAt) +
-            (publishedAt != null ? ' (+${_formatGap(addedAt.difference(publishedAt))})' : '')
+            (publishedAt != null
+                ? ' (+${_formatGap(addedAt.difference(publishedAt))})'
+                : '')
         : null;
 
     final hasUrl = _linkUrl != null;
 
-    // Pick posterUrl first, then thumbUrl
-    final rawImageUrl = (widget.story.posterUrl?.isNotEmpty == true)
-        ? widget.story.posterUrl!
-        : (widget.story.thumbUrl ?? '');
+    final effectiveImageUrl = _effectiveImageUrlForStory(); // <--- NEW logic
 
-    // Route through API proxy so web can load images without CORS trouble
-    final effectiveImageUrl = rawImageUrl.isNotEmpty
-        ? proxyImageUrl(rawImageUrl) // <-- NEW
-        : '';
-
-    // Outer card visuals
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
@@ -196,7 +253,7 @@ class _StoryCardState extends State<StoryCard> {
         color: isDark
             ? const Color(0xFF181E2A).withOpacity(0.92)
             : scheme.surface.withOpacity(0.97),
-        borderRadius: BorderRadius.circular(20), // UPDATED: was 22, slightly tighter
+        borderRadius: BorderRadius.circular(20), // tighter than 22
         border: Border.all(
           color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
           width: 2,
@@ -204,8 +261,8 @@ class _StoryCardState extends State<StoryCard> {
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.22),
-            blurRadius: 20, // UPDATED: was 24
-            offset: const Offset(0, 7), // UPDATED: was (0,8)
+            blurRadius: 20,
+            offset: const Offset(0, 7),
           ),
         ],
       ),
@@ -231,7 +288,7 @@ class _StoryCardState extends State<StoryCard> {
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
                         borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(20), // UPDATED match card radius
+                          top: Radius.circular(20),
                         ),
                         child: Stack(
                           fit: StackFit.expand,
@@ -261,7 +318,7 @@ class _StoryCardState extends State<StoryCard> {
                                 scheme: scheme,
                                 storyKind: widget.story.kind,
                               ),
-                            // dark gradient overlay at bottom
+                            // dark gradient overlay bottom -> top
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -288,21 +345,21 @@ class _StoryCardState extends State<StoryCard> {
                   // ------------------------------------------------------------------
                   Expanded(
                     child: Padding(
-                      // UPDATED: tighten padding
-                      // was EdgeInsets.symmetric(horizontal: 20, vertical: 14)
+                      // tighter padding than original
+                      // was: EdgeInsets.symmetric(horizontal: 20, vertical: 14)
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // kind badge + time pills
+                          // badge + time pills
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               KindMetaBadge(kind),
-                              const SizedBox(width: 8), // UPDATED: was 10
+                              const SizedBox(width: 8),
                               Expanded(
                                 child: Wrap(
-                                  spacing: 10,        // UPDATED: was 12
+                                  spacing: 10,
                                   runSpacing: 4,
                                   crossAxisAlignment: WrapCrossAlignment.center,
                                   children: [
@@ -321,9 +378,9 @@ class _StoryCardState extends State<StoryCard> {
                             ],
                           ),
 
-                          const SizedBox(height: 8), // UPDATED: was 10
+                          const SizedBox(height: 8),
 
-                          // Title
+                          // Headline/title
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
@@ -344,16 +401,15 @@ class _StoryCardState extends State<StoryCard> {
 
                           const Spacer(),
 
-                          // CTA row with Save / Share
+                          // CTA row
                           Row(
                             children: [
                               Expanded(
                                 child: Semantics(
                                   button: true,
-                                  label:
-                                      '${_ctaLabel} ${widget.story.title}',
+                                  label: '${_ctaLabel} ${widget.story.title}',
                                   child: SizedBox(
-                                    height: 40, // UPDATED: was 42
+                                    height: 40, // was 42
                                     child: ElevatedButton.icon(
                                       icon: _ctaLeading(),
                                       onPressed: hasUrl
@@ -384,14 +440,14 @@ class _StoryCardState extends State<StoryCard> {
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 12,
                                           vertical: 8,
-                                        ), // UPDATED: slightly tighter button padding
+                                        ),
                                       ),
                                       label: Text(_ctaLabel),
                                     ),
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 8), // UPDATED: was 10
+                              const SizedBox(width: 8),
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
@@ -409,7 +465,7 @@ class _StoryCardState extends State<StoryCard> {
                                   );
                                 },
                               ),
-                              const SizedBox(width: 6), // UPDATED: was 8
+                              const SizedBox(width: 6),
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
@@ -432,14 +488,13 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // keep hover lift effect + glass blur mobile
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: kIsWeb
           ? card
           : ClipRRect(
-              borderRadius: BorderRadius.circular(20), // UPDATED match card
+              borderRadius: BorderRadius.circular(20),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
                 child: card,
@@ -448,7 +503,7 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Small helpers for the thumbnail placeholder / error states
+  // ---------- Thumbnail placeholders ----------
   Widget _thumbFallback({
     required bool isDark,
     required ColorScheme scheme,
@@ -502,7 +557,7 @@ Widget KindMetaBadge(String kind) {
   return Container(
     padding: const EdgeInsets.symmetric(
       vertical: 4,
-      horizontal: 11, // UPDATED: was 13
+      horizontal: 11, // tightened (was 13)
     ),
     decoration: BoxDecoration(
       color: bg.withOpacity(0.96),
@@ -513,7 +568,7 @@ Widget KindMetaBadge(String kind) {
       style: TextStyle(
         color: lower == 'release' ? Colors.black : Colors.white,
         fontWeight: FontWeight.w700,
-        fontSize: 12.5, // UPDATED: was 13
+        fontSize: 12.5, // tightened (was 13)
         letterSpacing: 0.15,
       ),
     ),
@@ -541,11 +596,15 @@ class _SampleIcon extends StatelessWidget {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
-    return Icon(iconData, size: 64, color: iconColor.withOpacity(0.85)); // UPDATED: size 70 -> 64
+    return Icon(
+      iconData,
+      size: 64, // tightened (was 70)
+      color: iconColor.withOpacity(0.85),
+    );
   }
 }
 
-/* --------------------------------- Utils -------------------------------- */
+/* --------------------------------- Emoji widget -------------------------------- */
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 18});
   final String emoji;
@@ -571,7 +630,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* --------- Compact secondary action icon --------- */
+/* --------- Save / Share button bubbles --------- */
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -589,15 +648,17 @@ class _ActionIconBox extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
+        color: isDark
+            ? Colors.white.withOpacity(0.08)
+            : Colors.black.withOpacity(0.06),
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
-          child: const SizedBox(
+          child: SizedBox(
             width: 40,
             height: 40,
-            child: Center(child: SizedBox.shrink()),
+            child: Center(child: icon), // <- put icon back ✅
           ),
         ),
       ),
@@ -617,7 +678,7 @@ extension _StoryCompat on Story {
       if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
     } catch (_) {}
 
-    // 2) fallback: maybe stored in an "extra"/"payload"/"raw" map
+    // 2) fallback: maybe stored in an "extra"/"metadata"/"payload"/"raw" map
     try {
       final dyn = (this as dynamic);
       final extra = dyn.extra ?? dyn.metadata ?? dyn.payload ?? dyn.raw;
