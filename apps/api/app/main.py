@@ -1,4 +1,66 @@
 # apps/api/app/main.py
+#
+# CINEPULSE PUBLIC FEED API
+#
+# LIFECYCLE OVERVIEW (VERY IMPORTANT - DO NOT BREAK THIS CONTRACT):
+#
+#   scheduler  → polls sources (RSS / YouTube) and enqueues raw events
+#
+#   workers    → normalize_event()
+#                 - builds canonical story dict:
+#                      * title (generate_safe_title)
+#                      * summary (summarize_story_safe)
+#                      * kind / kind_meta
+#                      * verticals
+#                      * tags
+#                      * timestamps
+#                      * hero artwork (thumb_url, poster_url, etc.)
+#                      * risk flags:
+#                           is_risky     → True if there is legal/PR heat
+#                           gossip_only  → True if it's ONLY personal-life drama
+#                 - enqueues that dict to "sanitize"
+#
+#   sanitizer  → sanitize_story()
+#                 - hard gate:
+#                      * if gossip_only == True → reject ("invalid")
+#                        (pure breakup/leaked chat/affair-without-work-context
+#                        NEVER reaches the public)
+#                 - fuzzy topic dedupe:
+#                      * suppress near-duplicate followups on same topic
+#                      * only first instance is allowed to publish
+#                 - pushes ACCEPTED stories to Redis FEED_KEY
+#                 - trims FEED_KEY
+#                 - broadcasts realtime
+#
+#   api (THIS FILE) → /v1/feed, /v1/search, /v1/story
+#                      * ONLY reads from FEED_KEY
+#                      * NEVER bypasses sanitizer
+#                      * NEVER rewrites meaning or tone of title/summary
+#                        - the attribution like "According to <domain>:" or
+#                          "A YouTube video claims:" MUST remain intact
+#                        - we are not allowed to reassert a risky claim
+#                          as fact by "cleaning it up"
+#                      * allowed to do PRESENTATION-ONLY cleanup:
+#                          - normalize whitespace
+#                          - proxy/strip junk thumbnails
+#                          - fill missing fields (poster_url fallback, etc.)
+#
+# POLICY REMINDERS:
+# - FEED_KEY is the public feed. It is written ONLY by sanitizer.
+#   If you ever consider reading from anywhere else or mutating FEED_KEY here,
+#   stop. That bypasses safety, attribution, gossip filter, and dedupe.
+#
+# - This API CAN surface spicy / dramatic on-screen content (for example,
+#   "Bigg Boss fight", "contestant meltdown", "fan chants in stadium",
+#   match taunts, etc.) because sanitizer will allow work/competition context.
+#   It MUST NOT surface pure off-screen personal-life gossip (breakups,
+#   leaked chats, dating rumors with zero work relevance). Those entries are
+#   flagged gossip_only=True and sanitizer already rejects them.
+#
+# - The summary and title served here already have attribution and softened
+#   phrasing for risky/legal content. This file MUST NOT strip or edit that.
+#   We can clean whitespace and add a final period. We cannot change the meaning.
+
 from __future__ import annotations
 
 import json
@@ -25,6 +87,15 @@ from apps.api.app.config import settings  # central env/config (redis_url, feed_
 # -----------------------------------------------------------------------------
 # Redis client (shared with sanitizer)
 # -----------------------------------------------------------------------------
+# NOTE:
+# We assume FEED_KEY in Redis only ever contains items that already passed
+# through sanitizer.sanitize_story(). That means:
+#   - gossip_only stories are already filtered out
+#   - risky stories are already attributed ("According to <domain>: ...")
+#   - dedupe already enforced
+#
+# DO NOT insert directly into FEED_KEY from anywhere else.
+# DO NOT serve any other Redis list to clients.
 
 try:
     import redis  # type: ignore
@@ -40,7 +111,8 @@ RL_FEED_PER_MIN = int(os.getenv("RL_FEED_PER_MIN", "120"))
 RL_SEARCH_PER_MIN = int(os.getenv("RL_SEARCH_PER_MIN", "90"))
 RL_STORY_PER_MIN = int(os.getenv("RL_STORY_PER_MIN", "240"))
 
-# Public base URL for this API (used to build /v1/img?u=...)
+# Public base URL for this API.
+# Used to build /v1/img?u=... proxy URLs for thumbnails/posters.
 API_PUBLIC_BASE_URL = os.getenv(
     "API_PUBLIC_BASE_URL",
     "https://api.onlinecalculatorpro.org",
@@ -54,6 +126,8 @@ _redis_client = redis.from_url(
     socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0")),
 )
 
+# FEED_KEY comes from settings and MUST match sanitizer's FEED_KEY.
+# This is the only source of truth for the public app feed.
 FEED_KEY = settings.feed_key  # Redis LIST newest-first (LPUSH by sanitizer)
 
 # -----------------------------------------------------------------------------
@@ -75,6 +149,10 @@ except Exception:
 # -----------------------------------------------------------------------------
 # Pydantic response models
 # -----------------------------------------------------------------------------
+# NOTE:
+# These fields mirror what sanitizer wrote. We should not invent new
+# narrative. We are allowed to fill in missing poster_url from poster,
+# etc., but not change what the story is claiming.
 
 class Story(BaseModel):
     # core story
@@ -130,6 +208,8 @@ class ErrorBody(BaseModel):
 
 
 class FeedTab(str, Enum):
+    # Legacy "tabs" in the client UI.
+    # These are presentation filters, not separate datasets.
     all = "all"
     trailers = "trailers"
     ott = "ott"
@@ -146,6 +226,10 @@ app = FastAPI(
     version="0.5.2",
     description=(
         "Public feed API /v1/feed.\n"
+        "The feed you see here has already passed sanitizer.\n"
+        "Sanitizer is the only component allowed to push stories into the public feed.\n"
+        "This API must not reword titles/summaries in a way that removes attribution.\n"
+        "\n"
         "Supports vertical filtering (?vertical=entertainment|sports), "
         "cursor pagination, realtime fanout, and basic rate limiting."
     ),
@@ -222,7 +306,9 @@ def _client_ip(req: Request) -> str:
 def limiter(route: str, limit_per_min: int) -> Callable:
     """
     Very small per-IP, per-route, per-minute rate limiter backed by Redis INCR.
-    If Redis is down, we soft-allow instead of 500'ing everything.
+    NOTE:
+    If Redis is down, we *soft-allow* instead of 500'ing. We don't want to
+    DoS the whole app just because rate limit storage hiccups.
     """
     async def _limit_dep(req: Request):
         ip = _client_ip(req)
@@ -238,8 +324,7 @@ def limiter(route: str, limit_per_min: int) -> Callable:
                     detail=f"Rate limit exceeded for {route}; try again shortly",
                 )
         except redis.RedisError:
-            # If we can't rate-limit because Redis hiccuped,
-            # we don't block the request.
+            # If Redis is unhappy, we don't hard-block.
             return
     return _limit_dep
 
@@ -247,6 +332,11 @@ def limiter(route: str, limit_per_min: int) -> Callable:
 # -----------------------------------------------------------------------------
 # Feed filtering logic
 # -----------------------------------------------------------------------------
+# NOTE:
+# The tab logic is presentation sugar for the client, not a safety layer.
+# Safety already happened in sanitizer. We must not "un-filter" gossip here,
+# and we don't — we literally never see gossip_only=True because sanitizer
+# refused to publish it to FEED_KEY in the first place.
 
 TRAILER_KINDS = {"trailer", "teaser", "clip", "featurette", "song", "poster"}
 OTT_ALIGNED_KINDS = {"release-ott", "ott", "acquisition"}
@@ -260,8 +350,9 @@ BAD_IMAGE_HOSTS = {
 
 def _is_bad_image_host(u: str) -> bool:
     """
-    Returns True if `u` points at a known junk / dead / demo CDN host
-    (e.g. demo.tagdiv.com), so we should drop it instead of proxying.
+    True if `u` points at a known junk / dead / demo CDN host.
+    We drop these so the client doesn't spam 404s and doesn't render ugly
+    watermarked fake cards.
     """
     try:
         p = urlparse(u)
@@ -296,7 +387,11 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
 
 
 def _redis_lrange(key: str, start: int, stop: int) -> list[str]:
-    """Thin wrapper with error -> 503 if Redis is unhappy."""
+    """
+    Thin wrapper around redis.lrange with a consistent 503 if Redis is unhappy.
+    NOTE: This only ever reads FEED_KEY, which sanitizer controls.
+    We do not read any "raw"/"debug"/"pending" lists.
+    """
     try:
         return _redis_client.lrange(key, start, stop)
     except Exception as e:
@@ -309,7 +404,19 @@ def _redis_lrange(key: str, start: int, stop: int) -> list[str]:
 def _iter_feed(max_items: int = MAX_SCAN) -> Iterable[dict]:
     """
     Yields recent story dicts from Redis newest-first.
-    Used by /v1/search and /v1/story, where we don't need cursor paging.
+
+    Used by:
+    - /v1/search
+    - /v1/story
+
+    WARNING:
+    This only walks FEED_KEY, which ONLY sanitizer writes into.
+    That guarantees:
+      - gossip_only == True stories are ALREADY excluded
+      - risky claims are ALREADY attributed/softened
+      - dedupe is ALREADY applied
+
+    We do NOT surface anything straight from scrapers or workers here.
     """
     raw = _redis_lrange(FEED_KEY, 0, max(0, max_items - 1))
     for s in raw:
@@ -338,19 +445,24 @@ def _matches_vertical(item: dict, vertical: Optional[str]) -> bool:
 
 def _matches_tab(item: dict, tab: FeedTab) -> bool:
     """
-    Legacy "tab" filter logic. Product may kill tabs later,
-    but existing clients still call tab=trailers/ott/etc.
+    Legacy "tab" filter logic used by the current client.
+    We do *presentation-only* bucketing, not safety here.
+
+    Tabs:
+    - trailers      → trailers/teasers/etc.
+    - ott           → OTT drops / streaming availability
+    - intheatres    → theatrical release / box-office context
+    - comingsoon    → unreleased upcoming titles
+    - all           → everything
     """
     if tab == FeedTab.all:
         return True
 
     kind = (item.get("kind") or "").lower()
 
-    # Trailers
     if tab == FeedTab.trailers:
         return kind in TRAILER_KINDS
 
-    # OTT
     if tab == FeedTab.ott:
         return (
             kind in OTT_ALIGNED_KINDS
@@ -358,11 +470,9 @@ def _matches_tab(item: dict, tab: FeedTab) -> bool:
             or bool(item.get("ott_platform"))
         )
 
-    # In Theatres
     if tab == FeedTab.intheatres:
         return kind in THEATRICAL_KINDS or item.get("is_theatrical") is True
 
-    # Coming Soon
     if tab == FeedTab.comingsoon:
         if item.get("is_upcoming") is True:
             return True
@@ -386,8 +496,8 @@ def _best_dt(item: dict) -> Optional[datetime]:
 
 def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     """
-    Enforce ?since=... (RFC3339). We keep items whose effective timestamp
-    is >= the since timestamp.
+    Enforce ?since=... (RFC3339).
+    We keep items whose effective timestamp is >= since.
     """
     if not since_iso:
         return True
@@ -401,11 +511,15 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
 def _to_proxy(u: Optional[str]) -> Optional[str]:
     """
     Return a proxy URL (/v1/img?u=...) for external images.
-    Also:
-    - Drop images from known junk hosts (demo.tagdiv.com etc.).
-    - If caller already gave us a proxy URL, unwrap its ?u= param and
-      re-check that upstream host isn't junk. If junk, return None.
-    - If relative / data:/... just return as-is.
+
+    WHY WE DO THIS:
+    - We don't want the client hitting random external CDNs directly.
+    - We also want to drop obviously junk/demo/placeholder hosts so the UI
+      doesn't show ugly "demo" thumbnails and doesn't spam dead 404 images.
+
+    RULE:
+    - This is "transport cleanup". It's allowed.
+    - It must NOT change story meaning, attribution, tone.
     """
     if not u:
         return u
@@ -418,21 +532,21 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
             inner_list = qs.get("u") or qs.get("url") or []
             inner_raw = inner_list[0] if inner_list else ""
 
-            # inner_raw is percent-encoded; decode for host check
+            # Decode inner URL to check host
             try:
                 from urllib.parse import unquote as _unq
                 inner_url = _unq(inner_raw)
             except Exception:
                 inner_url = inner_raw
 
+            # Drop if upstream is a junk/placeholder host
             if _is_bad_image_host(inner_url):
-                # Junk; don't serve it
                 return None
 
-            # Keep original proxy URL, it's fine
             return u
         except Exception:
-            # If we can't parse it, just return it so we don't break legit thumbs
+            # If parsing fails, keep original proxy URL. Better to show an
+            # image than break cards.
             return u
 
     # Absolute external URL -> wrap in proxy (unless host is junk)
@@ -447,11 +561,19 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
 
 def _clean_summary_text(s: Optional[str]) -> Optional[str]:
     """
-    Light normalization pass for summary text before we send it to clients.
+    Presentation-only cleanup for summary text before sending to clients.
 
-    - Collapse repeated whitespace/newlines to single spaces.
-    - Trim ends.
-    - Ensure it ends with basic punctuation so UI copy feels finished.
+    We ARE allowed to:
+    - collapse repeated whitespace/newlines
+    - trim ends
+    - ensure there's a final period so UI copy doesn't feel cut off
+
+    We are NOT allowed to:
+    - remove attribution ("According to <domain>:")
+    - rewrite "reportedly", "allegedly", "criticized", etc.
+      Those are legal softeners from summarize_story_safe().
+
+    That means: THIS FUNCTION MUST NOT change meaning, only spacing.
     """
     if s is None:
         return None
@@ -465,14 +587,20 @@ def _clean_summary_text(s: Optional[str]) -> Optional[str]:
 
 def _adapt_for_response(it: dict) -> dict:
     """
-    Transform raw story dict (what sanitizer wrote) into the clean shape
-    we expose in API responses:
-      - Ensure poster_url / thumb_url.
+    Transform raw story dict (what sanitizer wrote) into a response-friendly dict.
+    We ONLY do transport/layout cleanup:
+      - Ensure poster_url / thumb_url populated.
       - Fallback normalized_at <- ingested_at.
-      - Rewrite images through proxy, dropping dead demo CDN images so the
-        client doesn't even try them (prevents noisy 404 spam).
+      - Route image URLs through the safe proxy, and drop known junk-host
+        thumbs so the client doesn't even attempt them.
       - Normalize tags to list[str] | None.
-      - Polish summary text (spacing / final period).
+      - Whitespace/punctuation polish in summary ONLY (not semantic rewrite).
+
+    We DO NOT:
+      - re-summarize
+      - hype up
+      - de-attribute
+      - strip "According to <source>:" style prefixes
     """
     obj = dict(it)
 
@@ -502,7 +630,7 @@ def _adapt_for_response(it: dict) -> dict:
     if not (tags_val is None or isinstance(tags_val, list)):
         obj["tags"] = None
 
-    # summary polish
+    # summary polish (spacing / final period)
     obj["summary"] = _clean_summary_text(obj.get("summary"))
 
     return obj
@@ -517,12 +645,18 @@ def _scan_with_cursor(
 ) -> Tuple[List[dict], Optional[int]]:
     """
     Cursor pagination for /v1/feed:
-      - We scan forward through the Redis LIST (LPUSH newest-first).
-      - We collect stories that pass filters.
-      - We sort them by effective timestamp desc.
-      - We return `limit` stories plus an integer cursor (next index in Redis).
-    """
 
+    - We walk FEED_KEY (newest-first Redis LIST; LPUSH by sanitizer).
+    - We collect stories that pass filters.
+    - We sort them by effective timestamp desc.
+    - We return:
+        * the `limit` stories for this page
+        * `next_cursor` → the next Redis index to continue from
+
+    SAFETY NOTE:
+    This function does not "approve" content. Approval already happened in
+    sanitizer. We are just slicing/paging the safe feed for clients.
+    """
     # Bound the scan by total list length
     try:
         total_len = _redis_client.llen(FEED_KEY)
@@ -538,7 +672,7 @@ def _scan_with_cursor(
     collected: List[dict] = []
     scanned = 0
 
-    # We over-collect so that after sorting we still have `limit` good ones
+    # We over-collect so that after sorting we still have `limit` good ones.
     target_collect = max(limit * 5, limit)
 
     while idx < total_len and scanned < MAX_SCAN and len(collected) < target_collect:
@@ -590,6 +724,10 @@ def health():
     - redis_ok
     - feed_len
     - current env/version
+
+    NOTE:
+    feed_len here is the length of FEED_KEY, which is the safe/public feed
+    after sanitizer review (not raw ingest).
     """
     try:
         ok = _redis_client.ping()
@@ -623,11 +761,16 @@ def v1_health():
     response_model=FeedResponse,
     summary="Feed items",
     description=(
-        "Cursor-paginated feed. "
-        "Use ?vertical=entertainment|sports to filter. "
-        "Sorted by effective timestamp "
-        "(normalized_at > published_at > release_date). "
-        "Use returned `next_cursor` for pagination."
+        "Cursor-paginated feed of sanitized stories.\n"
+        "- ?vertical=entertainment|sports limits to that vertical.\n"
+        "- tab=all|trailers|ott|intheatres|comingsoon is presentation filtering.\n"
+        "- Sorted by effective timestamp "
+        "(normalized_at > published_at > release_date).\n"
+        "- Use returned `next_cursor` for pagination.\n"
+        "\n"
+        "This endpoint serves ONLY content that already passed sanitizer. "
+        "Titles/summaries already include attribution like "
+        "\"According to <domain>:\" for risky topics. We do not remove that."
     ),
 )
 async def feed(
@@ -656,7 +799,7 @@ async def feed(
     ),
     _=Depends(limiter("feed", RL_FEED_PER_MIN)),
 ):
-    # Validate ?since= upfront so we can give a nice 422.
+    # Validate ?since= upfront so we can give a nice 422 instead of silently ignoring.
     if since is not None and _parse_iso(since) is None:
         raise HTTPException(
             status_code=422,
@@ -687,7 +830,11 @@ async def feed(
 @app.get(
     "/v1/search",
     response_model=SearchResponse,
-    summary="Substring search over title+summary",
+    summary="Substring search over title+summary (sanitized feed only)",
+    description=(
+        "Naive substring search over the last MAX_SCAN stories' title+summary. "
+        "We **only** search items already published to the public feed by sanitizer."
+    ),
 )
 async def search(
     request: Request,
@@ -697,7 +844,12 @@ async def search(
 ):
     """
     Naive substring search over the last MAX_SCAN stories' title+summary.
-    No vertical/tab filter here.
+
+    IMPORTANT:
+    We do NOT search raw scraped content. We only search the public feed,
+    which means:
+      - attribution and softening for risky claims is already applied
+      - gossip_only content was already dropped
     """
     ql = q.lower()
     res: list[dict] = []
@@ -719,7 +871,11 @@ async def search(
 @app.get(
     "/v1/story/{story_id}",
     response_model=Story,
-    summary="Story detail by ID",
+    summary="Story detail by ID (must already be sanitized/published)",
+    description=(
+        "Returns a single story by ID, scanning only the sanitized public feed. "
+        "If sanitizer never published it (e.g. gossip_only), this will 404."
+    ),
 )
 async def story_detail(
     request: Request,
@@ -729,6 +885,10 @@ async def story_detail(
     """
     Linear scan through recent feed items to find the item with this ID.
     O(MAX_SCAN). Good enough for now.
+
+    NOTE:
+    We ONLY scan FEED_KEY. If sanitizer didn't accept the story (for example,
+    gossip_only=True), it's not in FEED_KEY, so you'll get 404.
     """
     sid = unquote(story_id)
     for it in _iter_feed():
@@ -739,6 +899,11 @@ async def story_detail(
 
 @app.get("/")
 def root():
+    """
+    Basic ping.
+    Reminder: this service MUST ONLY expose stories that passed sanitizer.
+    Do not ever add an endpoint here that returns raw worker content.
+    """
     return {
         "ok": True,
         "service": "cinepulse-api",
