@@ -1,3 +1,18 @@
+// lib/features/story/story_card.dart
+//
+// Updated layout for legal/UX:
+// Row 1:  "News • YouTube"         (kind + source attribution)
+// Row 2:  first timestamp          (publishedAt)
+// Row 3:  second timestamp (+gap)  (normalizedAt / ingestedAt)
+// Row 4:  title
+//
+// No summary in the card.
+// No timestamps in row 1.
+// Both timestamps still shown (row 2 + row 3).
+//
+// Image attribution is handled elsewhere (proxying etc).
+// We still keep CTA + Save + Share exactly like before.
+
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -15,7 +30,7 @@ import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
 import 'story_details.dart';
-import 'story_image_url.dart'; // <-- NEW import
+import 'story_image_url.dart'; // normalized poster/thumbnail resolver
 
 class StoryCard extends StatefulWidget {
   const StoryCard({super.key, required this.story});
@@ -27,6 +42,10 @@ class StoryCard extends StatefulWidget {
 
 class _StoryCardState extends State<StoryCard> {
   bool _hover = false;
+
+  // ------------------------------------------------------------------
+  // Link / CTA helpers
+  // ------------------------------------------------------------------
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
@@ -42,10 +61,14 @@ class _StoryCardState extends State<StoryCard> {
 
   bool get _isWatchCta {
     if (_videoUrl != null) return true;
+
     final host = _linkUrl?.host?.toLowerCase() ?? '';
     final byHost = host.contains('youtube.com') || host.contains('youtu.be');
+
     final byType = widget.story.kind.toLowerCase() == 'trailer';
+
     final bySource = (widget.story.source ?? '').toLowerCase() == 'youtube';
+
     return byHost || byType || bySource;
   }
 
@@ -76,13 +99,18 @@ class _StoryCardState extends State<StoryCard> {
       }
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
+        SnackBar(
+          content: Text(
+            kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened',
+          ),
+        ),
       );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: deep));
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Link copied to clipboard')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Link copied to clipboard')),
+        );
       }
     }
   }
@@ -93,29 +121,26 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  Widget _ctaLeading() =>
-      _isWatchCta ? const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white)
-                  : const _Emoji(emoji: '📖', size: 18);
+  Widget _ctaLeading() => _isWatchCta
+      ? const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white)
+      : const _Emoji(emoji: '📖', size: 18);
 
-  String _stripKindPrefix(String meta) {
-    var out = meta;
-    for (final p in const ['news', 'release', 'trailer', 'ott']) {
-      final re = RegExp(r'^\s*' + RegExp.escape(p) + r'\s*•\s*', caseSensitive: false);
-      out = out.replaceFirst(re, '');
-    }
-    return out.trim();
-  }
+  // ------------------------------------------------------------------
+  // Formatting helpers
+  // ------------------------------------------------------------------
 
-  // ---------- Time helpers ----------
+  // Month short names for timestamp formatting
   static const List<String> _mon = [
-    'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
+  // 26 Oct 2025, 10:44 PM
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
-    final m   = _mon[d.month - 1];
-    final y   = d.year;
+    final m = _mon[d.month - 1];
+    final y = d.year;
     var h = d.hour % 12;
     if (h == 0) h = 12;
     final mm = d.minute.toString().padLeft(2, '0');
@@ -123,6 +148,7 @@ class _StoryCardState extends State<StoryCard> {
     return '$day $m $y, $h:$mm $ap';
   }
 
+  // (+6h) / (+12h) etc
   String _formatGap(Duration d) {
     final abs = d.isNegative ? -d : d;
     if (abs.inMinutes < 60) return '${abs.inMinutes}m';
@@ -130,6 +156,7 @@ class _StoryCardState extends State<StoryCard> {
     return '${abs.inDays}d';
   }
 
+  // Small row with clock + text
   Widget _timePill({required String emoji, required String text}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -143,16 +170,41 @@ class _StoryCardState extends State<StoryCard> {
           child: _Emoji(emoji: emoji, size: 14),
         ),
         const SizedBox(width: 8),
-        Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: Colors.grey[400], fontSize: 13.5),
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontSize: 13.5,
+            ),
+          ),
         ),
       ],
     );
   }
-  // -----------------------------------
+
+  // Capitalize kind for row1 ("News", "OTT", "Release", "Trailer")
+  String _kindDisplay(String k) {
+    final lower = k.toLowerCase();
+    if (lower == 'ott') return 'OTT';
+    if (lower.isEmpty) return '';
+    return lower[0].toUpperCase() + lower.substring(1);
+  }
+
+  // Row1 text: "News • YouTube"  (falls back gracefully)
+  String _row1Label({
+    required String kind,
+    required String? source,
+  }) {
+    final kd = _kindDisplay(kind).trim();
+    final src = (source ?? '').trim();
+    if (kd.isEmpty && src.isEmpty) return '';
+    if (kd.isEmpty) return src;
+    if (src.isEmpty) return kd;
+    return '$kd • $src';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -162,31 +214,46 @@ class _StoryCardState extends State<StoryCard> {
 
     final kind = widget.story.kind.toLowerCase();
 
-    final rawMeta = widget.story.metaLine;
-    final metaText = _stripKindPrefix(rawMeta);
-
+    // --- timestamps ---
     final DateTime? publishedAt = widget.story.publishedAt;
-    final DateTime? addedAt = widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
+    final DateTime? addedAt =
+        widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
+
+    final String? publishedText =
+        (publishedAt != null) ? _formatMetaLike(publishedAt) : null;
+
     final String? addedText = (addedAt != null)
         ? _formatMetaLike(addedAt) +
-            (publishedAt != null ? ' (+${_formatGap(addedAt.difference(publishedAt))})' : '')
+            (publishedAt != null
+                ? ' (+${_formatGap(addedAt.difference(publishedAt))})'
+                : '')
         : null;
+
+    // --- source attribution / row1 text ---
+    final row1Text = _row1Label(
+      kind: kind,
+      source: widget.story.source, // e.g. "YouTube", "BollywoodHungama.com"
+    );
 
     final hasUrl = _linkUrl != null;
 
-    // ⬇️ NEW: use shared sanitizer/normalizer
+    // Unified hero/thumbnail URL
     final imageUrl = resolveStoryImageUrl(widget.story);
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
+      transform: _hover
+          ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0))
+          : null,
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181E2A).withOpacity(0.92)
-                      : scheme.surface.withOpacity(0.97),
+        color: isDark
+            ? const Color(0xFF181E2A).withOpacity(0.92)
+            : scheme.surface.withOpacity(0.97),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
+          color:
+              _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
           width: 1.5,
         ),
         boxShadow: [
@@ -201,7 +268,9 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => _openDetails(autoplay: _isWatchCta && _videoUrl != null),
+          onTap: () => _openDetails(
+            autoplay: _isWatchCta && _videoUrl != null,
+          ),
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
@@ -210,13 +279,17 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Media
+                  // ------------------------------------------------------------------
+                  // IMAGE / POSTER
+                  // ------------------------------------------------------------------
                   SizedBox(
                     height: mediaH,
                     child: Hero(
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(18),
+                        ),
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
@@ -225,8 +298,10 @@ class _StoryCardState extends State<StoryCard> {
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
                                 alignment: Alignment.center,
-                                memCacheWidth: (w.isFinite ? (w * 2).toInt() : 1600),
-                                fadeInDuration: const Duration(milliseconds: 160),
+                                memCacheWidth:
+                                    (w.isFinite ? (w * 2).toInt() : 1600),
+                                fadeInDuration:
+                                    const Duration(milliseconds: 160),
                                 errorWidget: (_, __, ___) => Container(
                                   decoration: BoxDecoration(
                                     gradient: LinearGradient(
@@ -235,10 +310,12 @@ class _StoryCardState extends State<StoryCard> {
                                       colors: [
                                         isDark
                                             ? const Color(0xFF0F1625)
-                                            : scheme.surfaceVariant.withOpacity(0.2),
+                                            : scheme.surfaceVariant
+                                                .withOpacity(0.2),
                                         isDark
                                             ? const Color(0xFF1E2433)
-                                            : scheme.surfaceVariant.withOpacity(0.4),
+                                            : scheme.surfaceVariant
+                                                .withOpacity(0.4),
                                       ],
                                     ),
                                   ),
@@ -256,14 +333,18 @@ class _StoryCardState extends State<StoryCard> {
                                     colors: [
                                       isDark
                                           ? const Color(0xFF0F1625)
-                                          : scheme.surfaceVariant.withOpacity(0.2),
+                                          : scheme.surfaceVariant
+                                              .withOpacity(0.2),
                                       isDark
                                           ? const Color(0xFF1E2433)
-                                          : scheme.surfaceVariant.withOpacity(0.4),
+                                          : scheme.surfaceVariant
+                                              .withOpacity(0.4),
                                     ],
                                   ),
                                 ),
-                                child: Center(child: _SampleIcon(kind: widget.story.kind)),
+                                child: Center(
+                                  child: _SampleIcon(kind: widget.story.kind),
+                                ),
                               ),
                             Positioned.fill(
                               child: DecoratedBox(
@@ -286,33 +367,49 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Meta + CTA
+                  // ------------------------------------------------------------------
+                  // META, TIMESTAMPS, TITLE, CTA
+                  // ------------------------------------------------------------------
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              KindMetaBadge(kind),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Wrap(
-                                  spacing: 10,
-                                  runSpacing: 4,
-                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                  children: [
-                                    _timePill(emoji: '🕐', text: metaText),
-                                    if (addedText != null)
-                                      _timePill(emoji: '🕐', text: addedText),
-                                  ],
-                                ),
+                          // Row 1: "News • YouTube"
+                          if (row1Text.isNotEmpty)
+                            Text(
+                              row1Text,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.grey[400],
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
                               ),
-                            ],
-                          ),
+                            ),
+
+                          const SizedBox(height: 6),
+
+                          // Row 2: first timestamp (publishedAt)
+                          if (publishedText != null)
+                            _timePill(
+                              emoji: '🕐',
+                              text: publishedText,
+                            ),
+
+                          const SizedBox(height: 4),
+
+                          // Row 3: second timestamp (ingested/normalized with +gap)
+                          if (addedText != null)
+                            _timePill(
+                              emoji: '🕐',
+                              text: addedText,
+                            ),
+
                           const SizedBox(height: 8),
+
+                          // Title (row 4)
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
@@ -324,11 +421,16 @@ class _StoryCardState extends State<StoryCard> {
                                 fontSize: 14.5,
                                 height: 1.26,
                                 fontWeight: FontWeight.w800,
-                                color: isDark ? Colors.white.withOpacity(0.96) : scheme.onSurface,
+                                color: isDark
+                                    ? Colors.white.withOpacity(0.96)
+                                    : scheme.onSurface,
                               ),
                             ),
                           ),
+
                           const Spacer(),
+
+                          // CTA row (Watch/Read + Save + Share)
                           Row(
                             children: [
                               Expanded(
@@ -341,7 +443,8 @@ class _StoryCardState extends State<StoryCard> {
                                       icon: _ctaLeading(),
                                       onPressed: hasUrl
                                           ? () {
-                                              if (_isWatchCta && _videoUrl != null) {
+                                              if (_isWatchCta &&
+                                                  _videoUrl != null) {
                                                 _openDetails(autoplay: true);
                                               } else {
                                                 _openExternalLink(context);
@@ -350,12 +453,16 @@ class _StoryCardState extends State<StoryCard> {
                                           : null,
                                       style: ElevatedButton.styleFrom(
                                         foregroundColor: Colors.white,
-                                        backgroundColor: const Color(0xFFdc2626),
+                                        backgroundColor:
+                                            const Color(0xFFdc2626),
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(8),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
                                         ),
-                                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                        ),
                                         textStyle: const TextStyle(
                                           fontWeight: FontWeight.w700,
                                           fontSize: 14,
@@ -370,11 +477,16 @@ class _StoryCardState extends State<StoryCard> {
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
-                                  final saved = SavedStore.instance.isSaved(widget.story.id);
+                                  final saved = SavedStore.instance
+                                      .isSaved(widget.story.id);
                                   return _ActionIconBox(
                                     tooltip: saved ? 'Saved' : 'Save',
-                                    onTap: () => SavedStore.instance.toggle(widget.story.id),
-                                    icon: const _Emoji(emoji: '🔖', size: 18),
+                                    onTap: () => SavedStore.instance
+                                        .toggle(widget.story.id),
+                                    icon: const _Emoji(
+                                      emoji: '🔖',
+                                      size: 18,
+                                    ),
                                   );
                                 },
                               ),
@@ -382,7 +494,10 @@ class _StoryCardState extends State<StoryCard> {
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
-                                icon: const _Emoji(emoji: '📤', size: 18),
+                                icon: const _Emoji(
+                                  emoji: '📤',
+                                  size: 18,
+                                ),
                               ),
                             ],
                           ),
@@ -414,42 +529,6 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-/* --------------------------- Kind badge --------------------------- */
-Widget KindMetaBadge(String kind) {
-  final lower = kind.toLowerCase();
-  Color bg;
-  String label = kind.toUpperCase();
-
-  if (lower == 'news') {
-    bg = const Color(0xFF723A3C);
-  } else if (lower == 'release') {
-    bg = const Color(0xFFF9D359);
-  } else if (lower == 'trailer') {
-    bg = const Color(0xFF56BAF8);
-  } else if (lower == 'ott') {
-    bg = const Color(0xFFC377F2);
-  } else {
-    bg = Colors.grey.shade800;
-  }
-
-  return Container(
-    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 11),
-    decoration: BoxDecoration(
-      color: bg.withOpacity(0.96),
-      borderRadius: BorderRadius.circular(6),
-    ),
-    child: Text(
-      label,
-      style: TextStyle(
-        color: lower == 'release' ? Colors.black : Colors.white,
-        fontWeight: FontWeight.w700,
-        fontSize: 12.5,
-        letterSpacing: 0.15,
-      ),
-    ),
-  );
-}
-
 /* ------------------------- Category/fallback icon ------------------------- */
 class _SampleIcon extends StatelessWidget {
   final String kind;
@@ -471,7 +550,11 @@ class _SampleIcon extends StatelessWidget {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
-    return Icon(iconData, size: 60, color: iconColor.withOpacity(0.9));
+    return Icon(
+      iconData,
+      size: 60,
+      color: iconColor.withOpacity(0.9),
+    );
   }
 }
 
@@ -519,15 +602,17 @@ class _ActionIconBox extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.06),
+        color: isDark
+            ? Colors.white.withOpacity(0.08)
+            : Colors.black.withOpacity(0.06),
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: onTap,
-          child: const SizedBox(
+          child: SizedBox(
             width: 36,
             height: 36,
-            child: Center(child: null), // icon drawn below with Stack
+            child: Center(child: icon),
           ),
         ),
       ),
@@ -537,6 +622,7 @@ class _ActionIconBox extends StatelessWidget {
 
 /* ---------------------- Back-compat extension ---------------------- */
 extension _StoryCompat on Story {
+  // Some older payloads stick ingested_at in different places.
   DateTime? get ingestedAtCompat {
     try {
       final dyn = (this as dynamic);
