@@ -40,12 +40,16 @@ class HomeScreen extends StatefulWidget {
     this.onMenuPressed,         // opens endDrawer from RootShell
     this.onHeaderRefresh,       // optional external hook
     this.onOpenDiscover,        // header Discover/Search icon
+    this.onOpenSaved,           // NEW: header Saved icon
+    this.onOpenAlerts,          // NEW: header Alerts icon
   });
 
   final bool showSearchBar;
   final VoidCallback? onMenuPressed;
   final VoidCallback? onHeaderRefresh;
   final VoidCallback? onOpenDiscover;
+  final VoidCallback? onOpenSaved;   // NEW
+  final VoidCallback? onOpenAlerts;  // NEW
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -471,6 +475,23 @@ class _HomeScreenState extends State<HomeScreen>
               titleSpacing: 16,
               title: const _ModernBrandLogo(),
               actions: [
+                // NEW: Saved
+                _HeaderIconButton(
+                  tooltip: 'Saved',
+                  icon: Icons.bookmark_rounded,
+                  onTap: widget.onOpenSaved,
+                ),
+                const SizedBox(width: 8),
+
+                // NEW: Alerts
+                _HeaderIconButton(
+                  tooltip: 'Alerts',
+                  icon: Icons.notifications_rounded,
+                  onTap: widget.onOpenAlerts,
+                ),
+                const SizedBox(width: 8),
+
+                // existing Discover
                 _HeaderIconButton(
                   tooltip: 'Discover',
                   icon: kIsWeb
@@ -479,6 +500,8 @@ class _HomeScreenState extends State<HomeScreen>
                   onTap: widget.onOpenDiscover,
                 ),
                 const SizedBox(width: 8),
+
+                // existing Refresh
                 _HeaderIconButton(
                   tooltip: 'Refresh',
                   icon: Icons.refresh_rounded,
@@ -488,6 +511,8 @@ class _HomeScreenState extends State<HomeScreen>
                   },
                 ),
                 const SizedBox(width: 8),
+
+                // existing Menu
                 _HeaderIconButton(
                   tooltip: 'Menu',
                   icon: Icons.menu_rounded,
@@ -845,34 +870,8 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
-  // Responsive grid delegate for ALL screen types.
-  //
-  // This is the main layout brain. Two knobs matter most:
-  //
-  // 1. maxTileW clamp(320.0, 480.0)
-  //    - Lower bound 320.0  => don't allow cards skinnier than 320px
-  //    - Upper bound 480.0  => don't allow cards fatter than 480px
-  //    Tweak this if you're unhappy with how many columns show up
-  //    at certain breakpoints.
-  //
-  // 2. baseRatio per estCols bucket
-  //    - baseRatio feeds childAspectRatio = width / height
-  //    - Bigger ratio  → shorter card
-  //    - Smaller ratio → taller card
-  //
-  //    You can tune baseRatio separately for:
-  //      estCols == 1  (phone portrait)
-  //      estCols == 2  (foldable / tablet portrait / narrow desktop split)
-  //      estCols >= 3  (tablet landscape / desktop / ultrawide)
-  //
-  //    Example:
-  //      baseRatio = 0.90  -> relatively tall card
-  //      baseRatio = 1.00  -> more compact card
-  //
-  // We ALSO scale card height up automatically for large textScale,
-  // so content/CTA doesn't overlap when accessibility text size is big.
+  // Responsive grid delegate (unchanged)
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
-    // 1. Pick rough column count from viewport width.
     int estCols;
     if (width < 520) {
       estCols = 1;
@@ -884,30 +883,21 @@ class _FeedListState extends State<_FeedList>
       estCols = 4;
     }
 
-    // 2. Get the "natural" width per column and clamp it.
     double maxTileW = width / estCols;
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // 3. Choose a baseline aspect ratio (width / height).
-    //    Smaller ratio => taller card.
     double baseRatio;
     if (estCols == 1) {
-      // Phone portrait: give extra vertical room
       baseRatio = 0.90;
     } else if (estCols == 2) {
-      // Foldables / portrait tablets / narrow split desktop
       baseRatio = 0.95;
     } else {
-      // 3+ columns (desktop-like / landscape tablet):
-      // shorter but still safe so text+CTA don't collide
       baseRatio = 1.00;
     }
 
-    // 4. Accessibility: if user bumped system text, we make cards taller.
     final scaleForHeight = textScale.clamp(1.0, 1.4);
     final effectiveRatio = baseRatio / scaleForHeight;
 
-    // 5. Return the grid delegate.
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
       mainAxisSpacing: 12,
@@ -916,14 +906,12 @@ class _FeedListState extends State<_FeedList>
     );
   }
 
-  // sort helpers
   double _trendingScore(Story s) {
     try {
       final dyn = (s as dynamic);
       final v = dyn.trendingScore ?? dyn.score ?? dyn.rank ?? 0.0;
       if (v is num) return v.toDouble();
     } catch (_) {}
-    // fallback: newer is "hotter"
     final dt = s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
     return dt?.millisecondsSinceEpoch.toDouble() ?? 0.0;
   }
@@ -989,8 +977,6 @@ class _FeedListState extends State<_FeedList>
             const horizontalPad = 12.0;
             const topPad = 0.0;
 
-            // bottom padding:
-            // leave space for bottom nav on phones.
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
 
@@ -1028,7 +1014,6 @@ class _FeedListState extends State<_FeedList>
               );
             }
 
-            // Search filter
             final q = widget.searchText.text.trim().toLowerCase();
             final baseList = (q.isEmpty)
                 ? feed.items
@@ -1038,7 +1023,6 @@ class _FeedListState extends State<_FeedList>
                         (s.summary ?? '').toLowerCase().contains(q))
                     .toList();
 
-            // Sort mode
             final displayList = _applySortMode(baseList);
 
             if (displayList.isEmpty) {
@@ -1059,7 +1043,6 @@ class _FeedListState extends State<_FeedList>
               );
             }
 
-            // Optional pagination button "Load more" is off for now.
             const showLoadMore = false;
 
             return GridView.builder(
@@ -1125,7 +1108,6 @@ class _PagedFeed extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get canLoadMore => _canLoadMore;
 
-  // "Effective" timestamp for sorting and cursors.
   DateTime? _eff(Story s) =>
       s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
@@ -1140,7 +1122,6 @@ class _PagedFeed extends ChangeNotifier {
       _sinceCursor = null;
       _items.clear();
 
-      // Load cached first (instant paint).
       final cached = await FeedDiskCache.load(tab);
       if (cached.isNotEmpty) {
         _items.addAll(cached);
@@ -1155,7 +1136,6 @@ class _PagedFeed extends ChangeNotifier {
     try {
       final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
-      // Merge by id (incoming wins), then sort newest-first.
       final byId = {for (final s in _items) s.id: s};
       for (final s in list) {
         byId[s.id] = s;
@@ -1167,7 +1147,6 @@ class _PagedFeed extends ChangeNotifier {
 
       _sortNewestFirst(_items);
 
-      // Cursor becomes newest effective date we have.
       final dates = _items.map(_eff).whereType<DateTime>();
       _sinceCursor = dates.isEmpty
           ? null
@@ -1203,11 +1182,11 @@ class _PagedFeed extends ChangeNotifier {
       if (da == null && db == null) {
         return b.id.compareTo(a.id);
       }
-      if (da == null) return 1; // nulls last
+      if (da == null) return 1;
       if (db == null) return -1;
       final cmp = db.compareTo(da); // newest first
       if (cmp != 0) return cmp;
-      return b.id.compareTo(a.id); // stable tiebreak
+      return b.id.compareTo(a.id);
     });
   }
 }
@@ -1221,7 +1200,6 @@ class _ModernBrandLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Red rounded square ~28x28 with 🎬, then "CinePulse"
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
