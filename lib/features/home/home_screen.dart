@@ -38,7 +38,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // We now have 3 logical feeds for the category row.
+  // We now have 3 logical feeds for the horizontal category row.
   static const Map<String, String> _tabs = {
     'all': 'All',
     'entertainment': 'Entertainment',
@@ -87,7 +87,7 @@ class _HomeScreenState extends State<HomeScreen>
       unawaited(f.load(reset: true));
     }
 
-    // make sure the horizontal selector highlights correctly
+    // keep UI in sync when tab changes
     _tab.addListener(_onTabChanged);
 
     // Observe app lifecycle for resume refresh.
@@ -171,7 +171,8 @@ class _HomeScreenState extends State<HomeScreen>
   /* --------------------------- Realtime (WebSocket) ------------------------ */
 
   String _buildWsUrl() {
-    // Build ws/wss from your REST base, e.g. https://api.example.com -> wss://api.example.com/v1/realtime/ws
+    // Build ws/wss from your REST base, e.g.
+    // https://api.example.com -> wss://api.example.com/v1/realtime/ws
     final base = kApiBaseUrl; // provided by core/api.dart
     final u = Uri.parse(base);
     final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
@@ -374,7 +375,7 @@ class _HomeScreenState extends State<HomeScreen>
               ],
             ),
 
-            // Search bar (only if Search tab is active in bottom nav)
+            // Search bar (only if Search tab from bottom nav was tapped)
             if (widget.showSearchBar)
               SliverToBoxAdapter(
                 child: Padding(
@@ -406,7 +407,9 @@ class _HomeScreenState extends State<HomeScreen>
                 onSelect: (i) {
                   if (i >= 0 && i < _tab.length) {
                     _tab.animateTo(i);
-                    unawaited(_feeds[_tabs.keys.elementAt(i)]!.load(reset: false));
+                    unawaited(
+                      _feeds[_tabs.keys.elementAt(i)]!.load(reset: false),
+                    );
                   }
                 },
                 onSortTap: _onTapSort,
@@ -451,9 +454,9 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   final VoidCallback onSortTap;
 
   @override
-  double get minExtent => 64;  // to adjust the height of the row
+  double get minExtent => 64; // height of the row
   @override
-  double get maxExtent => 64;  // to adjust the height of the row
+  double get maxExtent => 64; // same so it doesn't expand/collapse
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
@@ -464,10 +467,10 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
         active ? const Color(0xFFdc2626) : Colors.transparent;
 
     Color textColor(bool active) {
-        if (active) return Colors.white;
-        return isDark
-            ? const Color(0xFFCBD5E1) // slate-300-ish
-            : theme.colorScheme.onSurfaceVariant;
+      if (active) return Colors.white;
+      return isDark
+          ? const Color(0xFFCBD5E1) // slate-300-ish
+          : theme.colorScheme.onSurfaceVariant;
     }
 
     Widget tabItem({
@@ -534,11 +537,13 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.sort_rounded,
-                  size: 16,
-                  color: isDark
-                      ? const Color(0xFFCBD5E1)
-                      : theme.colorScheme.onSurfaceVariant),
+              Icon(
+                Icons.sort_rounded,
+                size: 16,
+                color: isDark
+                    ? const Color(0xFFCBD5E1)
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
               const SizedBox(width: 6),
               Text(
                 'Sorting',
@@ -571,7 +576,6 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       alignment: Alignment.centerLeft,
       child: Container(
-        // gives a subtle bottom border separate from cards
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
@@ -667,7 +671,6 @@ class _FeedListState extends State<_FeedList>
     }
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // Make cards a bit taller than before:
     // childAspectRatio = width / height, so LOWER = TALLER.
     double ratio;
     if (maxTileW <= 340) {
@@ -778,7 +781,14 @@ class _FeedListState extends State<_FeedList>
                           ),
                   );
                 }
-                return StoryCard(story: filtered[i]);
+
+                // pass the entire filtered list + index into StoryCard,
+                // so StoryDetailsPager can swipe prev/next within this set.
+                return StoryCard(
+                  story: filtered[i],
+                  allStories: filtered,
+                  index: i,
+                );
               },
             );
           },
@@ -849,9 +859,11 @@ class _PagedFeed extends ChangeNotifier {
       _sortNewestFirst(_items);
 
       // Cursor should be the NEWEST effective date we have (for delta fetch).
-      final dates =
-          _items.map(_eff).whereType<DateTime>(); // normalizedAt → publishedAt → releaseDate
-      _sinceCursor = dates.isEmpty ? null : dates.reduce((a, b) => a.isAfter(b) ? a : b);
+      final dates = _items
+          .map(_eff)
+          .whereType<DateTime>(); // normalizedAt → publishedAt → releaseDate
+      _sinceCursor =
+          dates.isEmpty ? null : dates.reduce((a, b) => a.isAfter(b) ? a : b);
 
       _hasError = false;
       _errorMessage = null;
