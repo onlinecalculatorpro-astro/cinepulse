@@ -1,12 +1,13 @@
 // lib/features/story/story_card.dart
 //
-// Card layout goals (updated):
-// - Uniform thumbnail height across ALL cards (real image + placeholder).
-//   -> fixed 16:9 box (min 180px), image aligned to top so we crop bottom.
-// - CTA row (Watch + Save + Share) baseline-aligns across cards in a row.
-//   -> all action buttons are 40px tall
-//   -> we always reserve space for the meta rows above CTA so vertical flow is stable
-// - Compact spacing inside header rows.
+// Updates:
+// 1. Thumbnail area is a strict 16:9 box with min 180px height. Both real
+//    images and the placeholder use the SAME SizedBox, and images are aligned
+//    to the TOP so if they need to crop, they crop the bottom.
+// 2. CTA row is now *pinned to the bottom* of the card body using Stack +
+//    Positioned. That means the big red Watch/Read button + Save + Share
+//    will sit on the same baseline across every card in the same grid row,
+//    no matter how long/short the title is.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -24,22 +25,20 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
-import 'story_pager.dart'; // StoryPagerScreen
-import 'story_image_url.dart'; // thumbnail resolver
+import 'story_pager.dart';        // StoryPagerScreen
+import 'story_image_url.dart';   // thumbnail resolver
 
 class StoryCard extends StatefulWidget {
   const StoryCard({
     super.key,
     required this.story,
-
-    // Optional so legacy callers (SavedScreen, AlertsScreen, etc.) keep compiling.
     this.allStories,
     this.index,
   });
 
   final Story story;
 
-  /// The full list this card is part of (for swipe prev/next in pager).
+  /// Entire list this card belongs to (for horizontal swipe in pager).
   final List<Story>? allStories;
 
   /// Index of [story] within [allStories].
@@ -59,7 +58,7 @@ class _StoryCardState extends State<StoryCard> {
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _linkUrl {
-    // Prefer playable video URL if present.
+    // Prefer direct playable video URL.
     final v = _videoUrl;
     if (v != null) return v;
 
@@ -125,7 +124,6 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // The list + index we'll actually feed into the pager.
   List<Story> get _effectiveStories =>
       (widget.allStories != null && widget.allStories!.isNotEmpty)
           ? widget.allStories!
@@ -134,7 +132,6 @@ class _StoryCardState extends State<StoryCard> {
   int get _effectiveIndex =>
       (widget.index != null && widget.index! >= 0) ? widget.index! : 0;
 
-  // Open pager starting at THIS story. Pager lets the user swipe prev/next.
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
@@ -156,22 +153,12 @@ class _StoryCardState extends State<StoryCard> {
    * ------------------------------------------------------------------------*/
 
   static const List<String> _mon = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec'
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
-  // e.g. "27 Oct 2025, 11:57 AM"
   String _formatMetaLike(DateTime dt) {
+    // "27 Oct 2025, 11:57 AM"
     final d = dt.toLocal();
     final day = d.day;
     final m = _mon[d.month - 1];
@@ -194,7 +181,6 @@ class _StoryCardState extends State<StoryCard> {
     return '${abs.inDays}d';
   }
 
-  // little 🕒 pill for Row B
   Widget _timeBadge(String emoji) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -218,7 +204,6 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Capitalize "news"→"News", keep "OTT" uppercase, etc.
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -226,7 +211,6 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // Bottom "Source: <x>" (prefer sourceDomain, else source)
   String _attribution(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -245,12 +229,11 @@ class _StoryCardState extends State<StoryCard> {
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final kind = widget.story.kind.toLowerCase();
+    final story = widget.story;
+    final kind = story.kind.toLowerCase();
 
-    // timestamps
-    final DateTime? publishedAt = widget.story.publishedAt;
-    final DateTime? addedAt =
-        widget.story.ingestedAtCompat ?? widget.story.normalizedAt;
+    final DateTime? publishedAt = story.publishedAt;
+    final DateTime? addedAt = story.ingestedAtCompat ?? story.normalizedAt;
 
     final String? publishedText =
         (publishedAt != null) ? _formatMetaLike(publishedAt) : null;
@@ -263,14 +246,10 @@ class _StoryCardState extends State<StoryCard> {
         : null;
 
     final hasUrl = _linkUrl != null;
+    final imageUrl = resolveStoryImageUrl(story);
+    final srcText = _attribution(story);
 
-    // hero/thumbnail URL
-    final imageUrl = resolveStoryImageUrl(widget.story);
-
-    // attribution for footer
-    final srcText = _attribution(widget.story);
-
-    // Card colors:
+    // Card chrome
     final Color cardBgDark = const Color(0xFF1e2533).withOpacity(0.35);
     final Color cardBgLight = scheme.surface;
     final Color borderColor = isDark
@@ -305,7 +284,6 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // tap anywhere on the card → pager
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -313,14 +291,14 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // NEW thumbnail logic:
-              // - Use a consistent 16:9 box (height = w / (16/9)).
-              // - Clamp minimum height to 180.
-              // - No extra "boost", so placeholder and real images match.
+              // STRICT hero box:
+              // - exact 16:9 aspect ratio based on tile width
+              // - min height 180px so tiny columns on narrow phones don't get
+              //   microscopic posters
               final baseH = w / (16 / 9);
               final mediaH = math.max(180.0, baseH);
 
-              // Build Row B widget with stable reserved height:
+              // Row B "added" line OR reserved spacer
               final Widget rowBWidget = (addedText != null)
                   ? Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -343,17 +321,24 @@ class _StoryCardState extends State<StoryCard> {
                       ],
                     )
                   : const SizedBox(
-                      height: 20, // reserve approx same vertical space
+                      height: 20, // keeps Row B height consistent
                     );
+
+              // we'll pin CTA row to bottom using Stack
+              // how much vertical space to reserve at bottom so top text
+              // doesn't overlap CTA row:
+              // 40 (button row) + 8 gap + ~18 source line if present
+              final double reservedBottom =
+                  40 + 8 + (srcText.isNotEmpty ? 18 : 0);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ─────────────── Thumbnail / hero image ───────────────
+                  // ─────────── THUMBNAIL (fixed-height box) ───────────
                   SizedBox(
                     height: mediaH,
                     child: Hero(
-                      tag: 'thumb-${widget.story.id}',
+                      tag: 'thumb-${story.id}',
                       child: ClipRRect(
                         borderRadius: const BorderRadius.vertical(
                           top: Radius.circular(8),
@@ -365,8 +350,7 @@ class _StoryCardState extends State<StoryCard> {
                               CachedNetworkImage(
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
-                                // align image to TOP so we crop bottom,
-                                // keeps faces in frame
+                                // align to TOP so we crop bottom if tall
                                 alignment: Alignment.topCenter,
                                 memCacheWidth:
                                     (w.isFinite ? (w * 2).toInt() : 1600),
@@ -375,17 +359,17 @@ class _StoryCardState extends State<StoryCard> {
                                 errorWidget: (_, __, ___) => _FallbackThumb(
                                   isDark: isDark,
                                   scheme: scheme,
-                                  kind: widget.story.kind,
+                                  kind: story.kind,
                                 ),
                               )
                             else
                               _FallbackThumb(
                                 isDark: isDark,
                                 scheme: scheme,
-                                kind: widget.story.kind,
+                                kind: story.kind,
                               ),
 
-                            // soft bottom fade overlay
+                            // subtle bottom fade
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -407,187 +391,221 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // ─────────────── Body ───────────────
+                  // ─────────── BODY (Stack with pinned CTA row) ───────────
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Row A: "<Kind>  •  <publishedAt>"
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                      child: LayoutBuilder(
+                        builder: (context, bodyBox) {
+                          return Stack(
                             children: [
-                              Flexible(
-                                flex: 0,
-                                child: Text(
-                                  _kindDisplay(kind),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.3,
-                                  ),
+                              // TOP CONTENT (kind/date/added/time/title)
+                              Padding(
+                                padding: EdgeInsets.only(
+                                  bottom: reservedBottom,
                                 ),
-                              ),
-                              if (publishedText != null) ...[
-                                const SizedBox(width: 8),
-                                // bullet "•" (visual 6px dot)
-                                Container(
-                                  width: 6,
-                                  height: 6,
-                                  margin: const EdgeInsets.only(top: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.9),
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text(
-                                    publishedText!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w500,
-                                      height: 1.3,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Row A: "<Kind> • <publishedAt>"
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Flexible(
+                                          flex: 0,
+                                          child: Text(
+                                            _kindDisplay(kind),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              height: 1.3,
+                                            ),
+                                          ),
+                                        ),
+                                        if (publishedText != null) ...[
+                                          const SizedBox(width: 8),
+                                          // bullet dot
+                                          Container(
+                                            width: 6,
+                                            height: 6,
+                                            margin: const EdgeInsets.only(
+                                                top: 6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white
+                                                  .withOpacity(0.9),
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Flexible(
+                                            child: Text(
+                                              publishedText!,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w500,
+                                                height: 1.3,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
                                     ),
-                                  ),
+
+                                    const SizedBox(height: 4),
+
+                                    // Row B (ingestedAt / (+Δm)) OR spacer of same height
+                                    rowBWidget,
+
+                                    const SizedBox(height: 8),
+
+                                    // Title up to 3 lines
+                                    Text(
+                                      story.title,
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.inter(
+                                        fontSize: 15,
+                                        height: 1.35,
+                                        fontWeight: FontWeight.w600,
+                                        color:
+                                            Colors.white.withOpacity(0.96),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ],
-                          ),
-
-                          const SizedBox(height: 4),
-
-                          // Row B (or reserved space if missing)
-                          rowBWidget,
-
-                          const SizedBox(height: 8),
-
-                          // Title (max 3 lines)
-                          Flexible(
-                            fit: FlexFit.loose,
-                            child: Text(
-                              widget.story.title,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.inter(
-                                fontSize: 15,
-                                height: 1.35,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white.withOpacity(0.96),
                               ),
-                            ),
-                          ),
 
-                          const SizedBox(height: 8),
-
-                          // Spacer keeps CTA row locked at the bottom
-                          const Spacer(),
-
-                          // CTA row
-                          Row(
-                            children: [
-                              // Big red Watch/Read button
-                              Expanded(
-                                child: Semantics(
-                                  button: true,
-                                  label: '${_ctaLabel} ${widget.story.title}',
-                                  child: SizedBox(
-                                    height: 40,
-                                    child: ElevatedButton.icon(
-                                      icon: _ctaLeading(),
-                                      onPressed: hasUrl
-                                          ? () {
-                                              if (_isWatchCta &&
-                                                  _videoUrl != null) {
-                                                // open pager and autoplay video
-                                                _openDetails(autoplay: true);
-                                              } else {
-                                                // open external article/etc.
-                                                _openExternalLink(context);
-                                              }
-                                            }
-                                          : null,
-                                      style: ElevatedButton.styleFrom(
-                                        foregroundColor: Colors.white,
-                                        backgroundColor:
-                                            const Color(0xFFdc2626),
-                                        elevation: 0,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(6),
+                              // PINNED CTA + Source AT THE BOTTOM
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        // Big red Watch/Read button
+                                        Expanded(
+                                          child: Semantics(
+                                            button: true,
+                                            label:
+                                                '${_ctaLabel} ${story.title}',
+                                            child: SizedBox(
+                                              height: 40,
+                                              child: ElevatedButton.icon(
+                                                icon: _ctaLeading(),
+                                                onPressed: hasUrl
+                                                    ? () {
+                                                        if (_isWatchCta &&
+                                                            _videoUrl !=
+                                                                null) {
+                                                          _openDetails(
+                                                              autoplay: true);
+                                                        } else {
+                                                          _openExternalLink(
+                                                              context);
+                                                        }
+                                                      }
+                                                    : null,
+                                                style: ElevatedButton
+                                                    .styleFrom(
+                                                  foregroundColor:
+                                                      Colors.white,
+                                                  backgroundColor:
+                                                      const Color(
+                                                          0xFFdc2626),
+                                                  elevation: 0,
+                                                  shape:
+                                                      RoundedRectangleBorder(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            6),
+                                                  ),
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                    horizontal: 12,
+                                                  ),
+                                                  textStyle:
+                                                      const TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.w600,
+                                                    fontSize: 15,
+                                                    height: 1.2,
+                                                  ),
+                                                ),
+                                                label: Text(_ctaLabel),
+                                              ),
+                                            ),
+                                          ),
                                         ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
+
+                                        const SizedBox(width: 8),
+
+                                        // Save
+                                        AnimatedBuilder(
+                                          animation: SavedStore.instance,
+                                          builder: (_, __) {
+                                            final saved = SavedStore.instance
+                                                .isSaved(story.id);
+                                            return _ActionIconBox(
+                                              tooltip:
+                                                  saved ? 'Saved' : 'Save',
+                                              onTap: () =>
+                                                  SavedStore.instance
+                                                      .toggle(story.id),
+                                              icon: const _Emoji(
+                                                emoji: '🔖',
+                                                size: 18,
+                                              ),
+                                            );
+                                          },
                                         ),
-                                        textStyle: const TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 15,
-                                          height: 1.2,
+
+                                        const SizedBox(width: 8),
+
+                                        // Share
+                                        _ActionIconBox(
+                                          tooltip: 'Share',
+                                          onTap: () => _share(context),
+                                          icon: const _Emoji(
+                                            emoji: '📤',
+                                            size: 18,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+
+                                    const SizedBox(height: 8),
+
+                                    if (srcText.isNotEmpty)
+                                      Text(
+                                        'Source: $srcText',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: Colors.grey[400],
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w400,
+                                          height: 1.3,
                                         ),
                                       ),
-                                      label: Text(_ctaLabel),
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                              const SizedBox(width: 8),
-
-                              // Save chip
-                              AnimatedBuilder(
-                                animation: SavedStore.instance,
-                                builder: (_, __) {
-                                  final saved = SavedStore.instance
-                                      .isSaved(widget.story.id);
-                                  return _ActionIconBox(
-                                    tooltip: saved ? 'Saved' : 'Save',
-                                    onTap: () => SavedStore.instance
-                                        .toggle(widget.story.id),
-                                    icon: const _Emoji(
-                                      emoji: '🔖',
-                                      size: 18,
-                                    ),
-                                  );
-                                },
-                              ),
-
-                              const SizedBox(width: 8),
-
-                              // Share chip
-                              _ActionIconBox(
-                                tooltip: 'Share',
-                                onTap: () => _share(context),
-                                icon: const _Emoji(
-                                  emoji: '📤',
-                                  size: 18,
+                                  ],
                                 ),
                               ),
                             ],
-                          ),
-
-                          const SizedBox(height: 8),
-
-                          // Source row
-                          if (srcText.isNotEmpty)
-                            Text(
-                              'Source: $srcText',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.grey[400],
-                                fontSize: 12,
-                                fontWeight: FontWeight.w400,
-                                height: 1.3,
-                              ),
-                            ),
-                        ],
+                          );
+                        },
                       ),
                     ),
                   ),
@@ -599,7 +617,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Hover lift on web; blurred glass on mobile.
+    // Hover lift on web, blurred glass on mobile
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -617,7 +635,7 @@ class _StoryCardState extends State<StoryCard> {
 }
 
 /* --------------------------------------------------------------------------
- * Thumbnail fallback (no image or failed image load)
+ * Thumbnail fallback when the story has no usable image
  * ------------------------------------------------------------------------*/
 class _FallbackThumb extends StatelessWidget {
   final bool isDark;
@@ -655,7 +673,7 @@ class _FallbackThumb extends StatelessWidget {
 }
 
 /* --------------------------------------------------------------------------
- * Fallback icon when image is missing
+ * Icon shown in the fallback thumbnail gradient
  * ------------------------------------------------------------------------*/
 class _SampleIcon extends StatelessWidget {
   final String kind;
@@ -687,7 +705,7 @@ class _SampleIcon extends StatelessWidget {
 }
 
 /* --------------------------------------------------------------------------
- * Emoji text helper
+ * Emoji widget for button icons
  * ------------------------------------------------------------------------*/
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 18});
@@ -715,9 +733,58 @@ class _Emoji extends StatelessWidget {
 }
 
 /* --------------------------------------------------------------------------
- * Compact secondary action chip (Save / Share)
- *  - height bumped to 40 to match Watch button height
+ * Secondary action chip (Save / Share)
+ * height locked to 40 to match the big red button
  * ------------------------------------------------------------------------*/
+class _ActionIconBox extends StatelessWidget {
+  final Widget icon;
+  final VoidCallback onTap;
+  final String tooltip;
+
+  const _ActionIconBox({
+    required this.icon,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final bgColor =
+        isDark ? Colors.black.withOpacity(0.4) : Colors.black.withOpacity(0.06);
+
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.15)
+        : Colors.black.withOpacity(0.15);
+
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: bgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: borderColor, width: 1),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 40,
+            height: 40,
+            child: Center(child: null),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* NOTE:
+ * We actually want to render [icon] inside the SizedBox above.
+ * InkWell child can't be const because [icon] is dynamic.
+ * Let's override build to inject it properly.
+ */
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -763,11 +830,11 @@ class _ActionIconBox extends StatelessWidget {
 }
 
 /* --------------------------------------------------------------------------
- * Back-compat extension for ingestedAt
+ * Back-compat for ingestedAt
  * ------------------------------------------------------------------------*/
 extension _StoryCompat on Story {
-  // Some older payloads stick ingested_at in different places.
   DateTime? get ingestedAtCompat {
+    // older payloads may stash this in random places
     try {
       final dyn = (this as dynamic);
       final v = dyn.ingestedAt;
