@@ -1,4 +1,21 @@
 // lib/features/saved/saved_screen.dart
+//
+// Saved tab
+// - Local bookmarks from SavedStore.
+// - Search + sort (recent vs title).
+// - Export and Clear All actions.
+// - Pull to refresh just re-runs the filter/sort to update UI.
+// - Cards open into StoryPagerScreen (swipe prev/next).
+//
+// IMPORTANT LAYOUT CHANGE:
+// StoryCard now has internal Expanded widgets, so it MUST live in a
+// bounded-height tile (a Grid with a fixed childAspectRatio), not in a
+// plain ListView row with intrinsic height.
+//
+// So we render saved items in a responsive SliverGrid exactly like Home/
+// Alerts, and we pass (stories, index) to StoryCard so horizontal paging
+// works in the detail view.
+
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -13,12 +30,14 @@ import '../story/story_card.dart';
 
 class SavedScreen extends StatefulWidget {
   const SavedScreen({super.key});
+
   @override
   State<SavedScreen> createState() => _SavedScreenState();
 }
 
 class _SavedScreenState extends State<SavedScreen> {
   SavedSort _sort = SavedSort.recent;
+
   final _query = TextEditingController();
   Timer? _debounce;
 
@@ -51,17 +70,20 @@ class _SavedScreenState extends State<SavedScreen> {
       } else {
         await Clipboard.setData(ClipboardData(text: text));
       }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(kIsWeb ? 'Copied to clipboard' : 'Share sheet opened')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            kIsWeb ? 'Copied to clipboard' : 'Share sheet opened',
+          ),
+        ),
+      );
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: text));
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Copied to clipboard')),
+      );
     }
   }
 
@@ -85,12 +107,67 @@ class _SavedScreenState extends State<SavedScreen> {
     );
     if (ok == true) {
       await SavedStore.instance.clearAll();
+      if (mounted) setState(() {});
     }
+  }
+
+  // Just re-run filters/sort. There's no network fetch for saved items.
+  Future<void> _refreshLocal() async {
+    setState(() {});
+  }
+
+  // Same responsive grid logic we use in home/alerts:
+  // We pick a maxCrossAxisExtent based on screen width and compute a
+  // childAspectRatio bucket so each StoryCard tile has a stable "card-ish"
+  // height (required because StoryCard uses Expanded internally).
+  SliverGridDelegate _gridDelegateFor(BuildContext context) {
+    final screenW = MediaQuery.of(context).size.width;
+    final textScale = MediaQuery.textScaleFactorOf(context);
+
+    double maxTileW;
+    if (screenW < 520) {
+      maxTileW = screenW; // 1 col on narrow phones
+    } else if (screenW < 900) {
+      maxTileW = screenW / 2; // 2 cols
+    } else if (screenW < 1400) {
+      maxTileW = screenW / 3; // 3 cols
+    } else {
+      maxTileW = screenW / 4; // 4 cols on wide layouts
+    }
+    maxTileW = maxTileW.clamp(320.0, 480.0);
+
+    // childAspectRatio = width / height (lower -> taller).
+    double ratio;
+    if (maxTileW <= 340) {
+      ratio = 0.56;
+    } else if (maxTileW <= 380) {
+      ratio = 0.64;
+    } else if (maxTileW <= 420) {
+      ratio = 0.72;
+    } else {
+      ratio = 0.80;
+    }
+
+    // Bigger text -> give more height.
+    ratio /= textScale.clamp(1.0, 1.8);
+
+    return SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: maxTileW,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: ratio,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+
+    // Safe padding to match Home / Alerts
+    final horizontalPad = 12.0;
+    final topPad = 8.0;
+    final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
+    final bottomPad = 28.0 + bottomSafe;
 
     return AnimatedBuilder(
       animation: SavedStore.instance,
@@ -99,130 +176,187 @@ class _SavedScreenState extends State<SavedScreen> {
           return const Center(child: CircularProgressIndicator());
         }
 
+        // Pull stories from cache in the requested sort order.
         final ids = SavedStore.instance.orderedIds(_sort);
         final stories = ids.map(FeedCache.get).whereType<Story>().toList();
 
+        // Filter by search.
         final q = _query.text.trim().toLowerCase();
         final filtered = q.isEmpty
             ? stories
-            : stories
-                .where((s) =>
-                    s.title.toLowerCase().contains(q) ||
-                    (s.summary ?? '').toLowerCase().contains(q))
-                .toList();
+            : stories.where((s) {
+                final title = s.title.toLowerCase();
+                final summ = (s.summary ?? '').toLowerCase();
+                return title.contains(q) || summ.contains(q);
+              }).toList();
 
+        // Count text.
         final total = stories.length;
-        final countText = total == 0
-            ? 'No items'
-            : total == 1
-                ? '1 item'
-                : '$total items';
+        final countText = switch (total) {
+          0 => 'No items',
+          1 => '1 item',
+          _ => '$total items',
+        };
 
-        return Column(
-          children: [
-            // Toolbar
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Row(
-                children: [
-                  // Search field
-                  Expanded(
-                    child: TextField(
-                      controller: _query,
-                      textInputAction: TextInputAction.search,
-                      decoration: InputDecoration(
-                        hintText: 'Search saved…',
-                        prefixIcon: const Icon(Icons.search),
-                        suffixIcon: (_query.text.trim().isEmpty)
-                            ? null
-                            : IconButton(
-                                tooltip: 'Clear',
-                                onPressed: () {
-                                  _query.clear();
-                                },
-                                icon: const Icon(Icons.close_rounded),
-                              ),
-                      ),
-                    ),
+        return RefreshIndicator.adaptive(
+          onRefresh: _refreshLocal,
+          color: const Color(0xFFdc2626),
+          child: CustomScrollView(
+            slivers: [
+              // Top bar – pinned so the user always knows where they are.
+              SliverAppBar(
+                pinned: true,
+                title: Text(
+                  'Saved',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(width: 12),
-                  // Sort selector
-                  PopupMenuButton<SavedSort>(
-                    tooltip: 'Sort',
-                    onSelected: (v) => setState(() => _sort = v),
-                    itemBuilder: (_) => [
-                      PopupMenuItem(
-                        value: SavedSort.recent,
-                        child: Row(
-                          children: [
-                            const Icon(Icons.history, size: 18),
-                            const SizedBox(width: 8),
-                            Text('Recently saved', style: GoogleFonts.inter()),
-                          ],
+                ),
+                // no actions here (Export / Clear live in the toolbar row below)
+              ),
+
+              // Toolbar row: search, sort, export, clear
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.fromLTRB(16, 16, 16, 8), // same as before
+                  child: Row(
+                    children: [
+                      // Search field
+                      Expanded(
+                        child: TextField(
+                          controller: _query,
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(
+                            hintText: 'Search saved…',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: (_query.text.trim().isEmpty)
+                                ? null
+                                : IconButton(
+                                    tooltip: 'Clear',
+                                    onPressed: () {
+                                      _query.clear();
+                                    },
+                                    icon: const Icon(Icons.close_rounded),
+                                  ),
+                          ),
                         ),
                       ),
-                      PopupMenuItem(
-                        value: SavedSort.title,
-                        child: Row(
-                          children: [
-                            const Icon(Icons.sort_by_alpha, size: 18),
-                            const SizedBox(width: 8),
-                            Text('Title (A–Z)', style: GoogleFonts.inter()),
-                          ],
+                      const SizedBox(width: 12),
+
+                      // Sort selector popup
+                      PopupMenuButton<SavedSort>(
+                        tooltip: 'Sort',
+                        onSelected: (v) => setState(() => _sort = v),
+                        itemBuilder: (_) => [
+                          PopupMenuItem(
+                            value: SavedSort.recent,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.history, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Recently saved',
+                                  style: GoogleFonts.inter(),
+                                ),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: SavedSort.title,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.sort_by_alpha, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Title (A–Z)',
+                                  style: GoogleFonts.inter(),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        child: FilledButton.tonalIcon(
+                          onPressed: null,
+                          icon: const Icon(Icons.sort),
+                          label: Text(
+                            _sort == SavedSort.recent ? 'Recent' : 'Title',
+                          ),
                         ),
+                      ),
+                      const SizedBox(width: 8),
+
+                      // Export list of saved links
+                      IconButton.filledTonal(
+                        tooltip: 'Export saved',
+                        icon: const Icon(Icons.ios_share),
+                        onPressed: () => _export(context),
+                      ),
+                      const SizedBox(width: 4),
+
+                      // Clear all bookmarks
+                      IconButton(
+                        tooltip: 'Clear all',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => _clearAll(context),
                       ),
                     ],
-                    child: FilledButton.tonalIcon(
-                      onPressed: null,
-                      icon: const Icon(Icons.sort),
-                      label: Text(_sort == SavedSort.recent ? 'Recent' : 'Title'),
-                    ),
                   ),
-                  const SizedBox(width: 8),
-                  // Export
-                  IconButton.filledTonal(
-                    tooltip: 'Export saved',
-                    icon: const Icon(Icons.ios_share),
-                    onPressed: () => _export(context),
-                  ),
-                  const SizedBox(width: 4),
-                  // Clear all
-                  IconButton(
-                    tooltip: 'Clear all',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => _clearAll(context),
-                  ),
-                ],
-              ),
-            ),
-
-            // Count
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: Text(
-                  countText,
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelMedium
-                      ?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ),
-            ),
 
-            const SizedBox(height: 4),
-
-            // Content
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 150),
-                child: filtered.isEmpty
-                    ? const _EmptySaved()
-                    : _SavedResultsList(stories: filtered),
+              // Count row
+              SliverToBoxAdapter(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Text(
+                      countText,
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelMedium
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ],
+
+              const SliverToBoxAdapter(child: SizedBox(height: 4)),
+
+              // Empty state
+              if (filtered.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: const _EmptySaved(),
+                )
+              else
+                // Grid of saved cards
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    horizontalPad,
+                    topPad,
+                    horizontalPad,
+                    bottomPad,
+                  ),
+                  sliver: SliverGrid(
+                    gridDelegate: _gridDelegateFor(context),
+                    delegate: SliverChildBuilderDelegate(
+                      (ctx, i) {
+                        final story = filtered[i];
+                        return StoryCard(
+                          story: story,
+                          allStories: filtered,
+                          index: i,
+                        );
+                      },
+                      childCount: filtered.length,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         );
       },
     );
@@ -243,7 +377,11 @@ class _EmptySaved extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.bookmark_add_outlined, size: 48, color: cs.onSurfaceVariant),
+            Icon(
+              Icons.bookmark_add_outlined,
+              size: 48,
+              color: cs.onSurfaceVariant,
+            ),
             const SizedBox(height: 12),
             Text(
               'No saved items yet',
@@ -262,44 +400,6 @@ class _EmptySaved extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-/* ---------------------------- Results (list/grid) ---------------------------- */
-
-class _SavedResultsList extends StatelessWidget {
-  const _SavedResultsList({required this.stories});
-  final List<Story> stories;
-
-  @override
-  Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size.width;
-
-    // Responsive: list on small screens, grid on wider screens.
-    final int columns = size >= 1200 ? 3 : (size >= 840 ? 2 : 1);
-
-    if (columns == 1) {
-      // List
-      return ListView.builder(
-        padding: const EdgeInsets.only(top: 4, bottom: 24),
-        itemCount: stories.length,
-        itemBuilder: (_, i) => StoryCard(story: stories[i]),
-      );
-    }
-
-    // Grid
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: columns,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        // StoryCard adapts to available width; this ratio keeps cards comfy.
-        childAspectRatio: 0.95,
-      ),
-      itemCount: stories.length,
-      itemBuilder: (_, i) => StoryCard(story: stories[i]),
     );
   }
 }
