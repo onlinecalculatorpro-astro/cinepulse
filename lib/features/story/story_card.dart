@@ -10,10 +10,10 @@
 //   with colored pill per kind (Release red, News blue, OTT purple, etc.).
 // - Title: Inter 14px, up to 3 lines.
 // - CTA row pinned to bottom (Watch/Read + Save + Share), then "Source:".
-// - Body reserves extra bottom space so the CTA row never overlaps the title.
+// - Body now reserves extra bottom space so the CTA row never overlaps the title.
 //
-// Height of each card on screen is still influenced by the grid's
-// childAspectRatio in home_screen.dart.
+// Card overall height in the grid is still influenced by childAspectRatio
+// in home_screen.dart.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -44,7 +44,7 @@ class StoryCard extends StatefulWidget {
 
   final Story story;
 
-  /// Entire list this card belongs to (for swipe paging).
+  /// Entire list this card belongs to (for swipe paging in StoryPagerScreen).
   final List<Story>? allStories;
 
   /// Index of [story] within [allStories].
@@ -128,7 +128,7 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // For pager
+  // For pager handoff
   List<Story> get _effectiveStories =>
       (widget.allStories != null && widget.allStories!.isNotEmpty)
           ? widget.allStories!
@@ -184,7 +184,7 @@ class _StoryCardState extends State<StoryCard> {
     return '+${abs.inDays}d';
   }
 
-  // 'Release', 'Trailer', 'OTT', etc -> display label.
+  // 'Release', 'Trailer', 'OTT', 'News', etc → display label.
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -325,7 +325,7 @@ class _StoryCardState extends State<StoryCard> {
                                 kind: story.kind,
                               ),
 
-                            // subtle bottom gradient to help text if it overlaps
+                            // subtle bottom gradient
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -440,8 +440,8 @@ class _StoryCardState extends State<StoryCard> {
                                                   elevation: 0,
                                                   minimumSize:
                                                       const Size(0, 36),
-                                                  padding: const EdgeInsets
-                                                      .symmetric(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
                                                     horizontal: 12,
                                                   ),
                                                   shape:
@@ -478,9 +478,8 @@ class _StoryCardState extends State<StoryCard> {
                                               return _ActionIconBox(
                                                 tooltip:
                                                     saved ? 'Saved' : 'Save',
-                                                onTap: () =>
-                                                    SavedStore.instance
-                                                        .toggle(story.id),
+                                                onTap: () => SavedStore.instance
+                                                    .toggle(story.id),
                                                 icon: const _Emoji(
                                                   emoji: '🔖',
                                                   size: 16,
@@ -526,7 +525,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Hover lift/glow is just for desktop/web.
+    // Hover lift/glow is mainly for desktop/web.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -838,67 +837,11 @@ class _ActionIconBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // dark square w/ thin border
+    // dark square w/ thin border, matches the approved look
     final bgColor = isDark
         ? const Color(0xFF0b0f17)
         : Colors.black.withOpacity(0.06);
 
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.12)
-        : Colors.black.withOpacity(0.12);
-
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: Material(
-        color: bgColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: const SizedBox(
-            width: 36,
-            height: 36,
-            child: Center(
-              // icon is passed in, but we wrap in Center in caller;
-              // keeping this Center here makes tap target predictable.
-              child: null,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/* NOTE:
-   We keep _ActionIconBox's layout contract the same as before,
-   but because we're returning `null` child above, caller should just
-   wrap icon directly instead. Let's tweak slightly so it still shows:
-
-   We'll re-implement InkWell child properly to avoid confusion.
-*/
-
-class _ActionIconBoxFixed extends StatelessWidget {
-  final Widget icon;
-  final VoidCallback onTap;
-  final String tooltip;
-
-  const _ActionIconBoxFixed({
-    required this.icon,
-    required this.onTap,
-    required this.tooltip,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark
-        ? const Color(0xFF0b0f17)
-        : Colors.black.withOpacity(0.06);
     final borderColor = isDark
         ? Colors.white.withOpacity(0.12)
         : Colors.black.withOpacity(0.12);
@@ -925,11 +868,6 @@ class _ActionIconBoxFixed extends StatelessWidget {
     );
   }
 }
-
-/* We still want the original symbol name `_ActionIconBox` in callers,
-   so let's typedef it to the fixed one for compatibility.
-*/
-typedef _ActionIconBox = _ActionIconBoxFixed;
 
 /* ───────────────────── back-compat for ingestedAt ─────────────────────── */
 
