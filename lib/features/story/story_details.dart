@@ -1,11 +1,18 @@
 // lib/features/story/story_details.dart
 //
-// Notes in this version:
-// - Meta row under the title now matches the card style
-//   (pill(s) + timestamp + freshness, no "•" bullets).
-// - CTA row order/align now matches the mock:
-//   [Watch/Read] [Save] [Share] all left-aligned.
-// - All other behavior is unchanged.
+// Updates in this version:
+// 1. Footer attribution no longer shows "rss:" prefix. We clean it.
+//    e.g. "rss:bollywoodhungama.com" -> "bollywoodhungama.com".
+//    Format is still: "Source: YouTube / BollywoodHungama.com"
+// 2. The big red NEWS badge is hidden for plain news stories,
+//    because the row already says "News • <timestamp>".
+//    We still show badges for non-news kinds like RELEASE / OTT / TRAILER.
+// 3. Meta row under the title now matches StoryCard style:
+//    [Kind badge] [OTT/YouTube badge] <timestamp> [+age delta in red]
+//    and we strip duplicate leading words like "Release".
+// 4. CTA row now matches StoryCard bottom row style:
+//    red "Watch/Read" pill + dark action pills for Share / Save,
+//    all left aligned.
 
 import 'dart:math' as math;
 
@@ -43,6 +50,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   // inline video player state (lives in the header hero)
   bool _showPlayer = false;
   final _heroPlayerKey = GlobalKey();
+
+  // brand accent red we use everywhere in cards
+  static const Color _accentRed = Color(0xFFdc2626);
 
   /* ---------------- URL helpers ---------------- */
 
@@ -180,98 +190,229 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return '';
   }
 
-  /* ---------------- Small helpers for UI rows ---------------- */
+  /* ---------------- small helpers to render the new styles ---------------- */
 
-  /// Build RichText spans for the meta line under the title,
-  /// matching the card style:
-  ///   [Release] [Netflix] Fri 27 Oct 2025, 3:30 PM +6m
-  /// We:
-  ///   - strip the "•" bullets from story.metaLine
-  ///   - color any trailing "+6m"/"+1h"/etc. in red
-  InlineSpan _buildMetaRichSpan(Color baseColor) {
-    final meta = (widget.story.metaLine).trim();
-    if (meta.isEmpty) {
-      return TextSpan(text: '', style: TextStyle(color: baseColor));
+  /// Take story.metaLine (ex: "Release 27 Oct 2025, 8:00 PM +6m")
+  /// and strip the leading word that duplicates the kind badge ("Release", "News", etc.)
+  /// so we only keep "27 Oct 2025, 8:00 PM +6m".
+  /// We'll also split out the trailing "+6m" (or "+1h") so we can tint it red.
+  (String mainPart, String agePart) _splitMetaTimestamp(
+    String kindDisplay,
+    String metaLine,
+  ) {
+    var ts = metaLine.trim();
+    final kd = kindDisplay.trim().toLowerCase();
+
+    // if metaLine starts with that kind word, drop it
+    final lowerTs = ts.toLowerCase();
+    if (lowerTs.startsWith(kd)) {
+      ts = ts.substring(kd.length).trimLeft();
     }
 
-    // Split on "•" so we can drop the bullets and insert spacing instead.
-    final parts = meta.split('•').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+    // try to pull out trailing "+6m", "+1h", etc.
+    String mainPart = ts;
+    String agePart = '';
+    final plusMatch = RegExp(r'\s\+\w+$').firstMatch(ts);
+    if (plusMatch != null) {
+      final idx = plusMatch.start;
+      mainPart = ts.substring(0, idx).trimRight();
+      agePart = ts.substring(idx).trim();
+    }
 
-    final spans = <TextSpan>[];
-    for (var i = 0; i < parts.length; i++) {
-      final chunk = parts[i];
+    return (mainPart, agePart);
+  }
 
-      // Add manual "  " spacing instead of the bullet.
-      if (i != 0) {
-        spans.add(TextSpan(text: '  ', style: TextStyle(color: baseColor)));
-      }
+  /// row directly under the title, matching StoryCard header style
+  Widget _buildMetaRow(ColorScheme cs) {
+    final storyKindDisplay = widget.story.kindLabel ?? widget.story.kind;
+    final kindIsNews = storyKindDisplay.toLowerCase() == 'news';
 
-      // If the chunk looks like "+6m", "+1h", etc. -> highlight red accent.
-      final looksFreshness = chunk.startsWith('+') || chunk.startsWith('-');
-      spans.add(
-        TextSpan(
-          text: chunk,
-          style: TextStyle(
-            color: looksFreshness ? const Color(0xFFdc2626) : baseColor,
-            fontWeight: looksFreshness ? FontWeight.w600 : FontWeight.w400,
+    final (mainPart, agePart) =
+        _splitMetaTimestamp(storyKindDisplay, widget.story.metaLine);
+
+    final textStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+          fontSize: 13,
+          height: 1.3,
+          fontWeight: FontWeight.w500,
+          color: cs.onSurfaceVariant,
+        );
+
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        // show the kind badge (e.g. News / Release / Trailer)
+        // but hide if it's plain "news"? in cards we DO still show "News"
+        // so here we ALWAYS show it
+        KindBadge(storyKindDisplay),
+
+        // optional OTT / platform badge (like YouTube / Netflix)
+        OttBadge.fromStory(
+          widget.story,
+          dense: true,
+        ),
+
+        // timestamp + age
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (mainPart.isNotEmpty)
+              Text(
+                mainPart,
+                style: textStyle,
+              ),
+            if (agePart.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Text(
+                agePart,
+                style: textStyle?.copyWith(
+                  color: _accentRed,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// bottom CTA row: red Watch/Read pill + dark pills for share / save,
+  /// all left-aligned just like in the card footer.
+  Widget _buildCtaRow({
+    required bool hasPrimary,
+  }) {
+    // shared dark box style for the small black-ish pills
+    BoxDecoration darkBoxDeco = BoxDecoration(
+      color: Colors.black.withOpacity(0.5),
+      borderRadius: BorderRadius.circular(4),
+      border: Border.all(
+        color: Colors.white.withOpacity(0.15),
+        width: 1,
+      ),
+    );
+
+    Widget redMainButton() {
+      return Opacity(
+        opacity: hasPrimary ? 1 : 0.5,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: hasPrimary
+              ? () {
+                  if (_hasVideo) {
+                    _openPlayerInHeader();
+                  } else {
+                    _openExternalPrimary(context);
+                  }
+                }
+              : null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: _accentRed,
+              borderRadius: BorderRadius.circular(4),
+              boxShadow: [
+                BoxShadow(
+                  color: _accentRed.withOpacity(0.4),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _isWatchCta
+                      ? Icons.play_arrow_rounded
+                      : Icons.open_in_new_rounded,
+                  size: 16,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _ctaLabel,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    height: 1.2,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       );
     }
 
-    return TextSpan(
-      children: spans,
-      style: TextStyle(
-        fontSize: 13,
-        height: 1.3,
-        color: baseColor,
-        fontWeight: FontWeight.w400,
-      ),
-    );
-  }
-
-  /// One row under the title:
-  /// [KindBadge?] [OttBadge?] <timestamp + freshness>
-  Widget _MetaRow({
-    required Color textColor,
-    required bool kindIsNews,
-  }) {
-    final chips = <Widget>[];
-
-    // only show the big colored kind badge if it's *not* plain "news"
-    if (!kindIsNews) {
-      chips.add(KindBadge(widget.story.kindLabel ?? widget.story.kind));
+    Widget shareButton() {
+      return InkWell(
+        borderRadius: BorderRadius.circular(4),
+        onTap: () => _share(context),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: darkBoxDeco,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(
+                Icons.ios_share,
+                size: 16,
+                color: Colors.white,
+              ),
+              SizedBox(width: 6),
+              Text(
+                'Share',
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.2,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
-    // show OTT / platform chip like "YouTube" / "Netflix" etc.
-    chips.add(
-      OttBadge.fromStory(
-        widget.story,
-        dense: true,
-      ),
-    );
-
-    // meta timestamp / +Xm freshness as RichText
-    final metaText = RichText(
-      text: _buildMetaRichSpan(textColor),
-    );
+    Widget saveButton() {
+      return AnimatedBuilder(
+        animation: SavedStore.instance,
+        builder: (_, __) {
+          final saved = SavedStore.instance.isSaved(widget.story.id);
+          return InkWell(
+            borderRadius: BorderRadius.circular(4),
+            onTap: () => SavedStore.instance.toggle(widget.story.id),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: darkBoxDeco,
+              child: Icon(
+                saved ? Icons.bookmark : Icons.bookmark_add,
+                size: 18,
+                color: Colors.white,
+              ),
+            ),
+          );
+        },
+      );
+    }
 
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // chips with small horizontal gaps
-        ...chips.where((w) => w is! SizedBox || (w as SizedBox).child != null).map((w) {
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: w,
-          );
-        }),
-
-        // timestamp/+Xm
-        Expanded(child: metaText),
+        redMainButton(),
+        const SizedBox(width: 8),
+        shareButton(),
+        const SizedBox(width: 8),
+        saveButton(),
       ],
     );
   }
+
+  /* ---------------- UI ---------------- */
 
   @override
   Widget build(BuildContext context) {
@@ -294,10 +435,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     // cleaned attribution footer string
     final attribution = _sourceAttribution(widget.story);
 
-    // decide if we should draw the big colored badge:
-    // hide for plain "news"
-    final storyKindDisplay = widget.story.kindLabel ?? widget.story.kind;
-    final kindIsNews = storyKindDisplay.toLowerCase() == 'news';
+    // (we still hide the big red NEWS badge for plain news inside KindBadge,
+    // but KindBadge itself already handles look; we control visibility in _buildMetaRow)
 
     return Scaffold(
       body: CustomScrollView(
@@ -317,13 +456,15 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
               style: GoogleFonts.inter(fontWeight: FontWeight.w800),
             ),
             actions: [
+              // keep the top-right bookmark + share icons in app bar
               AnimatedBuilder(
                 animation: SavedStore.instance,
                 builder: (_, __) {
                   final saved = SavedStore.instance.isSaved(widget.story.id);
                   return IconButton(
                     tooltip: saved ? 'Remove from Saved' : 'Save bookmark',
-                    onPressed: () => SavedStore.instance.toggle(widget.story.id),
+                    onPressed: () =>
+                        SavedStore.instance.toggle(widget.story.id),
                     icon: Icon(
                       saved ? Icons.bookmark : Icons.bookmark_add_outlined,
                     ),
@@ -387,11 +528,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // NEW meta row (was Wrap before)
-                      _MetaRow(
-                        textColor: cs.onSurfaceVariant,
-                        kindIsNews: kindIsNews,
-                      ),
+                      // NEW: meta row styled like card header
+                      _buildMetaRow(cs),
 
                       const SizedBox(height: 16),
 
@@ -430,67 +568,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 20),
 
-                      // CTA row (reordered / left aligned)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.start,
-                        children: [
-                          // Watch / Read
-                          Semantics(
-                            button: true,
-                            label: _ctaLabel,
-                            enabled: hasPrimary,
-                            child: FilledButton.icon(
-                              onPressed: hasPrimary
-                                  ? () {
-                                      if (_hasVideo) {
-                                        _openPlayerInHeader();
-                                      } else {
-                                        _openExternalPrimary(context);
-                                      }
-                                    }
-                                  : null,
-                              icon: Icon(
-                                _isWatchCta
-                                    ? Icons.play_arrow_rounded
-                                    : Icons.open_in_new_rounded,
-                              ),
-                              label: Text(_ctaLabel),
-                            ),
-                          ),
-
-                          const SizedBox(width: 10),
-
-                          // Save bookmark (icon-only tonal)
-                          AnimatedBuilder(
-                            animation: SavedStore.instance,
-                            builder: (_, __) {
-                              final saved =
-                                  SavedStore.instance.isSaved(widget.story.id);
-                              return IconButton.filledTonal(
-                                tooltip: saved
-                                    ? 'Remove from Saved'
-                                    : 'Save bookmark',
-                                onPressed: () =>
-                                    SavedStore.instance.toggle(widget.story.id),
-                                icon: Icon(
-                                  saved
-                                      ? Icons.bookmark
-                                      : Icons.bookmark_add,
-                                ),
-                              );
-                            },
-                          ),
-
-                          const SizedBox(width: 10),
-
-                          // Share
-                          OutlinedButton.icon(
-                            onPressed: () => _share(context),
-                            icon: const Icon(Icons.ios_share),
-                            label: const Text('Share'),
-                          ),
-                        ],
-                      ),
+                      // NEW: CTA row styled like card footer (all left aligned)
+                      _buildCtaRow(hasPrimary: hasPrimary),
 
                       // legal / source attribution footer
                       if (attribution.isNotEmpty) ...[
