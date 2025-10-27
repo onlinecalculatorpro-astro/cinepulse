@@ -12,6 +12,7 @@
 # We block:
 #   - Off-camera gossip, airport looks, relationship rumours, party pics
 #   - "Fans troll/slam" outrage bait
+#   - SPORTS content (match highlights, scorecards, cricket clips, etc.)
 # =============================================================================
 vertical: entertainment
 
@@ -25,7 +26,7 @@ throttle:
     indiatoday.in: 180              # 3 min for mainstream news
     hindustantimes.com: 180         # 3 min for mainstream news
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # YouTube sources for this vertical
 # 100% FREE - Official studio / platform / exhibitor channels
 #
@@ -33,7 +34,8 @@ throttle:
 # - kind_hint drives downstream tagging ("trailer", "ott", "release")
 # - All are India-facing, Hindi-first or pan-India but theatrically relevant in Hindi belt
 # - We only want *official* uploads (trailers, release announcements, OTT drops)
-# ----------------------------------------------------------------------------- 
+# - SPORTS IS NOT ALLOWED: any channel that posts cricket/football/etc. is disabled
+# -----------------------------------------------------------------------------
 youtube:
   defaults:
     enabled: true
@@ -193,7 +195,9 @@ youtube:
 
     # === OTT PLATFORMS (Official India handles)
     # We treat these as "ott": now streaming, digital premieres, season drops.
-    # No paparazzi, no off-camera personal-life gossip — we only want "what to watch."
+    # No paparazzi, no off-camera personal-life gossip — ONLY "what to watch".
+    # SPORTS CONTENT IS BLOCKED. Any channel that mixes OTT + sports highlight
+    # spam must be disabled.
 
     - name: "Netflix India"
       enabled: true
@@ -212,12 +216,15 @@ youtube:
       # Amazon India slate, direct-to-digital drops
 
     - name: "Sony LIV"
-      enabled: true
+      enabled: false
       channel_id: "UCOQNJjhXwvAScuELTT_i7cQ"
       industry: "bollywood"
       kind_hint: "ott"
       region: "IN"
-      # Originals, scripted drama, reality, streaming announcements
+      # DISABLED: This channel also posts live-sports highlights
+      # (e.g. cricket ODI/T20 clips, match promo cards, scorelines).
+      # Sports content is out of scope for 'entertainment' vertical,
+      # so we turn this entire source off.
 
     - name: "ZEE5"
       enabled: true
@@ -228,7 +235,7 @@ youtube:
       # ZEE5 originals + digital premieres
 
     # (Disney+ Hotstar / JioCinema can be added later once channel_id is verified
-    # and once we decide how we want to treat non-film noise.)
+    # and once we decide how to treat non-film noise and any sports.)
 
     # === THEATRICAL / TICKETING (Release calendar signals)
     # These tell us: "In cinemas Friday", "Advance booking open".
@@ -241,6 +248,7 @@ youtube:
       kind_hint: "release"
       region: "IN"
       # National exhibitor. Posts booking / 'Now Showing' promos.
+      # (No match highlights.)
 
     - name: "BookMyShow"
       enabled: true
@@ -249,11 +257,16 @@ youtube:
       kind_hint: "release"
       region: "IN"
       # "Advance booking open", "Now in cinemas" etc.
+      # (No match highlights.)
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # RSS / News sources for this vertical
 # 100% FREE - No paywalls + Quality journalism ONLY
-# ----------------------------------------------------------------------------- 
+#
+# All RSS inputs are ALSO expected to NOT be pure sports scorecards.
+# We still allow box office "business of film" numbers — that's industry news,
+# not sports.
+# -----------------------------------------------------------------------------
 rss:
   defaults:
     enabled: true
@@ -324,6 +337,20 @@ rss:
       - "ama"
       - "qa session"
       - "q&a"
+      # SPORTS FILTER:
+      # kill obvious sports-y posts even if they sneak through entertainment feeds
+      - "match highlights"
+      - "vs"
+      - " ODI "
+      - " T20 "
+      - "wicket"
+      - "wickets"
+      - "inning"
+      - "innings"
+      - "scorecard"
+      - "runs chase"
+      - "goal highlights"
+      - "final score"
 
   buckets:
     # === TIER 1: TRADE AUTHORITY (Box office / business) ===
@@ -341,6 +368,7 @@ rss:
           url: "https://www.boxofficeindia.com/rss.xml"
           industry: "bollywood"
           # Daily collections, weekend trends, theatrical business context.
+          # (Film business ≠ sports scores, allowed.)
 
     # === TIER 2: MAINSTREAM NEWS (High editorial standards) ===
     mainstream_quality:
@@ -356,7 +384,13 @@ rss:
             - "viral"
             - "spotted"
             - "airport"
-          # Balanced national coverage, not pure gossip.
+            - "match"
+            - "highlights"
+            - "cricket"
+            - "t20"
+            - "odi"
+            - "ipl"
+          # Balanced national coverage, not pure gossip, and no sports.
 
         - name: "Hindustan Times Entertainment"
           enabled: true
@@ -368,7 +402,13 @@ rss:
             - "spotted"
             - "airport"
             - "gym"
-          # Good for mainstream reach + film industry angles.
+            - "match"
+            - "highlights"
+            - "cricket"
+            - "t20"
+            - "odi"
+            - "ipl"
+          # Good for mainstream reach + film industry angles. Sports terms filtered.
 
         - name: "Indian Express Entertainment"
           enabled: true
@@ -379,13 +419,19 @@ rss:
             - "spotted"
             - "viral"
             - "airport"
-          # OTT, theatrical clashes, certifications, CBFC, etc.
+            - "match"
+            - "highlights"
+            - "cricket"
+            - "t20"
+            - "odi"
+            - "ipl"
+          # OTT, theatrical clashes, certifications, CBFC, etc. Sports cut out.
 
         - name: "The Hindu Entertainment"
           enabled: true
           url: "https://www.thehindu.com/entertainment/movies/?service=rss"
           industry: "bollywood"
-          # High editorial standards, zero paparazzi tone.
+          # High editorial standards, zero paparazzi tone, not sports-focused.
 
     # === TIER 3: ENTERTAINMENT FOCUSED (Fast but filtered hard) ===
     entertainment_filtered:
@@ -419,6 +465,12 @@ rss:
             - "lunch"
             - "vacation"
             - "holiday"
+            - "match"
+            - "highlights"
+            - "cricket"
+            - "t20"
+            - "odi"
+            - "ipl"
 
     # === TIER 4: OTT/STREAMING NEWS (Digital premiere dates = high utility) ===
     ott_streaming:
@@ -441,7 +493,6 @@ rss:
             - "Disney+ Hotstar"
             - "Hotstar"
             - "JioCinema"
-            - "Sony LIV"
             - "ZEE5"
             - "Apple TV+"
             - "Voot"
@@ -450,6 +501,14 @@ rss:
             - "interview"
             - "behind the scenes"
             - "making"
+            - "match"
+            - "highlights"
+            - "cricket"
+            - "t20"
+            - "odi"
+            - "ipl"
+          # Dedicated OTT coverage: platform availability + drop dates.
+          # Sports/scorecards explicitly filtered.
 
         - name: "OTTplay"
           enabled: true
@@ -458,7 +517,14 @@ rss:
           ignore_keywords:
             - "interview"
             - "review"   # We want "now streaming / coming to OTT", not critic review.
+            - "match"
+            - "highlights"
+            - "cricket"
+            - "t20"
+            - "odi"
+            - "ipl"
           # Dedicated OTT coverage: platform availability + drop dates.
+          # Sports filtered.
 
     # === TIER 5: REALITY TV / BIGG BOSS (ON-SCREEN DRAMA ONLY) ===
     reality_tv:
@@ -479,6 +545,7 @@ rss:
           #   - Airport looks
           #   - Off-screen dating rumours
           #   - Party/birthday paparazzi
+          #   - Sports talk / cricket highlights / "fans react to match"
           #
           include_keywords:
             - "Bigg Boss"
@@ -518,33 +585,41 @@ rss:
             - "viral"
             - "party"
             - "birthday"
+            - "match"
+            - "highlights"
+            - "cricket"
+            - "t20"
+            - "odi"
+            - "ipl"
           # Result: high-drama, high-engagement moments that aired publicly,
-          # WITHOUT paparazzi stalking or personal-life gossip.
+          # WITHOUT paparazzi stalking, personal-life gossip, or any sports clips.
 
 # =============================================================================
-# SOURCES REMOVED (Quality / Legal Risk):
+# SOURCES REMOVED / DISABLED (Quality / Legal / Sports Risk):
 # =============================================================================
 # ❌ Film Companion - Paywall on many articles
 # ❌ Koimoi - Too clickbait-heavy, sensational headlines
 # ❌ TellyUpdates - TV serial gossip, low signal-to-noise ratio
 # ❌ TellyChakkar - Serial gossip, paparazzi-style personal life focus
+# ❌ Sony LIV YouTube (disabled) - mixes OTT promos with cricket/sports highlights
 #
 # =============================================================================
-# SOURCES KEPT (100% Free + Quality / High Utility):
+# SOURCES KEPT (100% Free + Quality / High Utility, and NOT sports-focused):
 # =============================================================================
 # ✅ Bollywood Hungama - Trade / box office authority
 # ✅ Box Office India - Collections, business context
 # ✅ India Today / Hindustan Times / Indian Express / The Hindu - Mainstream,
-#    fact-checked, attributable, less paparazzi
+#    fact-checked, attributable, less paparazzi (sports terms filtered)
 # ✅ Pinkvilla (heavily filtered) - Fast casting / production / OTT release updates
-# ✅ OTTplay - OTT availability / digital premiere info
-# ✅ India TV (filtered) - Reality show drama that actually aired
+# ✅ OTTplay - OTT availability / digital premiere info (sports filtered)
+# ✅ India TV (filtered) - Reality show drama that actually aired (no match talk)
 #
 # ✅ Production houses & studios (Dharma, YRF, Red Chillies, Excel, Viacom18 Studios,
 #    Star Studios, Jio Studios, T-Series, Zee Studios, Pen Movies, RSVP, Junglee,
 #    Maddock, Abundantia, Hombale, Mythri, UV Creations)
 #
-# ✅ OTT platforms (Netflix India, Prime Video India, Sony LIV, ZEE5)
+# ✅ OTT platforms (Netflix India, Prime Video India, ZEE5)
+#    (Sony LIV disabled because of sports bleed)
 #
 # ✅ Exhibitors / ticketing (PVR INOX / PVR Cinemas, BookMyShow)
 #
@@ -561,6 +636,7 @@ rss:
 # - Relationship rumours
 # - "Spotted with mystery girl"
 # - "Fans troll outfit"
+# - ANY sports highlights / match recaps / scorecards
 #
 # Downstream rules still apply:
 # - normalize_event() must tag:
