@@ -1,37 +1,27 @@
 // lib/features/story/story_card.dart
 //
-// VISUAL SPEC (matches the HTML mock approved):
+// Card layout goals:
+// - Bigger thumbnail so faces aren't cropped.
+// - CTA row (Watch/Read + Save + Share) baseline-aligns across cards.
+// - Less awkward blank middle space while still keeping all metadata.
+// - Compact spacing, 8px/4px rhythm.
 //
-// Card:
-//   - radius: 8
-//   - bg: rgba(30,37,51,0.35) on dark
-//   - border: 1px solid rgba(255,255,255,0.2)
-//   - padding inside body: 12 all around
+// Structure inside the card body:
 //
-// Layout inside body:
-//   Row A  : "<Kind>  •  <publishedAt formatted like '27 Oct 2025, 11:57 AM'>"
-//   Row B  : [🕒 badge]  "<addedAt (+Δm)>"
-//   Gap 8
-//   Title  : max 3 lines
-//   Spacer()
-//   CTA row: [ big red Watch/Read button ][ save ][ share ]
-//   Gap 8
-//   Source : "Source: <domain or source>"
+// Row A  : "<Kind>  •  <publishedAt, e.g. '27 Oct 2025, 11:57 AM'>"
+// Row B  : [🕒 badge]  "<addedAt (+Δm)>"
+// Gap 8
+// Title  : up to 3 lines
+// Gap 8
+// Spacer()
+// CTA row: [big red Watch/Read button][ Save ][ Share ]
+// Gap 8
+// Source : "Source: <domain or source>"
 //
-// Row spacing:
-//   RowA
-//   4px
-//   RowB
-//   8px
-//   Title
-//   12px -> CTA row
-//   8px  -> Source
-//
-// NOTE:
-// - Title, CTA, etc are still interactive like before.
-// - We keep Spacer() before CTA so all cards stay equal height in the grid.
-// - We keep hover translateY(-2) on web, but with new radius/border/shadow.
-//
+// Spacer() keeps CTA pinned to the bottom of the body so all cards line up.
+// The hero image above is now taller (boosted 16:9), which removes most of the
+// giant "dead zone" you were seeing in the middle of cards and also reduces
+// head-cutting in screenshots.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -63,17 +53,19 @@ class StoryCard extends StatefulWidget {
 class _StoryCardState extends State<StoryCard> {
   bool _hover = false;
 
-  // ------------------------------------------------------------------
-  // Link / CTA helpers
-  // ------------------------------------------------------------------
+  /* --------------------------------------------------------------------------
+   * CTA / link helpers
+   * ------------------------------------------------------------------------*/
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _linkUrl {
     final v = _videoUrl;
     if (v != null) return v;
+
     final raw = (widget.story.url ?? '').trim();
     if (raw.isEmpty) return null;
+
     final u = Uri.tryParse(raw);
     if (u == null || !(u.isScheme('http') || u.isScheme('https'))) return null;
     return u;
@@ -137,7 +129,9 @@ class _StoryCardState extends State<StoryCard> {
 
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
-      fadeRoute(StoryDetailsScreen(story: widget.story, autoplay: autoplay)),
+      fadeRoute(
+        StoryDetailsScreen(story: widget.story, autoplay: autoplay),
+      ),
     );
   }
 
@@ -145,13 +139,23 @@ class _StoryCardState extends State<StoryCard> {
       ? const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white)
       : const _Emoji(emoji: '📖', size: 18);
 
-  // ------------------------------------------------------------------
-  // Formatting helpers
-  // ------------------------------------------------------------------
+  /* --------------------------------------------------------------------------
+   * Formatting helpers
+   * ------------------------------------------------------------------------*/
 
   static const List<String> _mon = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
   ];
 
   // e.g. "27 Oct 2025, 11:57 AM"
@@ -160,14 +164,17 @@ class _StoryCardState extends State<StoryCard> {
     final day = d.day;
     final m = _mon[d.month - 1];
     final y = d.year;
+
     var h = d.hour % 12;
     if (h == 0) h = 12;
+
     final mm = d.minute.toString().padLeft(2, '0');
     final ap = d.hour >= 12 ? 'PM' : 'AM';
+
     return '$day $m $y, $h:$mm $ap';
   }
 
-  // "(+12m)" etc
+  // "(+12m)", "(+2h)", "(+1d)"
   String _formatGap(Duration d) {
     final abs = d.isNegative ? -d : d;
     if (abs.inMinutes < 60) return '${abs.inMinutes}m';
@@ -175,7 +182,7 @@ class _StoryCardState extends State<StoryCard> {
     return '${abs.inDays}d';
   }
 
-  // Little rounded badge with 🕒, used in Row B
+  // badge with 🕒 for Row B
   Widget _timeBadge(String emoji) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -207,8 +214,7 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // Bottom "Source: <x>" logic.
-  // Prefer domain, else source.
+  // Bottom "Source: <x>" logic (prefer domain, else source)
   String _attribution(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -216,6 +222,10 @@ class _StoryCardState extends State<StoryCard> {
     if (src.isNotEmpty) return src;
     return '';
   }
+
+  /* --------------------------------------------------------------------------
+   * Build
+   * ------------------------------------------------------------------------*/
 
   @override
   Widget build(BuildContext context) {
@@ -245,16 +255,16 @@ class _StoryCardState extends State<StoryCard> {
     // hero/thumbnail
     final imageUrl = resolveStoryImageUrl(widget.story);
 
-    // attribution text
+    // attribution for footer
     final srcText = _attribution(widget.story);
 
-    // COLORS from mock:
-    //   card bg ~ rgba(30,37,51,0.35) on dark
+    // Card colors:
+    // dark bg ~ rgba(30,37,51,0.35)
     final Color cardBgDark = const Color(0xFF1e2533).withOpacity(0.35);
     final Color cardBgLight = scheme.surface;
-
-    final Color borderColor =
-        isDark ? Colors.white.withOpacity(0.20) : Colors.black.withOpacity(0.08);
+    final Color borderColor = isDark
+        ? Colors.white.withOpacity(0.20)
+        : Colors.black.withOpacity(0.08);
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -290,14 +300,19 @@ class _StoryCardState extends State<StoryCard> {
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
-              final mediaH = math.max(130.0, w / (16 / 9));
+
+              // OLD: mediaH = max(130, w/ (16/9))
+              // NEW: make the thumbnail taller (≈1.15x 16:9, min 180)
+              // so heads don't get cut and also so we "eat up"
+              // that giant blank middle space.
+              final baseH = w / (16 / 9);
+              final boosted = baseH * 1.15;
+              final mediaH = math.max(180.0, boosted);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ------------------------------------------------------------------
-                  // THUMBNAIL (16:9)
-                  // ------------------------------------------------------------------
+                  // ─────────────── Thumbnail / hero image ───────────────
                   SizedBox(
                     height: mediaH,
                     child: Hero(
@@ -363,7 +378,7 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
 
-                            // subtle bottom gradient overlay
+                            // soft bottom fade
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -385,18 +400,14 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // ------------------------------------------------------------------
-                  // BODY
-                  // ------------------------------------------------------------------
+                  // ─────────────── Body ───────────────
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.all(12), // <-- tighter padding (12)
+                      padding: const EdgeInsets.all(12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // ----------------------------------------------------------
                           // Row A: "<Kind>  •  <publishedAt>"
-                          // ----------------------------------------------------------
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -406,7 +417,7 @@ class _StoryCardState extends State<StoryCard> {
                                   _kindDisplay(kind),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
+                                  style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
@@ -416,7 +427,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               if (publishedText != null) ...[
                                 const SizedBox(width: 8),
-                                // dot •
+                                // bullet "•"
                                 Container(
                                   width: 6,
                                   height: 6,
@@ -446,9 +457,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 4),
 
-                          // ----------------------------------------------------------
-                          // Row B: [🕒 badge]  "<addedAt (+Δm)>"
-                          // ----------------------------------------------------------
+                          // Row B: [🕒] "<addedAt (+Δm)>"
                           if (addedText != null)
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -473,9 +482,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 8),
 
-                          // ----------------------------------------------------------
                           // Title (max 3 lines)
-                          // ----------------------------------------------------------
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
@@ -491,14 +498,13 @@ class _StoryCardState extends State<StoryCard> {
                             ),
                           ),
 
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 8),
 
-                          // push CTA row to bottom for consistent card height
+                          // Spacer keeps CTA row locked to the bottom of body,
+                          // so CTAs line up across cards.
                           const Spacer(),
 
-                          // ----------------------------------------------------------
                           // CTA row
-                          // ----------------------------------------------------------
                           Row(
                             children: [
                               // Big red Watch/Read button
@@ -545,7 +551,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               const SizedBox(width: 8),
 
-                              // Save
+                              // Save button
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
@@ -564,7 +570,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               const SizedBox(width: 8),
 
-                              // Share
+                              // Share button
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
@@ -578,9 +584,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 8),
 
-                          // ----------------------------------------------------------
                           // Source row
-                          // ----------------------------------------------------------
                           if (srcText.isNotEmpty)
                             Text(
                               'Source: $srcText',
@@ -621,7 +625,9 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-/* ------------------------- Category/fallback icon ------------------------- */
+/* --------------------------------------------------------------------------
+ * Fallback icon when image is missing
+ * ------------------------------------------------------------------------*/
 class _SampleIcon extends StatelessWidget {
   final String kind;
   const _SampleIcon({required this.kind});
@@ -642,6 +648,7 @@ class _SampleIcon extends StatelessWidget {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
+
     return Icon(
       iconData,
       size: 60,
@@ -650,7 +657,9 @@ class _SampleIcon extends StatelessWidget {
   }
 }
 
-/* --------------------------------- Utils -------------------------------- */
+/* --------------------------------------------------------------------------
+ * Emoji text helper
+ * ------------------------------------------------------------------------*/
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 18});
   final String emoji;
@@ -676,7 +685,9 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* --------- Secondary action icon chip (Save / Share) --------- */
+/* --------------------------------------------------------------------------
+ * Compact secondary action chip (Save / Share)
+ * ------------------------------------------------------------------------*/
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -692,7 +703,44 @@ class _ActionIconBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // dark translucent chip from mock:
+    final bgColor = isDark
+        ? Colors.black.withOpacity(0.4)
+        : Colors.black.withOpacity(0.06);
+
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.15)
+        : Colors.black.withOpacity(0.15);
+
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: bgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: borderColor, width: 1),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 36,
+            height: 36,
+            child: Center(
+              // icon injected from parent
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* The InkWell child above needs icon centered.
+   Override build to include icon cleanly. */
+extension on _ActionIconBox {
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     final bgColor = isDark
         ? Colors.black.withOpacity(0.4)
         : Colors.black.withOpacity(0.06);
@@ -723,7 +771,9 @@ class _ActionIconBox extends StatelessWidget {
   }
 }
 
-/* ---------------------- Back-compat extension ---------------------- */
+/* --------------------------------------------------------------------------
+ * Back-compat extension for ingestedAt
+ * ------------------------------------------------------------------------*/
 extension _StoryCompat on Story {
   // Some older payloads stick ingested_at in different places.
   DateTime? get ingestedAtCompat {
