@@ -19,7 +19,7 @@ import 'widgets/search_bar.dart';
 import '../story/story_card.dart';
 
 /* -------------------------------------------------------------------------- */
-/* Sort mode for the feed                                                     */
+/* Sort mode for the feed (for the "Latest first ▾" pill)                     */
 /* -------------------------------------------------------------------------- */
 
 enum _SortMode {
@@ -36,10 +36,10 @@ enum _SortMode {
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    this.showSearchBar = false, // show only when Search tab active
-    this.onMenuPressed, // opens drawer (from RootShell)
-    this.onHeaderRefresh, // optional external hook
-    this.onOpenDiscover, // header "Discover" button -> Search tab
+    this.showSearchBar = false, // true when user is on Search tab in bottom nav
+    this.onMenuPressed,         // opens endDrawer from RootShell
+    this.onHeaderRefresh,       // optional external hook
+    this.onOpenDiscover,        // header Discover/Search icon
   });
 
   final bool showSearchBar;
@@ -53,7 +53,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // 3 logical feeds for the pill row.
+  // Tabs exactly as in the current app: All / Entertainment / Sports.
   static const Map<String, String> _tabs = {
     'all': 'All',
     'entertainment': 'Entertainment',
@@ -80,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen>
   bool _offline = false;
   bool _isForeground = true;
 
-  // current "Sorting" mode in the header
+  // Which sort mode is currently active ("Latest first", "Trending now", etc.)
   _SortMode _sortMode = _SortMode.latest;
 
   // Connectivity / timers
@@ -111,7 +111,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     WidgetsBinding.instance.addObserver(this);
 
-    // Connectivity changes.
+    // Connectivity listener.
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
       final hasNetwork = _hasNetworkFrom(event);
       if (!mounted) return;
@@ -123,14 +123,14 @@ class _HomeScreenState extends State<HomeScreen>
         unawaited(_currentFeed.load(reset: false));
         _ensureWebSocket();
       } else {
-        // Offline: drop socket to avoid loop.
+        // Offline: drop socket to avoid loop/battery.
         _teardownWebSocket();
       }
 
       if (hasNetwork && wasOffline) _wsBackoffSecs = 2;
     });
 
-    // Initial connectivity state (async fire-and-forget).
+    // Initial connectivity check.
     () async {
       final initial = await Connectivity().checkConnectivity();
       final hasNetwork = _hasNetworkFrom(initial);
@@ -139,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen>
       if (hasNetwork) _ensureWebSocket();
     }();
 
-    // Auto refresh tick (silent).
+    // Silent periodic refresh.
     _autoRefresh =
         Timer.periodic(_kAutoRefreshEvery, (_) => _tickAutoRefresh());
 
@@ -173,23 +173,25 @@ class _HomeScreenState extends State<HomeScreen>
     super.dispose();
   }
 
-  // Lifecycle → refresh + manage realtime when returning to foreground.
+  // Lifecycle: refresh + manage realtime when foregrounded.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _isForeground = (state == AppLifecycleState.resumed);
     if (_isForeground && mounted && !_offline) {
-      // Gentle, incremental fetch (no skeleton flicker).
+      // Gentle incremental fetch.
       unawaited(_currentFeed.load(reset: false));
-      _ensureWebSocket(); // make sure WS is alive in foreground
+      _ensureWebSocket(); // keep WS alive in foreground
     } else if (!_isForeground) {
-      _teardownWebSocket(); // pause socket in background to save battery
+      _teardownWebSocket(); // pause WS to save battery
     }
   }
 
-  /* --------------------------- Realtime (WebSocket) ------------------------ */
+  /* ------------------------------------------------------------------------ */
+  /* Realtime (WebSocket)                                                     */
+  /* ------------------------------------------------------------------------ */
 
   String _buildWsUrl() {
-    // Build ws/wss from your REST base
+    // Build ws/wss from API base.
     final base = kApiBaseUrl;
     final u = Uri.parse(base);
     final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
@@ -209,14 +211,14 @@ class _HomeScreenState extends State<HomeScreen>
   void _ensureWebSocket() {
     if (!mounted) return;
     if (_offline || !_isForeground) return;
-    if (_ws != null) return; // already connected/connecting
+    if (_ws != null) return; // already active/connecting
 
     final url = _buildWsUrl();
     try {
       _ws = WebSocketChannel.connect(Uri.parse(url));
       _wsSub = _ws!.stream.listen(
         (data) {
-          // Expected: {"id":"...", "kind":"...", "..."} or {"type":"ping"}
+          // Could be {"type":"ping"} etc; only trigger refresh for actual new story events.
           try {
             final obj = json.decode(data.toString());
             if (obj is Map && obj['type'] == 'ping') return;
@@ -227,7 +229,7 @@ class _HomeScreenState extends State<HomeScreen>
         onError: (_) => _onWsClosed(),
         cancelOnError: true,
       );
-      _wsBackoffSecs = 2; // connected → reset backoff
+      _wsBackoffSecs = 2; // reset backoff once connected
     } catch (_) {
       _onWsClosed();
     }
@@ -241,7 +243,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (_offline || !_isForeground) return;
 
-    // Exponential backoff reconnect
+    // Exponential backoff reconnect.
     _wsReconnectTimer?.cancel();
     _wsReconnectTimer =
         Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
@@ -262,12 +264,14 @@ class _HomeScreenState extends State<HomeScreen>
     _realtimeDebounceTimer = Timer(_kRealtimeDebounce, () {
       if (!mounted) return;
       if (_offline) return;
-      if (_search.text.isNotEmpty) return; // don't disrupt focused search
+      if (_search.text.isNotEmpty) return; // don't disrupt active search
       unawaited(_currentFeed.load(reset: false));
     });
   }
 
-  /* ------------------------------ Helpers ---------------------------------- */
+  /* ------------------------------------------------------------------------ */
+  /* Helpers                                                                   */
+  /* ------------------------------------------------------------------------ */
 
   bool _hasNetworkFrom(dynamic event) {
     if (event is ConnectivityResult) return event != ConnectivityResult.none;
@@ -288,14 +292,14 @@ class _HomeScreenState extends State<HomeScreen>
     if (mounted) setState(() {});
   }
 
-  // Manual pull-to-refresh: full reset + optional external hook.
+  // Manual pull-to-refresh (used by pull-down + refresh icon).
   Future<void> _refresh() async {
     final key = _currentTabKey;
     await _feeds[key]!.load(reset: true);
     widget.onHeaderRefresh?.call();
   }
 
-  // Background silent refresh tick.
+  // Silent refresh tick.
   void _tickAutoRefresh() {
     if (!mounted) return;
     if (_offline) return;
@@ -405,7 +409,9 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  /* ------------------------------- UI -------------------------------------- */
+  /* ------------------------------------------------------------------------ */
+  /* UI                                                                        */
+  /* ------------------------------------------------------------------------ */
 
   @override
   Widget build(BuildContext context) {
@@ -414,46 +420,52 @@ class _HomeScreenState extends State<HomeScreen>
 
     return Scaffold(
       backgroundColor:
-          isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
+          isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
       body: RefreshIndicator.adaptive(
         key: _refreshKey,
         onRefresh: _refresh,
         color: const Color(0xFFdc2626),
         child: CustomScrollView(
           slivers: [
-            // Sticky glass header bar:
+            // TOP STICKY HEADER BAR (matches the look in your approved mock):
+            //
+            // Row 1:  [ 🎬 CinePulse ]                           [🔍][↻][≡]
+            // (actions are dark 32x32 boxes with subtle red-ish border)
+            //
             SliverAppBar(
               floating: true,
               pinned: true,
+              centerTitle: false,
               elevation: 0,
               backgroundColor: isDark
                   ? const Color(0xFF0f172a).withOpacity(0.95)
                   : theme.colorScheme.surface.withOpacity(0.95),
               surfaceTintColor: Colors.transparent,
-              toolbarHeight: 70,
+              toolbarHeight: 64,
               leading: null,
               automaticallyImplyLeading: false,
               flexibleSpace: ClipRRect(
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                   child: Container(
                     decoration: BoxDecoration(
+                      // simple dark vertical blend; you're already close
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: isDark
                             ? [
-                                const Color(0xFF0f172a).withOpacity(0.95),
-                                const Color(0xFF0f172a).withOpacity(0.8),
+                                const Color(0xFF1e2537).withOpacity(0.9),
+                                const Color(0xFF0b0f17).withOpacity(0.95),
                               ]
                             : [
                                 theme.colorScheme.surface.withOpacity(0.95),
-                                theme.colorScheme.surface.withOpacity(0.8),
+                                theme.colorScheme.surface.withOpacity(0.9),
                               ],
                       ),
                       border: const Border(
                         bottom: BorderSide(
-                          color: Color(0x0Fffffff),
+                          color: Color(0x0FFFFFFF), // ~6% white
                           width: 1,
                         ),
                       ),
@@ -461,35 +473,36 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                 ),
               ),
-              title: const _ModernBrandLogo(),
+              titleSpacing: 16,
+              title: const _ModernBrandLogo(), // red square + CinePulse text
               actions: [
-                IconButton(
+                _HeaderIconButton(
                   tooltip: 'Discover',
-                  icon: Icon(
-                    kIsWeb
-                        ? Icons.explore_outlined
-                        : Icons.manage_search_rounded,
-                  ),
-                  onPressed: widget.onOpenDiscover,
+                  icon: kIsWeb
+                      ? Icons.explore_outlined
+                      : Icons.manage_search_rounded,
+                  onTap: widget.onOpenDiscover,
                 ),
-                IconButton(
+                const SizedBox(width: 8),
+                _HeaderIconButton(
                   tooltip: 'Refresh',
-                  icon: const Icon(Icons.refresh_rounded),
-                  onPressed: () {
+                  icon: Icons.refresh_rounded,
+                  onTap: () {
                     _refreshKey.currentState?.show();
                     unawaited(_refresh());
                   },
                 ),
-                IconButton(
+                const SizedBox(width: 8),
+                _HeaderIconButton(
                   tooltip: 'Menu',
-                  icon: const Icon(Icons.menu_rounded),
-                  onPressed: widget.onMenuPressed,
+                  icon: Icons.menu_rounded,
+                  onTap: widget.onMenuPressed,
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: 12),
               ],
             ),
 
-            // Search bar (only if Search tab from bottom nav was tapped)
+            // OPTIONAL INLINE SEARCH BAR (shown when Search tab is active)
             if (widget.showSearchBar)
               SliverToBoxAdapter(
                 child: Padding(
@@ -504,7 +517,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // Offline banner if applicable
+            // OFFLINE BANNER
             if (_offline)
               const SliverToBoxAdapter(
                 child: Padding(
@@ -513,7 +526,14 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // CATEGORY + SORT BAR (pinned, sticky)
+            // CATEGORY + SORT ROW (pinned under header):
+            //
+            // [ All ] [ Entertainment ] [ Sports ]              [ ⏱ Latest first ▾ ]
+            //
+            // Active pill = red fill, white text.
+            // Inactive pill = transparent bg, red border, red text.
+            // Sort pill matches inactive style.
+            //
             SliverPersistentHeader(
               pinned: true,
               delegate: _FiltersHeaderDelegate(
@@ -531,7 +551,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-            // FEED GRID
+            // FEED GRID CONTENT
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -551,12 +571,69 @@ class _HomeScreenState extends State<HomeScreen>
           ],
         ),
       ),
-      floatingActionButton: null,
     );
   }
 }
 
-/* -------------------- Sticky horizontal filter header -------------------- */
+/* -------------------------------------------------------------------------- */
+/* Header action icon style (32x32 dark rounded square w/ subtle red border)  */
+/* -------------------------------------------------------------------------- */
+
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton({
+    required this.icon,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  final IconData icon;
+  final VoidCallback? onTap;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final bg = isDark
+        ? const Color(0xFF0f172a).withOpacity(0.7)
+        : Colors.black.withOpacity(0.06);
+
+    final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
+
+    final iconColor =
+        isDark ? Colors.white : Colors.black87; // visible in light too
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: borderColor,
+              width: 1,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 16,
+            color: iconColor,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sticky category/sort header under the main bar                             */
+/* -------------------------------------------------------------------------- */
 
 class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   _FiltersHeaderDelegate({
@@ -569,10 +646,10 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   final int activeIndex;
   final ValueChanged<int> onSelect;
 
-  // The label under the caret on the Sorting button ("Latest first", etc.)
+  // "Latest first", "Trending now", etc.
   final String sortLabel;
 
-  // We need BuildContext to open the bottom sheet from parent
+  // Needs context to open bottom sheet.
   final void Function(BuildContext ctx) onSortTap;
 
   @override
@@ -588,110 +665,120 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   ) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    const accent = Color(0xFFdc2626);
 
-    Color pillBg(bool active) =>
-        active ? const Color(0xFFdc2626) : Colors.transparent;
-
-    Color textColor(bool active) {
-      if (active) return Colors.white;
-      return isDark
-          ? const Color(0xFFCBD5E1)
-          : theme.colorScheme.onSurfaceVariant;
-    }
-
-    Widget tabItem({
-      required String label,
-      required bool active,
-      required VoidCallback onTap,
-    }) {
+    // active chip: red fill
+    Widget _activeChip(String label, VoidCallback onTap) {
       return InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(999),
         onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: pillBg(active),
-            borderRadius: BorderRadius.circular(8),
+            color: accent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: accent, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
           ),
           child: Text(
             label,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
               height: 1.2,
-              color: textColor(active),
+              color: Colors.white,
             ),
           ),
         ),
       );
     }
 
-    Widget pipe() {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        child: Text(
-          '|',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w400,
-            height: 1.2,
-            color: isDark
-                ? const Color(0xFF64748B)
-                : theme.colorScheme.onSurfaceVariant,
+    // inactive chip: transparent w/ red outline
+    Widget _inactiveChip(String label, VoidCallback onTap) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: accent.withOpacity(0.4),
+              width: 1,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              height: 1.2,
+              color: accent,
+            ),
           ),
         ),
       );
     }
 
+    // which chip to render for a given index
+    Widget _tabChip({
+      required int index,
+      required String label,
+    }) {
+      final isActive = (activeIndex == index);
+      if (isActive) {
+        return _activeChip(label, () => onSelect(index));
+      } else {
+        return _inactiveChip(label, () => onSelect(index));
+      }
+    }
+
+    // sort pill (outline style same as inactive chip)
     Widget sortButton() {
       return InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(999),
         onTap: () => onSortTap(context),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
             border: Border.all(
               width: 1,
-              color: isDark
-                  ? Colors.white.withOpacity(0.12)
-                  : Colors.black.withOpacity(0.12),
+              color: accent.withOpacity(0.4),
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                Icons.sort_rounded,
+                Icons.access_time_rounded,
                 size: 16,
-                color: isDark
-                    ? const Color(0xFFCBD5E1)
-                    : theme.colorScheme.onSurfaceVariant,
+                color: accent,
               ),
               const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  sortLabel,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    height: 1.2,
-                    color: isDark
-                        ? const Color(0xFFCBD5E1)
-                        : theme.colorScheme.onSurfaceVariant,
-                  ),
+              Text(
+                sortLabel,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  height: 1.2,
+                  color: accent,
                 ),
               ),
               const SizedBox(width: 2),
               Icon(
                 Icons.arrow_drop_down_rounded,
                 size: 18,
-                color: isDark
-                    ? const Color(0xFFCBD5E1)
-                    : theme.colorScheme.onSurfaceVariant,
+                color: accent,
               ),
             ],
           ),
@@ -699,50 +786,37 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
-    // Layout:
-    // [ tabs .... ] [ sort button ]
+    // Whole sticky bar background:
+    // Dark navy, then a 1px divider on the bottom.
     return Container(
-      color: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
+      color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
       child: Container(
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
               width: 1,
               color: isDark
-                  ? Colors.white.withOpacity(0.08)
-                  : Colors.black.withOpacity(0.08),
+                  ? Colors.white.withOpacity(0.06)
+                  : Colors.black.withOpacity(0.06),
             ),
           ),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Tabs (scrollable horizontally)
+            // Left: category pills in a horizontal wrap/scroll
             Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 physics: const BouncingScrollPhysics(),
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    tabItem(
-                      label: 'All',
-                      active: activeIndex == 0,
-                      onTap: () => onSelect(0),
-                    ),
-                    pipe(),
-                    tabItem(
-                      label: 'Entertainment',
-                      active: activeIndex == 1,
-                      onTap: () => onSelect(1),
-                    ),
-                    pipe(),
-                    tabItem(
-                      label: 'Sports',
-                      active: activeIndex == 2,
-                      onTap: () => onSelect(2),
-                    ),
+                    _tabChip(index: 0, label: 'All'),
+                    const SizedBox(width: 8),
+                    _tabChip(index: 1, label: 'Entertainment'),
+                    const SizedBox(width: 8),
+                    _tabChip(index: 2, label: 'Sports'),
                   ],
                 ),
               ),
@@ -750,7 +824,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
 
             const SizedBox(width: 12),
 
-            // Sorting (fixed at end)
+            // Right: sort pill
             sortButton(),
           ],
         ),
@@ -765,7 +839,9 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 }
 
-/* ----------------------------- Feed list/grid --------------------------- */
+/* -------------------------------------------------------------------------- */
+/* Feed grid + paging                                                         */
+/* -------------------------------------------------------------------------- */
 
 class _FeedList extends StatefulWidget {
   const _FeedList({
@@ -790,18 +866,13 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
-  // RESPONSIVE GRID DELEGATE
+  // Responsive grid delegate:
   //
-  // The big change here vs your previous version:
-  // We bumped childAspectRatio UP so each grid tile is SHORTER.
+  // Cards should look like your screenshot:
+  //    - 3 columns on desktop width, each ~360-400px wide
+  //    - each card ~400px tall (image on top, text+CTA below)
   //
-  // Before:
-  //   ratio ~0.56 for 3-col desktop ⇒ card height ~1.8× width (super tall)
-  //
-  // Now:
-  //   ratio ~0.9..1.1 ⇒ card height ~0.9–1.1× width (much tighter).
-  //
-  // We still tweak for breakpoints + textScale, but baseline is compact.
+  // So we keep the previous breakpoint logic and aspect ratio tuning.
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     // pick a target column width by breakpoint
     double maxTileW;
@@ -816,24 +887,19 @@ class _FeedListState extends State<_FeedList>
     }
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // Base ratio (width / height). Bigger number = shorter tile.
-    //
-    // Narrower cards (phones ~320-340 wide) still need a little vertical
-    // breathing room for image + text, so we start ~0.9. Wider cards can go
-    // even shorter because text wraps less.
+    // Base ratio (width / height). Bigger ratio => shorter card.
     double baseRatio;
     if (maxTileW <= 340) {
       baseRatio = 0.90;
     } else if (maxTileW <= 380) {
       baseRatio = 0.95;
     } else if (maxTileW <= 420) {
-      baseRatio = .92; // was 1.00, Lower value makes cards taller
+      baseRatio = 0.92; // slightly taller for mid widths
     } else {
       baseRatio = 1.05;
     }
 
-    // If the user bumps system textScale up, we allow the cards
-    // to get a bit taller (ratio goes DOWN).
+    // If textScale is huge, let cards grow taller (ratio goes down).
     final effectiveRatio = baseRatio / textScale.clamp(1.0, 1.8);
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
@@ -844,7 +910,7 @@ class _FeedListState extends State<_FeedList>
     );
   }
 
-  // ---------- sort helpers ----------
+  // sort helpers
   double _trendingScore(Story s) {
     try {
       final dyn = (s as dynamic);
@@ -902,6 +968,7 @@ class _FeedListState extends State<_FeedList>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+
     final feed = widget.feed;
 
     return AnimatedBuilder(
@@ -915,13 +982,20 @@ class _FeedListState extends State<_FeedList>
 
             const horizontalPad = 12.0;
             const topPad = 0.0;
+
+            // We'll still leave bottom room for mobile bottom nav; it will be
+            // hidden on desktop in RootShell later.
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
 
             if (feed.isInitialLoading) {
               return GridView.builder(
                 padding: EdgeInsets.fromLTRB(
-                    horizontalPad, 8, horizontalPad, bottomPad),
+                  horizontalPad,
+                  8,
+                  horizontalPad,
+                  bottomPad,
+                ),
                 physics: const AlwaysScrollableScrollPhysics(),
                 cacheExtent: 1800,
                 gridDelegate: gridDelegate,
@@ -933,7 +1007,11 @@ class _FeedListState extends State<_FeedList>
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
                 padding: EdgeInsets.fromLTRB(
-                    horizontalPad, 24, horizontalPad, bottomPad),
+                  horizontalPad,
+                  24,
+                  horizontalPad,
+                  bottomPad,
+                ),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
@@ -944,7 +1022,7 @@ class _FeedListState extends State<_FeedList>
               );
             }
 
-            // text filter
+            // text filter from search bar
             final q = widget.searchText.text.trim().toLowerCase();
             final baseList = (q.isEmpty)
                 ? feed.items
@@ -963,7 +1041,11 @@ class _FeedListState extends State<_FeedList>
                   : "No matching items.";
               return ListView(
                 padding: EdgeInsets.fromLTRB(
-                    horizontalPad, 24, horizontalPad, bottomPad),
+                  horizontalPad,
+                  24,
+                  horizontalPad,
+                  bottomPad,
+                ),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
@@ -971,11 +1053,16 @@ class _FeedListState extends State<_FeedList>
               );
             }
 
+            // We can optionally paginate in future. For now it's off.
             const showLoadMore = false;
 
             return GridView.builder(
               padding: EdgeInsets.fromLTRB(
-                  horizontalPad, topPad, horizontalPad, bottomPad),
+                horizontalPad,
+                topPad,
+                horizontalPad,
+                bottomPad,
+              ),
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 2000,
               gridDelegate: gridDelegate,
@@ -1010,7 +1097,9 @@ class _FeedListState extends State<_FeedList>
   }
 }
 
-/* ----------------------------- Feed paging model ------------------------ */
+/* -------------------------------------------------------------------------- */
+/* Feed paging model                                                          */
+/* -------------------------------------------------------------------------- */
 
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
@@ -1030,7 +1119,7 @@ class _PagedFeed extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get canLoadMore => _canLoadMore;
 
-  // Effective timestamp for ordering and cursors.
+  // "Effective" timestamp for sorting and cursors.
   DateTime? _eff(Story s) =>
       s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
@@ -1045,6 +1134,7 @@ class _PagedFeed extends ChangeNotifier {
       _sinceCursor = null;
       _items.clear();
 
+      // Load cached first.
       final cached = await FeedDiskCache.load(tab);
       if (cached.isNotEmpty) {
         _items.addAll(cached);
@@ -1071,10 +1161,8 @@ class _PagedFeed extends ChangeNotifier {
 
       _sortNewestFirst(_items);
 
-      // Cursor should be the NEWEST effective date we have (for delta fetch).
-      final dates = _items
-          .map(_eff)
-          .whereType<DateTime>();
+      // Cursor should be newest effective date we have.
+      final dates = _items.map(_eff).whereType<DateTime>();
       _sinceCursor = dates.isEmpty
           ? null
           : dates.reduce((a, b) => a.isAfter(b) ? a : b);
@@ -1118,54 +1206,53 @@ class _PagedFeed extends ChangeNotifier {
   }
 }
 
-/* ----------------------------- Branding ----------------------------- */
+/* -------------------------------------------------------------------------- */
+/* Branding block in header ("🎬" red box + CinePulse text)                    */
+/* -------------------------------------------------------------------------- */
 
 class _ModernBrandLogo extends StatelessWidget {
   const _ModernBrandLogo();
 
   @override
   Widget build(BuildContext context) {
+    // Matches the approved header look:
+    // Red rounded square ~28x28 with 🎬, then "CinePulse" in white 18px semibold.
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 36,
-          height: 36,
+          width: 28,
+          height: 28,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFFdc2626), Color(0xFFef4444)],
-            ),
+            color: const Color(0xFFdc2626),
             borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFdc2626).withOpacity(0.3),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+                color: const Color(0xFFdc2626).withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
           child: const Center(
             child: Text(
               '🎬',
-              style: TextStyle(fontSize: 20, height: 1),
+              style: TextStyle(
+                fontSize: 16,
+                height: 1,
+                color: Colors.white,
+              ),
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFFdc2626), Color(0xFFef4444)],
-          ).createShader(bounds),
-          child: const Text(
-            'CinePulse',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              color: Colors.white,
-              letterSpacing: -0.5,
-            ),
+        const SizedBox(width: 8),
+        const Text(
+          'CinePulse',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.2,
+            color: Colors.white,
           ),
         ),
       ],
