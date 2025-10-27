@@ -18,9 +18,9 @@ import '../../widgets/skeleton_card.dart';
 import 'widgets/search_bar.dart';
 import '../story/story_card.dart';
 
-/* -------------------------------------------------------------------------- */
-/* Sort mode for the feed (for the "Latest first ▾" pill)                     */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────────────────────────────────────────────────────
+   Sort mode for the feed ("Latest first ▾", etc.)
+   ───────────────────────────────────────────────────────────────────────── */
 
 enum _SortMode {
   latest,        // "Latest first" (default)
@@ -29,14 +29,14 @@ enum _SortMode {
   editorsPick,   // "Editor’s pick"
 }
 
-/* -------------------------------------------------------------------------- */
-/* HomeScreen                                                                 */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────────────────────────────────────────────────────
+   HomeScreen
+   ───────────────────────────────────────────────────────────────────────── */
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    this.showSearchBar = false, // true when user is on Search tab in bottom nav
+    this.showSearchBar = false, // true on Search tab in bottom nav
     this.onMenuPressed,         // opens endDrawer from RootShell
     this.onHeaderRefresh,       // optional external hook
     this.onOpenDiscover,        // header Discover/Search icon
@@ -80,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen>
   bool _offline = false;
   bool _isForeground = true;
 
-  // Which sort mode is currently active ("Latest first", "Trending now", etc.)
+  // Which sort mode is currently active
   _SortMode _sortMode = _SortMode.latest;
 
   // Connectivity / timers
@@ -186,9 +186,9 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Realtime (WebSocket)                                                     */
-  /* ------------------------------------------------------------------------ */
+  /* ────────────────────────────────────────────────────────────────────────
+     Realtime (WebSocket)
+     ─────────────────────────────────────────────────────────────────────── */
 
   String _buildWsUrl() {
     // Build ws/wss from API base.
@@ -218,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen>
       _ws = WebSocketChannel.connect(Uri.parse(url));
       _wsSub = _ws!.stream.listen(
         (data) {
-          // Could be {"type":"ping"} etc; only trigger refresh for actual new story events.
+          // Could be {"type":"ping"} etc; only trigger refresh for actual new-story events.
           try {
             final obj = json.decode(data.toString());
             if (obj is Map && obj['type'] == 'ping') return;
@@ -269,9 +269,9 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* Helpers                                                                   */
-  /* ------------------------------------------------------------------------ */
+  /* ────────────────────────────────────────────────────────────────────────
+     Helpers
+     ─────────────────────────────────────────────────────────────────────── */
 
   bool _hasNetworkFrom(dynamic event) {
     if (event is ConnectivityResult) return event != ConnectivityResult.none;
@@ -409,9 +409,9 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  /* ------------------------------------------------------------------------ */
-  /* UI                                                                        */
-  /* ------------------------------------------------------------------------ */
+  /* ────────────────────────────────────────────────────────────────────────
+     UI
+     ─────────────────────────────────────────────────────────────────────── */
 
   @override
   Widget build(BuildContext context) {
@@ -427,7 +427,7 @@ class _HomeScreenState extends State<HomeScreen>
         color: const Color(0xFFdc2626),
         child: CustomScrollView(
           slivers: [
-            // TOP STICKY HEADER BAR
+            /* ── TOP STICKY HEADER BAR ─────────────────────────────────── */
             SliverAppBar(
               floating: true,
               pinned: true,
@@ -497,7 +497,7 @@ class _HomeScreenState extends State<HomeScreen>
               ],
             ),
 
-            // INLINE SEARCH BAR (when Search tab is active)
+            /* ── INLINE SEARCH BAR (when Search tab is active) ────────── */
             if (widget.showSearchBar)
               SliverToBoxAdapter(
                 child: Padding(
@@ -512,7 +512,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // OFFLINE BANNER
+            /* ── OFFLINE BANNER ───────────────────────────────────────── */
             if (_offline)
               const SliverToBoxAdapter(
                 child: Padding(
@@ -521,7 +521,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // CATEGORY + SORT ROW (sticky)
+            /* ── CATEGORY + SORT ROW (sticky) ─────────────────────────── */
             SliverPersistentHeader(
               pinned: true,
               delegate: _FiltersHeaderDelegate(
@@ -539,7 +539,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-            // FEED GRID CONTENT
+            /* ── FEED GRID CONTENT ────────────────────────────────────── */
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -562,9 +562,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Header action icon style                                                   */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────────────────────────────────────────────────────
+   Small header icon button (32x32 rounded square w/ subtle red border)
+   ───────────────────────────────────────────────────────────────────────── */
 
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
@@ -587,8 +587,7 @@ class _HeaderIconButton extends StatelessWidget {
 
     final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
 
-    final iconColor =
-        isDark ? Colors.white : Colors.black87;
+    final iconColor = isDark ? Colors.white : Colors.black87;
 
     return Tooltip(
       message: tooltip,
@@ -618,9 +617,9 @@ class _HeaderIconButton extends StatelessWidget {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Sticky category/sort header under the main bar                             */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────────────────────────────────────────────────────
+   Sticky category/sort header under the main bar
+   ───────────────────────────────────────────────────────────────────────── */
 
 class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   _FiltersHeaderDelegate({
@@ -651,6 +650,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
     final isDark = theme.brightness == Brightness.dark;
     const accent = Color(0xFFdc2626);
 
+    // pill for active tab
     Widget _activeChip(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -669,9 +669,9 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
               ),
             ],
           ),
-          child: const Text(
-            'All', // placeholder, overridden below
-            style: TextStyle(
+          child: Text(
+            label,
+            style: const TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               height: 1.2,
@@ -682,6 +682,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
+    // pill for inactive tab
     Widget _inactiveChip(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -709,45 +710,18 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
+    // pick correct chip for a given tab
     Widget _tabChip({
       required int index,
       required String label,
     }) {
       final isActive = (activeIndex == index);
-      if (isActive) {
-        return InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: () => onSelect(index),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: accent,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: accent, width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: accent.withOpacity(0.4),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                height: 1.2,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        );
-      } else {
-        return _inactiveChip(label, () => onSelect(index));
-      }
+      return isActive
+          ? _activeChip(label, () => onSelect(index))
+          : _inactiveChip(label, () => onSelect(index));
     }
 
+    // sort mode pill
     Widget sortButton() {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -810,6 +784,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // left: horizontally scrollable tab chips
             Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -825,7 +800,10 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
                 ),
               ),
             ),
+
             const SizedBox(width: 12),
+
+            // right: sort pill
             sortButton(),
           ],
         ),
@@ -840,9 +818,9 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Feed grid + paging                                                         */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────────────────────────────────────────────────────
+   Feed grid + paging
+   ───────────────────────────────────────────────────────────────────────── */
 
 class _FeedList extends StatefulWidget {
   const _FeedList({
@@ -869,25 +847,32 @@ class _FeedListState extends State<_FeedList>
 
   // Responsive grid delegate for ALL screen types.
   //
-  // Goal:
-  // - Phone (1 col): card is a bit taller so title + CTA fits comfortably.
-  // - Tablet / small desktop (2 cols): slightly shorter but still roomy.
-  // - Desktop / wide (3+ cols): more compact, but NOT so short that the title
-  //   or CTA row collides / gets pushed out.
+  // This is the main layout brain. Two knobs matter most:
   //
-  // We express height using childAspectRatio = tileWidth / tileHeight.
-  //   -> Bigger ratio  => shorter card.
-  //   -> Smaller ratio => taller card.
+  // 1. maxTileW clamp(320.0, 480.0)
+  //    - Lower bound 320.0  => don't allow cards skinnier than 320px
+  //    - Upper bound 480.0  => don't allow cards fatter than 480px
+  //    Tweak this if you're unhappy with how many columns show up
+  //    at certain breakpoints.
   //
-  // We also adjust for textScale (accessibility font size). Larger text scale
-  // gets extra height automatically so it doesn't overlap CTA.
+  // 2. baseRatio per estCols bucket
+  //    - baseRatio feeds childAspectRatio = width / height
+  //    - Bigger ratio  → shorter card
+  //    - Smaller ratio → taller card
+  //
+  //    You can tune baseRatio separately for:
+  //      estCols == 1  (phone portrait)
+  //      estCols == 2  (foldable / tablet portrait / narrow desktop split)
+  //      estCols >= 3  (tablet landscape / desktop / ultrawide)
+  //
+  //    Example:
+  //      baseRatio = 0.90  -> relatively tall card
+  //      baseRatio = 1.00  -> more compact card
+  //
+  // We ALSO scale card height up automatically for large textScale,
+  // so content/CTA doesn't overlap when accessibility text size is big.
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
-    // 1. Decide how many columns we *want* based on total available width.
-    //    This matches your breakpoints visually:
-    //      <520px    → 1 column
-    //      <900px    → 2 columns
-    //      <1400px   → 3 columns
-    //      otherwise → 4 columns
+    // 1. Pick rough column count from viewport width.
     int estCols;
     if (width < 520) {
       estCols = 1;
@@ -899,66 +884,30 @@ class _FeedListState extends State<_FeedList>
       estCols = 4;
     }
 
-    // 2. Approximate target tile width from that column count.
+    // 2. Get the "natural" width per column and clamp it.
     double maxTileW = width / estCols;
-
-    // Clamp so we don't end up with 600px-wide monsters on 4K screens,
-    // or tiny 250px cards that feel cramped.
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // 3. Pick a base aspect ratio (width / height) for this card *family*.
-    //
-    // Phones (1 col):
-    //   - We give a LITTLE extra vertical room so headline + meta + CTA
-    //     breathe. Slightly taller => ratio a bit under 1.0.
-    //
-    // Tablets / small desktops (2 cols):
-    //   - Still comfortable, but a touch shorter.
-    //
-    // Wider layouts (3+ cols):
-    //   - Can be more compact, but DON'T go super short (like 1.25+) because
-    //     then the title block collapses/overlaps in desktop view.
-    //
-    // Empirically:
-    //   ~0.90  = tall-ish (phone, single column)
-    //   ~0.95  = medium
-    //   ~1.00  = compact but still safe on desktop
+    // 3. Choose a baseline aspect ratio (width / height).
+    //    Smaller ratio => taller card.
     double baseRatio;
     if (estCols == 1) {
-      // single-column phone portrait
+      // Phone portrait: give extra vertical room
       baseRatio = 0.90;
     } else if (estCols == 2) {
-      // foldables / tablets in portrait / narrow laptop split view
+      // Foldables / portrait tablets / narrow split desktop
       baseRatio = 0.95;
     } else {
-      // 3+ columns (landscape tablet, desktop, ultrawide)
+      // 3+ columns (desktop-like / landscape tablet):
+      // shorter but still safe so text+CTA don't collide
       baseRatio = 1.00;
     }
 
-    // 4. Accessibility / large text safety.
-    //
-    // If the user bumps system text size, the title block & CTA row get taller.
-    // We need to GIVE the card more vertical height so things don't overlap.
-    //
-    // We do that by *lowering* the effective ratio (which makes the card taller)
-    // as textScale grows. We cap at 1.4x so it can't explode infinitely.
-    //
-    // Example:
-    //   baseRatio = 1.00
-    //   textScale = 1.30  → clamp(...)=1.30
-    //   effectiveRatio = 1.00 / 1.30 ≈ 0.77  (taller card)
-    //
-    //   baseRatio = 0.90
-    //   textScale = 1.00  → ratio stays ~0.90 (normal phone height)
-    final double scaleForHeight = textScale.clamp(1.0, 1.4);
-    final double effectiveRatio = baseRatio / scaleForHeight;
+    // 4. Accessibility: if user bumped system text, we make cards taller.
+    final scaleForHeight = textScale.clamp(1.0, 1.4);
+    final effectiveRatio = baseRatio / scaleForHeight;
 
-    // 5. Build the delegate.
-    //
-    // SliverGridDelegateWithMaxCrossAxisExtent will:
-    //  - make as many columns as fit with this maxCrossAxisExtent,
-    //    so it naturally matches what we computed above.
-    //  - use childAspectRatio to determine each card's height.
+    // 5. Return the grid delegate.
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
       mainAxisSpacing: 12,
@@ -1040,7 +989,8 @@ class _FeedListState extends State<_FeedList>
             const horizontalPad = 12.0;
             const topPad = 0.0;
 
-            // Leave space for bottom nav on phones. On desktop this is just extra padding.
+            // bottom padding:
+            // leave space for bottom nav on phones.
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
 
@@ -1109,7 +1059,7 @@ class _FeedListState extends State<_FeedList>
               );
             }
 
-            // Optional pagination button later
+            // Optional pagination button "Load more" is off for now.
             const showLoadMore = false;
 
             return GridView.builder(
@@ -1153,9 +1103,9 @@ class _FeedListState extends State<_FeedList>
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Feed paging model                                                          */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────────────────────────────────────────────────────
+   Feed paging model
+   ───────────────────────────────────────────────────────────────────────── */
 
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
@@ -1190,7 +1140,7 @@ class _PagedFeed extends ChangeNotifier {
       _sinceCursor = null;
       _items.clear();
 
-      // Load cached first.
+      // Load cached first (instant paint).
       final cached = await FeedDiskCache.load(tab);
       if (cached.isNotEmpty) {
         _items.addAll(cached);
@@ -1205,7 +1155,7 @@ class _PagedFeed extends ChangeNotifier {
     try {
       final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
-      // Merge by id (incoming wins), then sort.
+      // Merge by id (incoming wins), then sort newest-first.
       final byId = {for (final s in _items) s.id: s};
       for (final s in list) {
         byId[s.id] = s;
@@ -1217,7 +1167,7 @@ class _PagedFeed extends ChangeNotifier {
 
       _sortNewestFirst(_items);
 
-      // Cursor should be newest effective date we have.
+      // Cursor becomes newest effective date we have.
       final dates = _items.map(_eff).whereType<DateTime>();
       _sinceCursor = dates.isEmpty
           ? null
@@ -1262,9 +1212,9 @@ class _PagedFeed extends ChangeNotifier {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Branding block in header ("🎬" red box + CinePulse text)                    */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────────────────────────────────────────────────────
+   Branding block in header ("🎬" red box + CinePulse text)
+   ───────────────────────────────────────────────────────────────────────── */
 
 class _ModernBrandLogo extends StatelessWidget {
   const _ModernBrandLogo();
