@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'dart:ui' show ImageFilter;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
@@ -23,10 +23,10 @@ import '../story/story_card.dart';
    ───────────────────────────────────────────────────────────────────────── */
 
 enum _SortMode {
-  latest,        // "Latest first" (default)
-  trending,      // "Trending now"
-  views,         // "Most viewed"
-  editorsPick,   // "Editor’s pick"
+  latest, // "Latest first" (default)
+  trending, // "Trending now"
+  views, // "Most viewed"
+  editorsPick, // "Editor’s pick"
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -37,19 +37,19 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     this.showSearchBar = false, // true on Search tab in bottom nav
-    this.onMenuPressed,         // opens endDrawer from RootShell
-    this.onHeaderRefresh,       // optional external hook
-    this.onOpenDiscover,        // header Discover/Search icon
-    this.onOpenSaved,           // NEW: header Saved icon
-    this.onOpenAlerts,          // NEW: header Alerts icon
+    this.onMenuPressed, // opens endDrawer from RootShell
+    this.onHeaderRefresh, // optional external hook
+    this.onOpenDiscover, // header Discover/Search icon
+    this.onOpenSaved, // header Saved icon
+    this.onOpenAlerts, // header Alerts icon
   });
 
   final bool showSearchBar;
   final VoidCallback? onMenuPressed;
   final VoidCallback? onHeaderRefresh;
   final VoidCallback? onOpenDiscover;
-  final VoidCallback? onOpenSaved;   // NEW
-  final VoidCallback? onOpenAlerts;  // NEW
+  final VoidCallback? onOpenSaved;
+  final VoidCallback? onOpenAlerts;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -419,6 +419,21 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    try {
+      return _buildHomeScaffold(context);
+    } catch (err, stack) {
+      // If build exploded (this is what's happening on your Home tab),
+      // show the error on-screen so you can screenshot it.
+      debugPrint('HomeScreen build ERROR: $err\n$stack');
+
+      return _HomeCrashedView(
+        error: err.toString(),
+        stack: stack.toString(),
+      );
+    }
+  }
+
+  Widget _buildHomeScaffold(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
@@ -475,7 +490,7 @@ class _HomeScreenState extends State<HomeScreen>
               titleSpacing: 16,
               title: const _ModernBrandLogo(),
               actions: [
-                // NEW: Saved
+                // Saved
                 _HeaderIconButton(
                   tooltip: 'Saved',
                   icon: Icons.bookmark_rounded,
@@ -483,7 +498,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
                 const SizedBox(width: 8),
 
-                // NEW: Alerts
+                // Alerts
                 _HeaderIconButton(
                   tooltip: 'Alerts',
                   icon: Icons.notifications_rounded,
@@ -491,7 +506,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
                 const SizedBox(width: 8),
 
-                // existing Discover
+                // Discover/Search
                 _HeaderIconButton(
                   tooltip: 'Discover',
                   icon: kIsWeb
@@ -501,7 +516,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
                 const SizedBox(width: 8),
 
-                // existing Refresh
+                // Refresh
                 _HeaderIconButton(
                   tooltip: 'Refresh',
                   icon: Icons.refresh_rounded,
@@ -512,7 +527,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
                 const SizedBox(width: 8),
 
-                // existing Menu
+                // Menu
                 _HeaderIconButton(
                   tooltip: 'Menu',
                   icon: Icons.menu_rounded,
@@ -581,6 +596,61 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CRASH VIEW (only used if build throws)
+   ───────────────────────────────────────────────────────────────────────── */
+
+class _HomeCrashedView extends StatelessWidget {
+  const _HomeCrashedView({
+    required this.error,
+    required this.stack,
+  });
+
+  final String error;
+  final String stack;
+
+  @override
+  Widget build(BuildContext context) {
+    // super loud, so you notice it instantly and can screenshot
+    return Container(
+      color: Colors.black,
+      width: double.infinity,
+      height: double.infinity,
+      padding: const EdgeInsets.all(16),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          child: DefaultTextStyle(
+            style: const TextStyle(
+              fontSize: 14,
+              color: Colors.redAccent,
+              fontFamily: 'monospace',
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'HomeScreen crashed while building.\n'
+                  'Screenshot this and send it 👇\n',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.redAccent,
+                  ),
+                ),
+                const Text('Error:'),
+                Text(error),
+                const SizedBox(height: 12),
+                const Text('Stack:'),
+                Text(stack),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1108,8 +1178,7 @@ class _PagedFeed extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get canLoadMore => _canLoadMore;
 
-  DateTime? _eff(Story s) =>
-      s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
+  DateTime? _eff(Story s) => s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
   DateTime? _sinceCursor;
 
