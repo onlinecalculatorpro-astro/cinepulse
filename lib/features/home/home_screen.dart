@@ -38,12 +38,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
+  // UPDATED: we now have 3 feeds: All / Entertainment / Sports
   static const Map<String, String> _tabs = {
     'all': 'All',
-    'trailers': 'Trailers',
-    'ott': 'OTT',
-    'intheatres': 'In Theatres',
-    'comingsoon': 'Coming Soon',
+    'entertainment': 'Entertainment',
+    'sports': 'Sports',
   };
 
   // Silent background refresh cadence (fallback if WS not available).
@@ -83,10 +82,13 @@ class _HomeScreenState extends State<HomeScreen>
   void initState() {
     super.initState();
 
-    // First load for all tabs (cached-first).
+    // First load for all feeds (cached-first).
     for (final f in _feeds.values) {
       unawaited(f.load(reset: true));
     }
+
+    // Listen to tab changes so the vertical selector highlight updates
+    _tab.addListener(_onTabChanged);
 
     // Observe app lifecycle for resume refresh.
     WidgetsBinding.instance.addObserver(this);
@@ -143,10 +145,13 @@ class _HomeScreenState extends State<HomeScreen>
     _search.removeListener(_onSearchChanged);
     _search.dispose();
 
+    _tab.removeListener(_onTabChanged);
+    _tab.dispose();
+
     for (final f in _feeds.values) {
       f.dispose();
     }
-    _tab.dispose();
+
     super.dispose();
   }
 
@@ -223,7 +228,8 @@ class _HomeScreenState extends State<HomeScreen>
 
     // Exponential backoff reconnect (cap at 60s)
     _wsReconnectTimer?.cancel();
-    _wsReconnectTimer = Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
+    _wsReconnectTimer =
+        Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
     _wsBackoffSecs = (_wsBackoffSecs * 2).clamp(2, 60);
   }
 
@@ -264,6 +270,10 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
+  void _onTabChanged() {
+    if (mounted) setState(() {});
+  }
+
   // Manual pull-to-refresh: full reset + optional external hook.
   Future<void> _refresh() async {
     final key = _currentTabKey;
@@ -288,14 +298,15 @@ class _HomeScreenState extends State<HomeScreen>
     final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
+      backgroundColor:
+          isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
       body: RefreshIndicator.adaptive(
         key: _refreshKey,
         onRefresh: _refresh,
         color: const Color(0xFFdc2626),
         child: CustomScrollView(
           slivers: [
-            // Glassy header bar with new order:
+            // Sticky glass header bar:
             // LEFT  : Brand block
             // RIGHT : Discover → Refresh → Menu
             SliverAppBar(
@@ -307,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen>
                   : theme.colorScheme.surface.withOpacity(0.95),
               surfaceTintColor: Colors.transparent,
               toolbarHeight: 70,
-              // we REMOVE leading, because hamburger now lives in trailing actions
+              // Hamburger moved into actions, so no leading
               leading: null,
               automaticallyImplyLeading: false,
               flexibleSpace: ClipRRect(
@@ -329,20 +340,21 @@ class _HomeScreenState extends State<HomeScreen>
                               ],
                       ),
                       border: const Border(
-                        bottom: BorderSide(color: Color(0x0Fffffff), width: 1),
+                        bottom:
+                            BorderSide(color: Color(0x0Fffffff), width: 1),
                       ),
                     ),
                   ),
                 ),
               ),
-              // Brand block is the title (left aligned start of toolbar)
               title: const _ModernBrandLogo(),
-              // Actions on the right in this order: Discover → Refresh → Menu
               actions: [
                 IconButton(
                   tooltip: 'Discover',
                   icon: Icon(
-                    kIsWeb ? Icons.explore_outlined : Icons.manage_search_rounded,
+                    kIsWeb
+                        ? Icons.explore_outlined
+                        : Icons.manage_search_rounded,
                   ),
                   onPressed: widget.onOpenDiscover,
                 ),
@@ -363,7 +375,7 @@ class _HomeScreenState extends State<HomeScreen>
               ],
             ),
 
-            // Search bar only on the Search tab
+            // Search bar only on Search tab context
             if (widget.showSearchBar)
               SliverToBoxAdapter(
                 child: Padding(
@@ -387,107 +399,31 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // Tabs row (sticky)
-            SliverPersistentHeader(
-              pinned: true,
-              delegate: _ModernTabsDelegate(
-                child: Builder(
-                  builder: (context) {
-                    return Container(
-                      color: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
-                      padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? const Color(0xFF1e293b).withOpacity(0.4)
-                              : theme.colorScheme.surfaceContainerHighest.withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.05),
-                            width: 1,
-                          ),
-                        ),
-                        child: TabBar(
-                          controller: _tab,
-                          isScrollable: true,
-                          tabAlignment: TabAlignment.start,
-                          labelPadding: const EdgeInsets.symmetric(horizontal: 16),
-                          dividerColor: Colors.transparent,
-                          indicatorSize: TabBarIndicatorSize.tab,
-                          indicator: BoxDecoration(
-                            color: const Color(0xFFdc2626),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(
-                                color: const Color(0xFFdc2626).withOpacity(0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          labelColor: Colors.white,
-                          labelStyle: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          unselectedLabelColor: isDark
-                              ? const Color(0xFF94a3b8)
-                              : theme.colorScheme.onSurfaceVariant,
-                          unselectedLabelStyle: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
-                          onTap: (_) {
-                            setState(() {});
-                            // When switching tabs, fetch recent deltas quickly.
-                            unawaited(_currentFeed.load(reset: false));
-                          },
-                        ),
-                      ),
-                    );
+            // VERTICAL FILTER LIST (replaces horizontal chips row + "Trending Now")
+            SliverToBoxAdapter(
+              child: Padding(
+                padding:
+                    const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                child: _VerticalFilterList(
+                  activeIndex: _tab.index,
+                  onSelect: (i) {
+                    // Switch feed tab when user taps All / Entertainment / Sports
+                    if (i >= 0 && i < _tab.length) {
+                      _tab.animateTo(i);
+                      // gentle refresh for that feed
+                      unawaited(_feeds[_tabs.keys.elementAt(i)]!
+                          .load(reset: false));
+                    }
                   },
                 ),
               ),
             ),
 
-            // “Trending Now” header
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
-                child: SizedBox(
-                  height: 36,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.baseline,
-                      textBaseline: TextBaseline.alphabetic,
-                      children: const [
-                        Padding(
-                          padding: EdgeInsets.only(bottom: 1),
-                          child: Text('🔥', style: TextStyle(fontSize: 18, height: 1)),
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          'Trending Now',
-                          style: TextStyle(
-                            fontSize: 20,
-                            height: 1.05,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-            // Main tabbed feed list — responsive grid
+            // FEED GRID BELOW THE FILTER LIST
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
+                // user can still swipe horizontally between All / Entertainment / Sports
                 children: _tabs.keys.map((key) {
                   final feed = _feeds[key]!;
                   return _FeedList(
@@ -507,22 +443,124 @@ class _HomeScreenState extends State<HomeScreen>
   }
 }
 
-/* ----------------------------- Sticky tabs delegate ---------------------- */
+/* -------------------- Vertical filter list block --------------------- */
 
-class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
-  _ModernTabsDelegate({required this.child});
-  final Widget child;
+class _VerticalFilterList extends StatelessWidget {
+  const _VerticalFilterList({
+    required this.activeIndex,
+    required this.onSelect,
+  });
 
-  @override
-  double get minExtent => 64;
-  @override
-  double get maxExtent => 64;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) => child;
+  final int activeIndex;
+  final ValueChanged<int> onSelect;
 
   @override
-  bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    Color pillBg(int idx) =>
+        (idx == activeIndex) ? const Color(0xFFdc2626) : Colors.transparent;
+    Color pillFg(int idx) {
+      if (idx == activeIndex) return Colors.white;
+      return isDark
+          ? const Color(0xFF94a3b8)
+          : theme.colorScheme.onSurfaceVariant;
+    }
+
+    Widget buildItem({
+      required String label,
+      required int index,
+    }) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => onSelect(index),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: pillBg(index),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight:
+                  index == activeIndex ? FontWeight.w600 : FontWeight.w500,
+              color: pillFg(index),
+              height: 1.2,
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget buildSorting() {
+      return InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () {
+          // TODO: open sort sheet (not implemented yet, layout only)
+        },
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withOpacity(0.08)
+                  : Colors.black.withOpacity(0.08),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.sort_rounded, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                'Sorting ▾',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  height: 1.2,
+                  color: isDark
+                      ? const Color(0xFF94a3b8)
+                      : Theme.of(context)
+                          .colorScheme
+                          .onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        buildItem(label: 'All', index: 0),
+        const SizedBox(height: 8),
+        buildItem(label: 'Entertainment', index: 1),
+        const SizedBox(height: 8),
+        buildItem(label: 'Sports', index: 2),
+        const SizedBox(height: 16),
+        Divider(
+          height: 1,
+          thickness: 1,
+          color: isDark
+              ? Colors.white.withOpacity(0.06)
+              : Colors.black.withOpacity(0.06),
+        ),
+        const SizedBox(height: 16),
+        buildSorting(),
+      ],
+    );
+  }
 }
 
 /* ----------------------------- Feed list/grid --------------------------- */
@@ -579,7 +617,7 @@ class _FeedListState extends State<_FeedList>
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
-      mainAxisSpacing: 12, // tweak spacing here
+      mainAxisSpacing: 12,
       crossAxisSpacing: 12,
       childAspectRatio: ratio,
     );
@@ -606,9 +644,10 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.isInitialLoading) {
               return GridView.builder(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(
+                    horizontalPad, 8, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
-                cacheExtent: 1800, // slightly higher since cards are taller
+                cacheExtent: 1800,
                 gridDelegate: gridDelegate,
                 itemCount: 9,
                 itemBuilder: (_, __) => const SkeletonCard(),
@@ -617,12 +656,13 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
-                padding:
-                    EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(
+                    horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
-                    message: feed.errorMessage ?? 'Something went wrong.',
+                    message:
+                        feed.errorMessage ?? 'Something went wrong.',
                     onRetry: () => feed.load(reset: true),
                   ),
                 ],
@@ -635,7 +675,9 @@ class _FeedListState extends State<_FeedList>
                 : feed.items
                     .where((s) =>
                         s.title.toLowerCase().contains(q) ||
-                        (s.summary ?? '').toLowerCase().contains(q))
+                        (s.summary ?? '')
+                            .toLowerCase()
+                            .contains(q))
                     .toList();
 
             if (filtered.isEmpty) {
@@ -643,8 +685,8 @@ class _FeedListState extends State<_FeedList>
                   ? "You're offline and no results match your search."
                   : "No matching items.";
               return ListView(
-                padding:
-                    EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(
+                    horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
@@ -655,23 +697,26 @@ class _FeedListState extends State<_FeedList>
             const showLoadMore = false;
 
             return GridView.builder(
-              padding:
-                  EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
+              padding: EdgeInsets.fromLTRB(
+                  horizontalPad, topPad, horizontalPad, bottomPad),
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 2000,
               gridDelegate: gridDelegate,
-              itemCount: filtered.length + (showLoadMore ? 1 : 0),
+              itemCount:
+                  filtered.length + (showLoadMore ? 1 : 0),
               itemBuilder: (_, i) {
                 if (showLoadMore && i == filtered.length) {
                   return Center(
                     child: feed.isLoadingMore
                         ? const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 16),
+                            padding: EdgeInsets.symmetric(
+                                vertical: 16),
                             child: CircularProgressIndicator(),
                           )
                         : OutlinedButton.icon(
                             onPressed: feed.loadMore,
-                            icon: const Icon(Icons.expand_more_rounded),
+                            icon: const Icon(
+                                Icons.expand_more_rounded),
                             label: const Text('Load more'),
                           ),
                   );
@@ -707,7 +752,8 @@ class _PagedFeed extends ChangeNotifier {
   bool get canLoadMore => _canLoadMore;
 
   // Effective timestamp for ordering and cursors.
-  DateTime? _eff(Story s) => s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
+  DateTime? _eff(Story s) =>
+      s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
   DateTime? _sinceCursor;
 
@@ -732,7 +778,8 @@ class _PagedFeed extends ChangeNotifier {
       }
     }
     try {
-      final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
+      final list =
+          await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
       // Merge by id (incoming wins), then sort.
       final byId = {for (final s in _items) s.id: s};
@@ -747,9 +794,12 @@ class _PagedFeed extends ChangeNotifier {
       _sortNewestFirst(_items);
 
       // Cursor should be the NEWEST effective date we have (for delta fetch).
-      final dates =
-          _items.map(_eff).whereType<DateTime>(); // normalizedAt → publishedAt → releaseDate
-      _sinceCursor = dates.isEmpty ? null : dates.reduce((a, b) => a.isAfter(b) ? a : b);
+      final dates = _items
+          .map(_eff)
+          .whereType<DateTime>(); // normalizedAt → publishedAt → releaseDate
+      _sinceCursor = dates.isEmpty
+          ? null
+          : dates.reduce((a, b) => a.isAfter(b) ? a : b);
 
       _hasError = false;
       _errorMessage = null;
@@ -778,7 +828,9 @@ class _PagedFeed extends ChangeNotifier {
     list.sort((a, b) {
       final da = _eff(a);
       final db = _eff(b);
-      if (da == null && db == null) return b.id.compareTo(a.id);
+      if (da == null && db == null) {
+        return b.id.compareTo(a.id);
+      }
       if (da == null) return 1; // nulls last
       if (db == null) return -1;
       final cmp = db.compareTo(da); // newest first
@@ -811,14 +863,18 @@ class _ModernBrandLogo extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFdc2626).withOpacity(0.3),
+                color:
+                    const Color(0xFFdc2626).withOpacity(0.3),
                 blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
             ],
           ),
           child: const Center(
-            child: Text('🎬', style: TextStyle(fontSize: 20, height: 1)),
+            child: Text(
+              '🎬',
+              style: TextStyle(fontSize: 20, height: 1),
+            ),
           ),
         ),
         const SizedBox(width: 10),
