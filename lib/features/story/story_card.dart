@@ -5,8 +5,8 @@
 // - CTA row (Watch/Read + Save + Share) baseline-aligns across cards.
 // - Less awkward blank middle space while still keeping all metadata.
 // - Compact spacing, 8px/4px rhythm.
-// - When you tap a card (or Watch/Read), you now land in the pager
-//   (StoryDetailsPager) so you can swipe left/right to previous/next stories.
+// - When you tap a card (or Watch/Read), you now land in StoryPagerScreen
+//   so you can swipe left/right to previous/next stories.
 //
 // Structure inside the card body:
 //
@@ -41,7 +41,7 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
-import 'story_details_pager.dart'; // <-- new pager screen with PageView
+import 'story_pager.dart';        // <- correct pager screen
 import 'story_image_url.dart';   // hero/thumbnail resolver
 
 class StoryCard extends StatefulWidget {
@@ -142,7 +142,7 @@ class _StoryCardState extends State<StoryCard> {
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
-        StoryDetailsPager(
+        StoryPagerScreen(
           stories: widget.allStories,
           initialIndex: widget.index,
           autoplayInitial: autoplay,
@@ -433,7 +433,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               if (publishedText != null) ...[
                                 const SizedBox(width: 8),
-                                // bullet "•" (but visually it's a small dot)
+                                // bullet "•" (visually a 6px dot)
                                 Container(
                                   width: 6,
                                   height: 6,
@@ -528,7 +528,7 @@ class _StoryCardState extends State<StoryCard> {
                                                 // open pager and autoplay video
                                                 _openDetails(autoplay: true);
                                               } else {
-                                                // open external link (article, etc)
+                                                // open external link
                                                 _openExternalLink(context);
                                               }
                                             }
