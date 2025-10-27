@@ -1,12 +1,12 @@
 // lib/features/story/story_card.dart
 //
 // Card layout goals:
-// - Bigger thumbnail so faces aren't cropped.
+// - Consistent, equal-height thumbnails across ALL cards in the grid.
+// - Thumbnail crops from the *bottom* (top stays visible for faces).
 // - CTA row (Watch/Read + Save + Share) baseline-aligns across cards.
-// - Less awkward blank middle space while still keeping all metadata.
-// - Compact spacing, 8px/4px rhythm.
-// - When you tap a card (or Watch/Read), you go to StoryPagerScreen
-//   so you can swipe left/right to previous/next stories.
+// - Compact spacing (8px / 4px rhythm).
+// - Tapping the card (or Watch/Read) opens StoryPagerScreen so you can
+//   swipe left/right through the surrounding stories.
 //
 // Body layout:
 //
@@ -20,8 +20,9 @@
 // Gap 8
 // Source : "Source: <domain or source>"
 //
-// Spacer() pins CTAs to the bottom so all cards line up.
-// Thumbnail is ~1.15x taller than 16:9 (min 180px) to avoid face crop.
+// The thumbnail height is now derived from a plain 16:9 box with a floor of
+// 180px. No extra boost. That keeps every card's media box the same height,
+// and prevents some cards from looking taller/shorter than others.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -47,18 +48,17 @@ class StoryCard extends StatefulWidget {
     super.key,
     required this.story,
 
-    // Made optional so legacy callers (SavedScreen, AlertsScreen, etc.)
-    // still compile without passing a whole list.
+    // Optional so SavedScreen / AlertsScreen don't have to pass them.
     this.allStories,
     this.index,
   });
 
   final Story story;
 
-  /// The full list this card is part of (for horizontal swipe in pager).
+  /// Full list this card lives in (for horizontal swipe in pager). Optional.
   final List<Story>? allStories;
 
-  /// Index of [story] within [allStories].
+  /// Index of [story] in [allStories]. Optional.
   final int? index;
 
   @override
@@ -75,7 +75,7 @@ class _StoryCardState extends State<StoryCard> {
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _linkUrl {
-    // Prefer playable video URL if present.
+    // Prefer video url if present
     final v = _videoUrl;
     if (v != null) return v;
 
@@ -143,18 +143,16 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // The list + index we'll actually feed into the pager.
+  // List + index we feed into pager
   List<Story> get _effectiveStories =>
       (widget.allStories != null && widget.allStories!.isNotEmpty)
           ? widget.allStories!
           : <Story>[widget.story];
 
   int get _effectiveIndex =>
-      (widget.index != null && widget.index! >= 0)
-          ? widget.index!
-          : 0;
+      (widget.index != null && widget.index! >= 0) ? widget.index! : 0;
 
-  // Open pager starting at THIS story. Pager lets the user swipe prev/next.
+  // Open pager starting at THIS story
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
@@ -228,7 +226,7 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Capitalize "news"→"News", keep "OTT" uppercase, etc.
+  // Capitalize kind -> "Release", "News", "OTT", etc
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -236,7 +234,7 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // Bottom "Source: <x>" logic (prefer sourceDomain, else source)
+  // Bottom "Source: <x>" logic (prefer domain, else source)
   String _attribution(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -316,7 +314,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // tapping anywhere on the card → pager
+          // tap anywhere on card -> pager
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -324,10 +322,16 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // Make the thumbnail taller (~1.15x 16:9), clamp >=180px.
+              // NEW: consistent media box height
+              //
+              // We use a plain 16:9 box (h = w / (16/9)).
+              // We clamp to min 180 so it's never tiny on very narrow layouts.
+              //
+              // NOTE: we REMOVED the old 1.15 height "boost". That boost caused
+              // some cards to look taller than others depending on width and
+              // made placeholder space feel random.
               final baseH = w / (16 / 9);
-              final boosted = baseH * 1.15;
-              final mediaH = math.max(180.0, boosted);
+              final mediaH = math.max(180.0, baseH);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -348,54 +352,28 @@ class _StoryCardState extends State<StoryCard> {
                               CachedNetworkImage(
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
-                                alignment: Alignment.center,
+
+                                // IMPORTANT:
+                                // topCenter means we keep the *top* visible
+                                // (usually faces / title card area) and crop
+                                // off the bottom if needed.
+                                alignment: Alignment.topCenter,
+
                                 memCacheWidth:
                                     (w.isFinite ? (w * 2).toInt() : 1600),
                                 fadeInDuration:
                                     const Duration(milliseconds: 160),
-                                errorWidget: (_, __, ___) => Container(
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: [
-                                        isDark
-                                            ? const Color(0xFF0F1625)
-                                            : scheme.surfaceVariant
-                                                .withOpacity(0.2),
-                                        isDark
-                                            ? const Color(0xFF1E2433)
-                                            : scheme.surfaceVariant
-                                                .withOpacity(0.4),
-                                      ],
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: _SampleIcon(kind: widget.story.kind),
-                                  ),
+                                errorWidget: (_, __, ___) => _FallbackArt(
+                                  isDark: isDark,
+                                  scheme: scheme,
+                                  kind: widget.story.kind,
                                 ),
                               )
                             else
-                              Container(
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.topCenter,
-                                    end: Alignment.bottomCenter,
-                                    colors: [
-                                      isDark
-                                          ? const Color(0xFF0F1625)
-                                          : scheme.surfaceVariant
-                                              .withOpacity(0.2),
-                                      isDark
-                                          ? const Color(0xFF1E2433)
-                                          : scheme.surfaceVariant
-                                              .withOpacity(0.4),
-                                    ],
-                                  ),
-                                ),
-                                child: Center(
-                                  child: _SampleIcon(kind: widget.story.kind),
-                                ),
+                              _FallbackArt(
+                                isDark: isDark,
+                                scheme: scheme,
+                                kind: widget.story.kind,
                               ),
 
                             // soft bottom fade overlay
@@ -520,7 +498,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 8),
 
-                          // Spacer keeps CTA row locked at the bottom.
+                          // Spacer keeps CTA row locked to the bottom.
                           const Spacer(),
 
                           // CTA row
@@ -542,7 +520,7 @@ class _StoryCardState extends State<StoryCard> {
                                                 // open pager and autoplay video
                                                 _openDetails(autoplay: true);
                                               } else {
-                                                // open external article/etc.
+                                                // open external link
                                                 _openExternalLink(context);
                                               }
                                             }
@@ -630,7 +608,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Hover lift on web; blurred glass on mobile.
+    // Web hover lift; on mobile we wrap with a blur glass for style parity.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -643,6 +621,47 @@ class _StoryCardState extends State<StoryCard> {
                 child: card,
               ),
             ),
+    );
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Thumbnail fallback art (when image missing or fails)
+ * Matches the same height BoxFit/Alignment logic so there's no jump.
+ * ------------------------------------------------------------------------*/
+class _FallbackArt extends StatelessWidget {
+  const _FallbackArt({
+    required this.isDark,
+    required this.scheme,
+    required this.kind,
+  });
+
+  final bool isDark;
+  final ColorScheme scheme;
+  final String kind;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            isDark
+                ? const Color(0xFF0F1625)
+                : scheme.surfaceVariant.withOpacity(0.2),
+            isDark
+                ? const Color(0xFF1E2433)
+                : scheme.surfaceVariant.withOpacity(0.4),
+          ],
+        ),
+      ),
+      alignment: Alignment.topCenter, // keep important top area visible
+      child: Padding(
+        padding: const EdgeInsets.only(top: 24),
+        child: _SampleIcon(kind: kind),
+      ),
     );
   }
 }
@@ -725,13 +744,11 @@ class _ActionIconBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    final bgColor = isDark
-        ? Colors.black.withOpacity(0.4)
-        : Colors.black.withOpacity(0.06);
+    final bgColor =
+        isDark ? Colors.black.withOpacity(0.4) : Colors.black.withOpacity(0.06);
 
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.15)
-        : Colors.black.withOpacity(0.15);
+    final borderColor =
+        isDark ? Colors.white.withOpacity(0.15) : Colors.black.withOpacity(0.15);
 
     return Tooltip(
       message: tooltip,
