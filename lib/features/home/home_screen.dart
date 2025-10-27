@@ -19,29 +19,27 @@ import 'widgets/search_bar.dart';
 import '../story/story_card.dart';
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Sort mode for the feed ("Latest first ▾", etc.)
+   Sort mode enum
    ───────────────────────────────────────────────────────────────────────── */
-
 enum _SortMode {
-  latest, // "Latest first" (default)
-  trending, // "Trending now"
-  views, // "Most viewed"
-  editorsPick, // "Editor's pick"
+  latest,
+  trending,
+  views,
+  editorsPick,
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
    HomeScreen
    ───────────────────────────────────────────────────────────────────────── */
-
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    this.showSearchBar = false, // true on Search tab in bottom nav
-    this.onMenuPressed, // opens endDrawer from RootShell
-    this.onHeaderRefresh, // optional external hook
-    this.onOpenDiscover, // header Discover/Search icon
-    this.onOpenSaved, // header Saved icon
-    this.onOpenAlerts, // header Alerts icon
+    this.showSearchBar = false,
+    this.onMenuPressed,
+    this.onHeaderRefresh,
+    this.onOpenDiscover,
+    this.onOpenSaved,
+    this.onOpenAlerts,
   });
 
   final bool showSearchBar;
@@ -57,25 +55,20 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // Tabs: All / Entertainment / Sports.
+  // Tabs we expose in UI
   static const Map<String, String> _tabs = {
     'all': 'All',
     'entertainment': 'Entertainment',
     'sports': 'Sports',
   };
 
-  // Silent background refresh cadence (fallback if WS not available).
   static const Duration _kAutoRefreshEvery = Duration(minutes: 2);
-
-  // Debounce for rapid WS event bursts -> a single fetch.
   static const Duration _kRealtimeDebounce = Duration(milliseconds: 500);
 
   late final TabController _tab =
       TabController(length: _tabs.length, vsync: this);
 
   final TextEditingController _search = TextEditingController();
-  final GlobalKey<RefreshIndicatorState> _refreshKey =
-      GlobalKey<RefreshIndicatorState>();
 
   final Map<String, _PagedFeed> _feeds = {
     for (final k in _tabs.keys) k: _PagedFeed(tab: k)
@@ -84,20 +77,19 @@ class _HomeScreenState extends State<HomeScreen>
   bool _offline = false;
   bool _isForeground = true;
 
-  // Which sort mode is currently active
   _SortMode _sortMode = _SortMode.latest;
 
-  // Connectivity / timers
+  // timers / subs
   StreamSubscription? _connSub;
   Timer? _searchDebounce;
   Timer? _autoRefresh;
 
-  // Realtime (WebSocket)
+  // realtime WS
   WebSocketChannel? _ws;
   StreamSubscription? _wsSub;
   Timer? _wsReconnectTimer;
-  int _wsBackoffSecs = 2; // exponential backoff up to 60s
   Timer? _realtimeDebounceTimer;
+  int _wsBackoffSecs = 2;
 
   String get _currentTabKey => _tabs.keys.elementAt(_tab.index);
   _PagedFeed get _currentFeed => _feeds[_currentTabKey]!;
@@ -106,16 +98,15 @@ class _HomeScreenState extends State<HomeScreen>
   void initState() {
     super.initState();
 
-    // First load for all feeds (cached-first).
+    // warm feeds
     for (final f in _feeds.values) {
       unawaited(f.load(reset: true));
     }
 
     _tab.addListener(_onTabChanged);
-
     WidgetsBinding.instance.addObserver(this);
 
-    // Connectivity listener.
+    // connectivity watcher
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
       final hasNetwork = _hasNetworkFrom(event);
       if (!mounted) return;
@@ -123,18 +114,16 @@ class _HomeScreenState extends State<HomeScreen>
       setState(() => _offline = !hasNetwork);
 
       if (hasNetwork) {
-        // Back online: gently fetch deltas for current tab and ensure WS is up.
         unawaited(_currentFeed.load(reset: false));
         _ensureWebSocket();
       } else {
-        // Offline: drop socket to avoid loop/battery.
         _teardownWebSocket();
       }
 
       if (hasNetwork && wasOffline) _wsBackoffSecs = 2;
     });
 
-    // Initial connectivity check.
+    // initial connectivity
     () async {
       final initial = await Connectivity().checkConnectivity();
       final hasNetwork = _hasNetworkFrom(initial);
@@ -143,7 +132,7 @@ class _HomeScreenState extends State<HomeScreen>
       if (hasNetwork) _ensureWebSocket();
     }();
 
-    // Silent periodic refresh.
+    // silent periodic refresh
     _autoRefresh =
         Timer.periodic(_kAutoRefreshEvery, (_) => _tickAutoRefresh());
 
@@ -177,30 +166,24 @@ class _HomeScreenState extends State<HomeScreen>
     super.dispose();
   }
 
-  // Lifecycle: refresh + manage realtime when foregrounded.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _isForeground = (state == AppLifecycleState.resumed);
     if (_isForeground && mounted && !_offline) {
-      // Gentle incremental fetch.
       unawaited(_currentFeed.load(reset: false));
-      _ensureWebSocket(); // keep WS alive in foreground
+      _ensureWebSocket();
     } else if (!_isForeground) {
-      _teardownWebSocket(); // pause WS to save battery
+      _teardownWebSocket();
     }
   }
 
   /* ────────────────────────────────────────────────────────────────────────
-     Realtime (WebSocket)
+     Realtime WS
      ─────────────────────────────────────────────────────────────────────── */
-
   String _buildWsUrl() {
-    // Build ws/wss from API base.
     final base = kApiBaseUrl;
     final u = Uri.parse(base);
     final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
-
-    // preserve any base path
     final basePath = (u.path.isEmpty || u.path == '/') ? '' : u.path;
     final fullPath = '$basePath/v1/realtime/ws';
 
@@ -215,14 +198,13 @@ class _HomeScreenState extends State<HomeScreen>
   void _ensureWebSocket() {
     if (!mounted) return;
     if (_offline || !_isForeground) return;
-    if (_ws != null) return; // already active/connecting
+    if (_ws != null) return;
 
     final url = _buildWsUrl();
     try {
       _ws = WebSocketChannel.connect(Uri.parse(url));
       _wsSub = _ws!.stream.listen(
         (data) {
-          // Could be {"type":"ping"} etc; only trigger refresh for actual new-story events.
           try {
             final obj = json.decode(data.toString());
             if (obj is Map && obj['type'] == 'ping') return;
@@ -233,7 +215,7 @@ class _HomeScreenState extends State<HomeScreen>
         onError: (_) => _onWsClosed(),
         cancelOnError: true,
       );
-      _wsBackoffSecs = 2; // reset backoff once connected
+      _wsBackoffSecs = 2;
     } catch (_) {
       _onWsClosed();
     }
@@ -247,7 +229,6 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (_offline || !_isForeground) return;
 
-    // Exponential backoff reconnect.
     _wsReconnectTimer?.cancel();
     _wsReconnectTimer =
         Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
@@ -268,7 +249,7 @@ class _HomeScreenState extends State<HomeScreen>
     _realtimeDebounceTimer = Timer(_kRealtimeDebounce, () {
       if (!mounted) return;
       if (_offline) return;
-      if (_search.text.isNotEmpty) return; // don't disrupt active search
+      if (_search.text.isNotEmpty) return;
       unawaited(_currentFeed.load(reset: false));
     });
   }
@@ -276,7 +257,6 @@ class _HomeScreenState extends State<HomeScreen>
   /* ────────────────────────────────────────────────────────────────────────
      Helpers
      ─────────────────────────────────────────────────────────────────────── */
-
   bool _hasNetworkFrom(dynamic event) {
     if (event is ConnectivityResult) return event != ConnectivityResult.none;
     if (event is List<ConnectivityResult>) {
@@ -296,14 +276,12 @@ class _HomeScreenState extends State<HomeScreen>
     if (mounted) setState(() {});
   }
 
-  // Manual pull-to-refresh (used by pull-down + refresh icon).
-  Future<void> _refresh() async {
+  Future<void> _refreshManually() async {
     final key = _currentTabKey;
     await _feeds[key]!.load(reset: true);
     widget.onHeaderRefresh?.call();
   }
 
-  // Silent refresh tick.
   void _tickAutoRefresh() {
     if (!mounted) return;
     if (_offline) return;
@@ -321,7 +299,7 @@ class _HomeScreenState extends State<HomeScreen>
       case _SortMode.views:
         return 'Most viewed';
       case _SortMode.editorsPick:
-        return 'Editor's pick';
+        return 'Editor’s pick';
     }
   }
 
@@ -384,7 +362,7 @@ class _HomeScreenState extends State<HomeScreen>
                 mode: _SortMode.trending,
                 icon: Icons.local_fire_department_rounded,
                 title: 'Trending now',
-                subtitle: 'What's getting attention',
+                subtitle: 'What’s getting attention',
               ),
               tile(
                 mode: _SortMode.views,
@@ -395,7 +373,7 @@ class _HomeScreenState extends State<HomeScreen>
               tile(
                 mode: _SortMode.editorsPick,
                 icon: Icons.star_rounded,
-                title: 'Editor's pick',
+                title: 'Editor’s pick',
                 subtitle: 'Hand-picked highlights',
               ),
               const SizedBox(height: 12),
@@ -414,18 +392,14 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /* ────────────────────────────────────────────────────────────────────────
-     UI
+     UI BUILD
      ─────────────────────────────────────────────────────────────────────── */
-
   @override
   Widget build(BuildContext context) {
     try {
-      return _buildHomeScaffold(context);
+      return _buildSimpleLayout(context);
     } catch (err, stack) {
-      // If build exploded (this is what's happening on your Home tab),
-      // show the error on-screen so you can screenshot it.
-      debugPrint('HomeScreen build ERROR: $err\n$stack');
-
+      debugPrint('HomeScreen simple build ERROR: $err\n$stack');
       return _HomeCrashedView(
         error: err.toString(),
         stack: stack.toString(),
@@ -433,77 +407,86 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Widget _buildHomeScaffold(BuildContext context) {
+  Widget _buildSimpleLayout(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
     return Scaffold(
-      backgroundColor:
-          isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
-      body: Column(
-        children: [
-          /* ── TOP STICKY HEADER BAR ─────────────────────────────────── */
-          Container(
-            height: 64 + MediaQuery.of(context).padding.top,
-            decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF0f172a).withOpacity(0.95)
-                  : theme.colorScheme.surface.withOpacity(0.95),
-              border: const Border(
-                bottom: BorderSide(
-                  color: Color(0x0FFFFFFF),
-                  width: 1,
+      backgroundColor: bgColor,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(64),
+        child: ClipRRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: Container(
+              height: 64,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: isDark
+                      ? [
+                          const Color(0xFF1e2537).withOpacity(0.9),
+                          const Color(0xFF0b0f17).withOpacity(0.95),
+                        ]
+                      : [
+                          theme.colorScheme.surface.withOpacity(0.95),
+                          theme.colorScheme.surface.withOpacity(0.9),
+                        ],
+                ),
+                border: const Border(
+                  bottom: BorderSide(
+                    color: Color(0x0FFFFFFF),
+                    width: 1,
+                  ),
                 ),
               ),
-            ),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: [
-                    const _ModernBrandLogo(),
-                    const Spacer(),
-                    _HeaderIconButton(
-                      tooltip: 'Saved',
-                      icon: Icons.bookmark_rounded,
-                      onTap: widget.onOpenSaved,
-                    ),
-                    const SizedBox(width: 8),
-                    _HeaderIconButton(
-                      tooltip: 'Alerts',
-                      icon: Icons.notifications_rounded,
-                      onTap: widget.onOpenAlerts,
-                    ),
-                    const SizedBox(width: 8),
-                    _HeaderIconButton(
-                      tooltip: 'Discover',
-                      icon: kIsWeb
-                          ? Icons.explore_outlined
-                          : Icons.manage_search_rounded,
-                      onTap: widget.onOpenDiscover,
-                    ),
-                    const SizedBox(width: 8),
-                    _HeaderIconButton(
-                      tooltip: 'Refresh',
-                      icon: Icons.refresh_rounded,
-                      onTap: () {
-                        _refreshKey.currentState?.show();
-                        unawaited(_refresh());
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    _HeaderIconButton(
-                      tooltip: 'Menu',
-                      icon: Icons.menu_rounded,
-                      onTap: widget.onMenuPressed,
-                    ),
-                  ],
-                ),
+              child: Row(
+                children: [
+                  const _ModernBrandLogo(),
+                  const Spacer(),
+                  _HeaderIconButton(
+                    tooltip: 'Saved',
+                    icon: Icons.bookmark_rounded,
+                    onTap: widget.onOpenSaved,
+                  ),
+                  const SizedBox(width: 8),
+                  _HeaderIconButton(
+                    tooltip: 'Alerts',
+                    icon: Icons.notifications_rounded,
+                    onTap: widget.onOpenAlerts,
+                  ),
+                  const SizedBox(width: 8),
+                  _HeaderIconButton(
+                    tooltip: 'Discover',
+                    icon: kIsWeb
+                        ? Icons.explore_outlined
+                        : Icons.manage_search_rounded,
+                    onTap: widget.onOpenDiscover,
+                  ),
+                  const SizedBox(width: 8),
+                  _HeaderIconButton(
+                    tooltip: 'Refresh',
+                    icon: Icons.refresh_rounded,
+                    onTap: _refreshManually,
+                  ),
+                  const SizedBox(width: 8),
+                  _HeaderIconButton(
+                    tooltip: 'Menu',
+                    icon: Icons.menu_rounded,
+                    onTap: widget.onMenuPressed,
+                  ),
+                ],
               ),
             ),
           ),
-
-          /* ── SEARCH BAR ──────────────────────────────────────────── */
+        ),
+      ),
+      body: Column(
+        children: [
+          // inline Search (like Search tab mode)
           if (widget.showSearchBar)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -516,173 +499,53 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-          /* ── OFFLINE BANNER ─────────────────────────────────────── */
+          // offline banner
           if (_offline)
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: OfflineBanner(),
             ),
 
-          /* ── CATEGORY + SORT ROW ────────────────────────────────── */
-          Container(
-            height: 56,
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
-              border: Border(
-                bottom: BorderSide(
-                  width: 1,
-                  color: isDark
-                      ? Colors.white.withOpacity(0.06)
-                      : Colors.black.withOpacity(0.06),
-                ),
-              ),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    child: Row(
-                      children: [
-                        _buildTabChip(0, 'All'),
-                        const SizedBox(width: 8),
-                        _buildTabChip(1, 'Entertainment'),
-                        const SizedBox(width: 8),
-                        _buildTabChip(2, 'Sports'),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                _buildSortButton(context),
-              ],
-            ),
+          // category + sort row (NOT sticky for now)
+          _FiltersRow(
+            activeIndex: _tab.index,
+            sortLabel: _sortModeLabel(_sortMode),
+            isDark: isDark,
+            theme: theme,
+            onSelect: (i) {
+              if (i >= 0 && i < _tab.length) {
+                _tab.animateTo(i);
+                unawaited(_feeds[_tabs.keys.elementAt(i)]!.load(reset: false));
+              }
+            },
+            onSortTap: (ctx) => _showSortSheet(ctx),
           ),
 
-          /* ── FEED CONTENT (TabBarView) ──────────────────────────── */
+          // Tab pages -> Expanded so it fills remaining height
           Expanded(
-            child: RefreshIndicator.adaptive(
-              key: _refreshKey,
-              onRefresh: _refresh,
-              color: const Color(0xFFdc2626),
-              child: TabBarView(
-                controller: _tab,
-                children: _tabs.keys.map((key) {
-                  final feed = _feeds[key]!;
-                  return _FeedList(
-                    key: PageStorageKey('feed-$key'),
-                    feed: feed,
-                    searchText: _search,
-                    offline: _offline,
-                    sortMode: _sortMode,
-                  );
-                }).toList(),
-              ),
+            child: TabBarView(
+              controller: _tab,
+              children: _tabs.keys.map((key) {
+                final feed = _feeds[key]!;
+                return _FeedList(
+                  key: PageStorageKey('feed-$key'),
+                  feed: feed,
+                  searchText: _search,
+                  offline: _offline,
+                  sortMode: _sortMode,
+                );
+              }).toList(),
             ),
           ),
         ],
       ),
     );
   }
-
-  // Helper method for tab chips
-  Widget _buildTabChip(int index, String label) {
-    final isActive = (_tab.index == index);
-    const accent = Color(0xFFdc2626);
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(999),
-      onTap: () {
-        _tab.animateTo(index);
-        unawaited(_feeds[_tabs.keys.elementAt(index)]!.load(reset: false));
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: isActive ? accent : Colors.transparent,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: isActive ? accent : accent.withOpacity(0.4),
-            width: 1,
-          ),
-          boxShadow: isActive
-              ? [
-                  BoxShadow(
-                    color: accent.withOpacity(0.4),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ]
-              : null,
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-            height: 1.2,
-            color: isActive ? Colors.white : accent,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Helper method for sort button
-  Widget _buildSortButton(BuildContext context) {
-    const accent = Color(0xFFdc2626);
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(999),
-      onTap: () => _showSortSheet(context),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            width: 1,
-            color: accent.withOpacity(0.4),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.access_time_rounded,
-              size: 16,
-              color: accent,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              _sortModeLabel(_sortMode),
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                height: 1.2,
-                color: accent,
-              ),
-            ),
-            const SizedBox(width: 2),
-            const Icon(
-              Icons.arrow_drop_down_rounded,
-              size: 18,
-              color: accent,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   CRASH VIEW (only used if build throws)
+   CRASH VIEW
    ───────────────────────────────────────────────────────────────────────── */
-
 class _HomeCrashedView extends StatelessWidget {
   const _HomeCrashedView({
     required this.error,
@@ -694,7 +557,6 @@ class _HomeCrashedView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // super loud, so you notice it instantly and can screenshot
     return Container(
       color: Colors.black,
       width: double.infinity,
@@ -735,64 +597,211 @@ class _HomeCrashedView extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Small header icon button (32x32 rounded square w/ subtle red border)
+   Filters row (used in simple layout instead of SliverPersistentHeader)
    ───────────────────────────────────────────────────────────────────────── */
-
-class _HeaderIconButton extends StatelessWidget {
-  const _HeaderIconButton({
-    required this.icon,
-    required this.onTap,
-    required this.tooltip,
+class _FiltersRow extends StatelessWidget {
+  const _FiltersRow({
+    required this.activeIndex,
+    required this.sortLabel,
+    required this.isDark,
+    required this.theme,
+    required this.onSelect,
+    required this.onSortTap,
   });
 
-  final IconData icon;
-  final VoidCallback? onTap;
-  final String tooltip;
+  final int activeIndex;
+  final String sortLabel;
+  final bool isDark;
+  final ThemeData theme;
+  final ValueChanged<int> onSelect;
+  final void Function(BuildContext ctx) onSortTap;
+
+  static const accent = Color(0xFFdc2626);
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    final bg = isDark
-        ? const Color(0xFF0f172a).withOpacity(0.7)
-        : Colors.black.withOpacity(0.06);
-
-    final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
-
-    final iconColor = isDark ? Colors.white : Colors.black87;
-
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+    Widget activeChip(String label, VoidCallback onTap) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
         onTap: onTap,
         child: Container(
-          width: 32,
-          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(8),
+            color: accent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: accent, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: const Text(
+            'All', // We'll override below with copyWith
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget inactiveChip(String label, VoidCallback onTap) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
             border: Border.all(
-              color: borderColor,
+              color: accent.withOpacity(0.4),
               width: 1,
             ),
           ),
-          child: Icon(
-            icon,
-            size: 16,
-            color: iconColor,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              height: 1.2,
+              color: accent,
+            ),
           ),
         ),
+      );
+    }
+
+    Widget tabChip(int index, String label) {
+      final sel = (activeIndex == index);
+      if (sel) {
+        return InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () => onSelect(index),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: accent,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: accent, width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withOpacity(0.4),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.2,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        );
+      }
+      return inactiveChip(label, () => onSelect(index));
+    }
+
+    Widget sortButton() {
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => onSortTap(context),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              width: 1,
+              color: accent.withOpacity(0.4),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.access_time_rounded,
+                size: 16,
+                color: accent,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                sortLabel,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  height: 1.2,
+                  color: accent,
+                ),
+              ),
+              const SizedBox(width: 2),
+              const Icon(
+                Icons.arrow_drop_down_rounded,
+                size: 18,
+                color: accent,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(
+            width: 1,
+            color: isDark
+                ? Colors.white.withOpacity(0.06)
+                : Colors.black.withOpacity(0.06),
+          ),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // scrollable chips
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  tabChip(0, 'All'),
+                  const SizedBox(width: 8),
+                  tabChip(1, 'Entertainment'),
+                  const SizedBox(width: 8),
+                  tabChip(2, 'Sports'),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // sort pill
+          sortButton(),
+        ],
       ),
     );
   }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Feed grid + paging
+   Feed list (unchanged logic)
    ───────────────────────────────────────────────────────────────────────── */
-
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -816,7 +825,6 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
-  // Responsive grid delegate (unchanged)
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
     if (width < 520) {
@@ -921,8 +929,7 @@ class _FeedListState extends State<_FeedList>
             final gridDelegate = _gridDelegateFor(w, textScale);
 
             const horizontalPad = 12.0;
-            const topPad = 0.0;
-
+            const topPad = 8.0;
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
 
@@ -930,7 +937,7 @@ class _FeedListState extends State<_FeedList>
               return GridView.builder(
                 padding: EdgeInsets.fromLTRB(
                   horizontalPad,
-                  8,
+                  topPad,
                   horizontalPad,
                   bottomPad,
                 ),
@@ -1035,7 +1042,6 @@ class _FeedListState extends State<_FeedList>
 /* ──────────────────────────────────────────────────────────────────────────
    Feed paging model
    ───────────────────────────────────────────────────────────────────────── */
-
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
   final String tab;
@@ -1137,9 +1143,59 @@ class _PagedFeed extends ChangeNotifier {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Branding block in header ("🎬" red box + CinePulse text)
+   Header icon button
    ───────────────────────────────────────────────────────────────────────── */
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton({
+    required this.icon,
+    required this.onTap,
+    required this.tooltip,
+  });
 
+  final IconData icon;
+  final VoidCallback? onTap;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark
+        ? const Color(0xFF0f172a).withOpacity(0.7)
+        : Colors.black.withOpacity(0.06);
+    final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
+    final iconColor = isDark ? Colors.white : Colors.black87;
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: borderColor,
+              width: 1,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 16,
+            color: iconColor,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Brand logo in header
+   ───────────────────────────────────────────────────────────────────────── */
 class _ModernBrandLogo extends StatelessWidget {
   const _ModernBrandLogo();
 
@@ -1180,7 +1236,8 @@ class _ModernBrandLogo extends StatelessWidget {
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: Colors.white,
+            color: Colors.white, // note: white on light bg = low contrast,
+                                 // but we’ll keep for now, same as design
           ),
         ),
       ],
