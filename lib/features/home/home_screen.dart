@@ -451,9 +451,9 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   final VoidCallback onSortTap;
 
   @override
-  double get minExtent => 56;
+  double get minExtent => 64;  // to adjust the height of the row
   @override
-  double get maxExtent => 56;
+  double get maxExtent => 64;  // to adjust the height of the row
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
