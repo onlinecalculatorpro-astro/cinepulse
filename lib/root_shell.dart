@@ -1,17 +1,28 @@
 // lib/root_shell.dart
 //
-// RootShell = main scaffold with bottom nav + right-side settings drawer.
+// RootShell = main scaffold with:
+//  - IndexedStack pages (Home / Discover / Saved / Alerts)
+//  - Right-side endDrawer (AppDrawer)
+//  - Bottom nav on MOBILE ONLY
 //
-// Key pieces this file owns:
-//  - CategoryPrefs singleton (multi-select categories for the feed UI).
-//  - Bottom sheet pickers:
-//      * _ThemePicker     (radio: System / Light / Dark)
-//      * _CategoryPicker  (checkbox list: All / Entertainment / Sports / Travel / Fashion)
-//  - Right-side drawer via AppDrawer. Drawer calls back into _openThemePicker()
-//    and _openCategoryPicker() so both sheets slide up from the bottom.
+// IMPORTANT VISUAL BEHAVIOR TO MATCH APPROVED DESIGN:
+//  - On phone widths, we still show the bottom nav (Home / Search / Saved / Alerts).
+//  - On wider layouts (tablet / desktop / large web), we HIDE the bottom nav
+//    completely so it feels like a proper web app, not a blown-up phone.
+//    (In other words: no bottom nav bar at >=768px.)
+//  - Content is centered and clamped to ~1300px max width on big screens,
+//    same as the HTML mock's max-page-width.
 //
-// HomeScreen still renders the actual feed. Later, you can have HomeScreen
-// read CategoryPrefs.instance.selected to filter what it shows.
+// Drawer rules (unchanged):
+//  - Drawer lives on the right (endDrawer).
+//  - Drawer shows language chips, theme row, categories row, etc.
+//  - Tapping "Theme" or "Categories" in the drawer opens a bottom sheet
+//    (Theme picker = radio System/Light/Dark,
+//     Category picker = checkbox list with Apply).
+//
+// CategoryPrefs is the singleton source of truth for category filters.
+// HomeScreen is still responsible for rendering feed UI based on
+// CategoryPrefs.instance.selected (not wired in this file yet, just conceptually).
 
 import 'dart:async';
 
@@ -37,13 +48,11 @@ import 'widgets/app_drawer.dart';
  *
  * Rules:
  *  - "all" means everything.
- *  - If "all" is in the set, ignore any other categories (we collapse down to
- *    just {'all'}).
- *  - User can choose multiple categories (ex: Entertainment + Sports).
+ *  - If "all" is in the set, ignore any other categories (collapse to {'all'}).
+ *  - User can choose multiple (Entertainment + Sports, etc.).
  *  - We never allow an empty set; fallback to {'all'}.
  *
- * This is in-memory only right now. If you want persistence, you can hook this
- * up to SharedPreferences later.
+ * This is in-memory only right now. Wire SharedPreferences later if needed.
  * ────────────────────────────────────────────────────────────────────────────*/
 class CategoryPrefs extends ChangeNotifier {
   CategoryPrefs._internal();
@@ -61,7 +70,7 @@ class CategoryPrefs extends ChangeNotifier {
 
   bool isSelected(String k) => _selected.contains(k);
 
-  /// Replace the current selection, normalize it (see _sanitize), and notify.
+  /// Replace the current selection, normalize it, and notify.
   void applySelection(Set<String> incoming) {
     _selected
       ..clear()
@@ -70,8 +79,7 @@ class CategoryPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Human-friendly summary for the drawer pill.
-  /// "All", or "Entertainment", or "Entertainment +2"
+  /// Drawer summary pill, ex: "All", "Entertainment", "Entertainment +2"
   String summary() {
     if (_selected.contains(keyAll)) return 'All';
 
@@ -116,10 +124,10 @@ class CategoryPrefs extends ChangeNotifier {
  *
  * Hosts:
  *  - IndexedStack of tabs (Home / Discover / Saved / Alerts)
- *  - Bottom nav
  *  - Right-side drawer
- *  - Deep link handling
- *  - Opens Theme & Category bottom sheets
+ *  - Bottom nav (but ONLY on narrow/mobile, hidden on desktop width ≥768px)
+ *  - Deep link handling (/s/<id> opens StoryDetails)
+ *  - Opens Theme & Category pickers as bottom sheets
  * ────────────────────────────────────────────────────────────────────────────*/
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
@@ -131,7 +139,7 @@ class _RootShellState extends State<RootShell> {
   // lets us open/close the endDrawer
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // Which page in the body:
+  // Body page index in the IndexedStack:
   // 0 = Home, 1 = Discover placeholder, 2 = Saved, 3 = Alerts
   int _pageIndex = 0;
 
@@ -139,7 +147,8 @@ class _RootShellState extends State<RootShell> {
   // 0 = Home, 1 = Search, 2 = Saved, 3 = Alerts
   int _navIndex = 0;
 
-  // Show HomeScreen's inline search bar?
+  // If true, HomeScreen shows the inline search bar under the header
+  // (that's how we represent tapping "Search" in bottom nav).
   bool _showSearchBar = false;
 
   // Deep-link state for /s/<id>
@@ -155,7 +164,7 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /// Grab /#/s/<id> or /s/<id> on web so we can open that story detail.
+  /// Parse initial URL fragment/path for /s/<id> so we can open StoryDetails.
   void _captureInitialDeepLink() {
     final frag = Uri.base.fragment; // hash part on web, "" on mobile
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
@@ -172,7 +181,7 @@ class _RootShellState extends State<RootShell> {
     const tick = Duration(milliseconds: 200);
     final started = DateTime.now();
 
-    // 1. Try FeedCache for up to 4s while feeds warm up.
+    // 1. Try FeedCache for up to ~4s while feeds warm up.
     while (mounted && DateTime.now().difference(started) < maxWait) {
       final Story? cached = FeedCache.get(_pendingDeepLinkId!);
       if (cached != null) {
@@ -182,7 +191,7 @@ class _RootShellState extends State<RootShell> {
       await Future<void>.delayed(tick);
     }
 
-    // 2. Fallback: fetch directly.
+    // 2. Fallback: fetch story directly.
     try {
       final s = await fetchStory(_pendingDeepLinkId!);
       if (!mounted) return;
@@ -190,13 +199,15 @@ class _RootShellState extends State<RootShell> {
       await _openDetails(s);
       return;
     } catch (_) {
-      // ignore; we just land on Home
+      // If we can't load the story, we just stay on Home.
     }
   }
 
   Future<void> _openDetails(Story s) async {
     _deepLinkHandled = true;
-    // ensure Home is underneath
+
+    // Make sure Home tab is selected underneath the pushed details screen,
+    // so when user backs out they land on Home.
     if (_pageIndex != 0) setState(() => _pageIndex = 0);
 
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -206,28 +217,37 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  // Called by HomeScreen header Discover / Explore icon
+  /* ───────────────────────── header icon callbacks ────────────────────── */
+
+  // Called by HomeScreen header Discover / Search icon.
+  // This should take us to the Discover placeholder page and hide the inline
+  // search bar.
   void _openDiscover() {
     setState(() {
-      _pageIndex = 1; // show Discover placeholder page
-      // if Search tab was highlighted, clear that highlight:
+      _pageIndex = 1;     // show Discover placeholder
       _navIndex = (_navIndex == 1) ? 0 : _navIndex;
       _showSearchBar = false;
     });
   }
 
-  // Called by HomeScreen header menu button
+  // Called by HomeScreen header menu icon.
+  // Opens the endDrawer we define below.
   void _openEndDrawer() {
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
-  // Bottom nav tap
+  /* ───────────────────────── bottom nav taps ──────────────────────────── */
+
+  // Bottom nav items:
+  // - Tapping "Home" => show Home normally.
+  // - Tapping "Search" => show Home but force inline search bar visible.
+  // - Tapping "Saved" => go to Saved tab.
+  // - Tapping "Alerts" => go to Alerts tab.
   void _onDestinationSelected(int i) {
-    // Indices: 0=Home, 1=Search, 2=Saved, 3=Alerts
     if (i == 1) {
-      // Search is special: show Home and reveal search bar.
+      // "Search"
       setState(() {
-        _pageIndex = 0;
+        _pageIndex = 0; // still Home
         _navIndex = 1;
         _showSearchBar = true;
       });
@@ -243,12 +263,12 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  /* ───────────────────────────── THEME PICKER ─────────────────────────── */
+  /* ───────────────────────── theme picker sheet ───────────────────────── */
 
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final current = AppSettings.instance.themeMode;
 
-    // Close drawer first so sheet appears from bottom.
+    // Close drawer first so sheet animates from the bottom.
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<ThemeMode>(
@@ -263,10 +283,10 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ─────────────────────── CATEGORY PICKER (NEW) ──────────────────────── */
+  /* ───────────────────── category picker sheet (bottom sheet) ─────────── */
 
   Future<void> _openCategoryPicker(BuildContext drawerContext) async {
-    // Close drawer before showing picker
+    // Close drawer before opening sheet.
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<Set<String>>(
@@ -278,23 +298,34 @@ class _RootShellState extends State<RootShell> {
       ),
     );
 
-    // If user hit "Apply", picked is a Set<String>.
+    // "Apply" returns a Set<String>.
     if (picked != null && picked.isNotEmpty) {
       CategoryPrefs.instance.applySelection(picked);
       if (mounted) setState(() {});
     }
   }
 
+  /* ───────────────────────── responsive helpers ───────────────────────── */
+
+  // Compact = phone-ish layout.
+  // We'll use 768px as our cutoff because the approved mock hides
+  // the bottom nav on wider/desktop views.
   bool _isCompact(BuildContext context) =>
-      MediaQuery.of(context).size.width < 900;
+      MediaQuery.of(context).size.width < 768;
 
   @override
   Widget build(BuildContext context) {
     final compact = _isCompact(context);
-    final showBottomNav = kIsWeb || compact; // show nav on phones + web
+
+    // Bottom nav ONLY on compact screens.
+    // Even if we're on web (kIsWeb == true), on a wide browser window
+    // we should *not* show the bottom nav. This matches the approved
+    // "desktop web" look, where bottom nav disappears.
+    final showBottomNav = compact;
 
     return WillPopScope(
-      // Back button behavior: pop detail routes first.
+      // Back button on Android:
+      // If we have routes stacked (like StoryDetails), pop that first.
       onWillPop: () async {
         final canPop = Navigator.of(context).canPop();
         if (canPop) Navigator.of(context).maybePop();
@@ -303,13 +334,15 @@ class _RootShellState extends State<RootShell> {
       child: Scaffold(
         key: _scaffoldKey,
 
-        // Right-side drawer. No edge-swipe (so Android back-swipe still works).
+        // Right-side drawer (endDrawer).
+        // We explicitly disable drag-to-open so horizontal back-swipe on
+        // Android/iOS doesn't accidentally open it.
         drawer: null,
         drawerEnableOpenDragGesture: false,
         endDrawerEnableOpenDragGesture: false,
         endDrawer: Builder(
-          // Builder gives us a context INSIDE the drawer so we can call
-          // Navigator.pop(drawerCtx) from callbacks.
+          // Builder gives us a context inside the drawer so we can call
+          // Navigator.pop(drawerCtx) when needed (Theme/Category sheets).
           builder: (drawerCtx) {
             return AppDrawer(
               onClose: () => Navigator.of(drawerCtx).pop(),
@@ -317,13 +350,16 @@ class _RootShellState extends State<RootShell> {
               onThemeTap: () => _openThemePicker(drawerCtx),
               onCategoryTap: () => _openCategoryPicker(drawerCtx),
               appShareUrl: 'https://cinepulse.netlify.app',
-              privacyUrl: 'https://example.com/privacy', // TODO real link
-              termsUrl: 'https://example.com/terms', // TODO real link
+              privacyUrl: 'https://example.com/privacy', // TODO real
+              termsUrl: 'https://example.com/terms',     // TODO real
             );
           },
         ),
 
-        // Keep page state alive with IndexedStack.
+        // Main content body.
+        // We wrap IndexedStack with _ResponsiveWidth so that on desktop/tablet
+        // the content column is centered and clamped to ~1300px max width,
+        // matching the mock's max-page-width.
         body: _ResponsiveWidth(
           child: IndexedStack(
             index: _pageIndex,
@@ -341,7 +377,8 @@ class _RootShellState extends State<RootShell> {
           ),
         ),
 
-        // Bottom navigation bar (Home / Search / Saved / Alerts).
+        // Bottom nav bar (Home / Search / Saved / Alerts)
+        // Shows only on compact. Hidden entirely on wide screens.
         bottomNavigationBar: showBottomNav
             ? SafeArea(
                 top: false,
@@ -411,13 +448,11 @@ class _ThemePicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Using a record with named fields so we can do entry.value.label / .icon
+    // Record-style map so we get entry.value.label / entry.value.icon
     final options = <ThemeMode, ({String label, IconData icon})>{
       ThemeMode.system: (label: 'System', icon: Icons.auto_awesome),
-      ThemeMode.light:
-          (label: 'Light', icon: Icons.light_mode_outlined),
-      ThemeMode.dark:
-          (label: 'Dark', icon: Icons.dark_mode_outlined),
+      ThemeMode.light: (label: 'Light', icon: Icons.light_mode_outlined),
+      ThemeMode.dark: (label: 'Dark', icon: Icons.dark_mode_outlined),
     };
 
     return SafeArea(
@@ -457,9 +492,9 @@ class _ThemePicker extends StatelessWidget {
 }
 
 /* ────────────────────────── CATEGORY PICKER SHEET ─────────────────────────
- * Shown from the drawer -> "Categories".
- * Lets the user tick multiple verticals, then press Apply.
- * We return a Set<String> to RootShell via Navigator.pop(context, set).
+ * Called from drawer -> Categories.
+ * User can pick All / Entertainment / Sports / Travel / Fashion.
+ * "Apply" returns a Set<String> back to RootShell.
  * ───────────────────────────────────────────────────────────────────────────*/
 class _CategoryPicker extends StatefulWidget {
   const _CategoryPicker({required this.initial});
@@ -487,13 +522,13 @@ class _CategoryPickerState extends State<_CategoryPicker> {
         ..clear()
         ..add(all);
     } else {
-      // toggle the specific category
+      // toggle this specific category
       if (_local.contains(key)) {
         _local.remove(key);
       } else {
         _local.add(key);
       }
-      // remove "All" if we have specifics
+      // remove "All" if any specific categories exist
       _local.remove(all);
       // never allow empty -> fallback to All
       if (_local.isEmpty) {
@@ -675,8 +710,12 @@ class _DiscoverPlaceholder extends StatelessWidget {
 }
 
 /* ───────────────────────────── RESPONSIVE WIDTH ────────────────────────────
- * Centers content on larger screens. On phones it just returns [child].
- * Same behavior as before.
+ * Centers app content on desktop/tablet and clamps to ~1300px max width.
+ * On phones (<768px) we just return child directly for full-bleed.
+ *
+ * This mirrors the HTML mock's layout:
+ *   max-page-width: 1300px;
+ *   side padding handled inside HomeScreen (16px).
  * ───────────────────────────────────────────────────────────────────────────*/
 class _ResponsiveWidth extends StatelessWidget {
   const _ResponsiveWidth({super.key, required this.child});
@@ -686,17 +725,15 @@ class _ResponsiveWidth extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       final w = c.maxWidth;
-      if (w <= 720) return child; // phones: full bleed
 
-      // Tablets / desktop: constrain for nicer reading width
-      final maxW = w >= 1400
-          ? 1200.0
-          : (w >= 1200)
-              ? 1080.0
-              : 980.0;
+      // Phone / narrow (<768px): use full width, no additional centering.
+      if (w < 768) return child;
+
+      // Tablet / desktop: clamp to 1300px just like the mock.
+      const maxW = 1300.0;
       return Center(
         child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: maxW),
+          constraints: const BoxConstraints(maxWidth: maxW),
           child: child,
         ),
       );
