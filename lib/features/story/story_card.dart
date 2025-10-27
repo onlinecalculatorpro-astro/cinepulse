@@ -47,17 +47,18 @@ class StoryCard extends StatefulWidget {
     super.key,
     required this.story,
 
-    // Optional so old screens (Saved, Alerts) keep compiling.
+    // Made optional so legacy callers (SavedScreen, AlertsScreen, etc.)
+    // still compile without passing a whole list.
     this.allStories,
     this.index,
   });
 
   final Story story;
 
-  /// The full list this card lives in (for swipe prev/next). Optional.
+  /// The full list this card is part of (for horizontal swipe in pager).
   final List<Story>? allStories;
 
-  /// Index of [story] in [allStories]. Optional.
+  /// Index of [story] within [allStories].
   final int? index;
 
   @override
@@ -74,7 +75,7 @@ class _StoryCardState extends State<StoryCard> {
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _linkUrl {
-    // Prefer video url if present
+    // Prefer playable video URL if present.
     final v = _videoUrl;
     if (v != null) return v;
 
@@ -142,7 +143,7 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // List + index we will actually use for pager.
+  // The list + index we'll actually feed into the pager.
   List<Story> get _effectiveStories =>
       (widget.allStories != null && widget.allStories!.isNotEmpty)
           ? widget.allStories!
@@ -153,7 +154,7 @@ class _StoryCardState extends State<StoryCard> {
           ? widget.index!
           : 0;
 
-  // Open pager starting at THIS story.
+  // Open pager starting at THIS story. Pager lets the user swipe prev/next.
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
@@ -203,7 +204,7 @@ class _StoryCardState extends State<StoryCard> {
     return '${abs.inDays}d';
   }
 
-  // badge with 🕒 for Row B
+  // little 🕒 pill for Row B
   Widget _timeBadge(String emoji) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -227,7 +228,7 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Capitalize kind -> "Release", "News", "OTT", etc
+  // Capitalize "news"→"News", keep "OTT" uppercase, etc.
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -235,7 +236,7 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // Bottom "Source: <x>" logic (prefer domain, else source)
+  // Bottom "Source: <x>" logic (prefer sourceDomain, else source)
   String _attribution(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -273,7 +274,7 @@ class _StoryCardState extends State<StoryCard> {
 
     final hasUrl = _linkUrl != null;
 
-    // hero/thumbnail
+    // hero/thumbnail URL
     final imageUrl = resolveStoryImageUrl(widget.story);
 
     // attribution for footer
@@ -315,7 +316,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // tapping anywhere on card opens pager at THIS story
+          // tapping anywhere on the card → pager
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -323,10 +324,7 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // Taller thumbnail:
-              // 1. Take base 16:9 -> baseH = w / (16/9)
-              // 2. Boost ~1.15x
-              // 3. Clamp min 180
+              // Make the thumbnail taller (~1.15x 16:9), clamp >=180px.
               final baseH = w / (16 / 9);
               final boosted = baseH * 1.15;
               final mediaH = math.max(180.0, boosted);
@@ -400,7 +398,7 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
 
-                            // soft bottom fade
+                            // soft bottom fade overlay
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -522,7 +520,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 8),
 
-                          // Keep CTA row locked to the bottom for alignment.
+                          // Spacer keeps CTA row locked at the bottom.
                           const Spacer(),
 
                           // CTA row
@@ -544,7 +542,7 @@ class _StoryCardState extends State<StoryCard> {
                                                 // open pager and autoplay video
                                                 _openDetails(autoplay: true);
                                               } else {
-                                                // open external link
+                                                // open external article/etc.
                                                 _openExternalLink(context);
                                               }
                                             }
@@ -632,6 +630,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
+    // Hover lift on web; blurred glass on mobile.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -660,14 +659,14 @@ class _SampleIcon extends StatelessWidget {
     IconData iconData = Icons.movie_rounded;
     Color iconColor = const Color(0xFFECC943);
 
-    final k = kind.toLowerCase();
-    if (k.contains('trailer')) {
+    final lower = kind.toLowerCase();
+    if (lower.contains('trailer')) {
       iconData = Icons.theater_comedy_rounded;
       iconColor = const Color(0xFF56BAF8);
-    } else if (k.contains('release')) {
+    } else if (lower.contains('release')) {
       iconData = Icons.balance_rounded;
       iconColor = const Color(0xFFF9D359);
-    } else if (k.contains('ott')) {
+    } else if (lower.contains('ott')) {
       iconData = Icons.videocam_rounded;
       iconColor = const Color(0xFFC377F2);
     }
