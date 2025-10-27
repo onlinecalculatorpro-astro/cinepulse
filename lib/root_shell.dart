@@ -23,7 +23,8 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  final _scaffoldKey = GlobalKey<ScaffoldState>(); // for hamburger open
+  // We’ll use this to open the right-side drawer (endDrawer).
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   // Which page is visible in the body (Home, Discover, Saved, Alerts).
   int _pageIndex = 0;
@@ -100,9 +101,10 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  // Called by hamburger in HomeScreen.
-  void _openDrawer() {
-    _scaffoldKey.currentState?.openDrawer();
+  // Called by the menu icon in HomeScreen header.
+  // This now opens the RIGHT SIDE drawer (endDrawer).
+  void _openEndDrawer() {
+    _scaffoldKey.currentState?.openEndDrawer();
   }
 
   // Called by bottom navigation.
@@ -159,8 +161,13 @@ class _RootShellState extends State<RootShell> {
       child: Scaffold(
         key: _scaffoldKey,
 
-        // Drawer is now provided by lib/widgets/app_drawer.dart
-        drawer: AppDrawer(
+        // IMPORTANT:
+        // We move the app drawer to the RIGHT side so it's thumb-friendly.
+        // We also disable edge-swipe so it doesn't fight Android back gesture.
+        drawer: null,
+        drawerEnableOpenDragGesture: false,
+        endDrawerEnableOpenDragGesture: false,
+        endDrawer: AppDrawer(
           onClose: () => Navigator.of(context).pop(),
           onFiltersChanged: () => setState(() {}),   // Home can re-read prefs immediately
           onThemeTap: () => _openThemePicker(context),
@@ -176,7 +183,7 @@ class _RootShellState extends State<RootShell> {
             children: [
               HomeScreen(
                 showSearchBar: _showSearchBar,
-                onMenuPressed: _openDrawer,
+                onMenuPressed: _openEndDrawer, // <-- now opens RIGHT drawer
                 onOpenDiscover: _openDiscover,
                 onHeaderRefresh: () {},
               ),
@@ -193,7 +200,7 @@ class _RootShellState extends State<RootShell> {
                 top: false,
                 child: NavigationBarTheme(
                   data: NavigationBarThemeData(
-                    // Match header thickness (AppBar toolbarHeight = 70)
+                    // Match header-ish thickness
                     height: 70,
                     labelTextStyle: MaterialStateProperty.resolveWith(
                       (states) => TextStyle(
