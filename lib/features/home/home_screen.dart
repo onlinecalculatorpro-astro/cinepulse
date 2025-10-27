@@ -53,7 +53,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // Tabs exactly as in the current app: All / Entertainment / Sports.
+  // Tabs: All / Entertainment / Sports.
   static const Map<String, String> _tabs = {
     'all': 'All',
     'entertainment': 'Entertainment',
@@ -427,11 +427,7 @@ class _HomeScreenState extends State<HomeScreen>
         color: const Color(0xFFdc2626),
         child: CustomScrollView(
           slivers: [
-            // TOP STICKY HEADER BAR (matches the look in your approved mock):
-            //
-            // Row 1:  [ 🎬 CinePulse ]                           [🔍][↻][≡]
-            // (actions are dark 32x32 boxes with subtle red-ish border)
-            //
+            // TOP STICKY HEADER BAR
             SliverAppBar(
               floating: true,
               pinned: true,
@@ -449,7 +445,6 @@ class _HomeScreenState extends State<HomeScreen>
                   filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                   child: Container(
                     decoration: BoxDecoration(
-                      // simple dark vertical blend; you're already close
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
@@ -474,7 +469,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
               titleSpacing: 16,
-              title: const _ModernBrandLogo(), // red square + CinePulse text
+              title: const _ModernBrandLogo(),
               actions: [
                 _HeaderIconButton(
                   tooltip: 'Discover',
@@ -502,7 +497,7 @@ class _HomeScreenState extends State<HomeScreen>
               ],
             ),
 
-            // OPTIONAL INLINE SEARCH BAR (shown when Search tab is active)
+            // INLINE SEARCH BAR (when Search tab is active)
             if (widget.showSearchBar)
               SliverToBoxAdapter(
                 child: Padding(
@@ -526,14 +521,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // CATEGORY + SORT ROW (pinned under header):
-            //
-            // [ All ] [ Entertainment ] [ Sports ]              [ ⏱ Latest first ▾ ]
-            //
-            // Active pill = red fill, white text.
-            // Inactive pill = transparent bg, red border, red text.
-            // Sort pill matches inactive style.
-            //
+            // CATEGORY + SORT ROW (sticky)
             SliverPersistentHeader(
               pinned: true,
               delegate: _FiltersHeaderDelegate(
@@ -555,7 +543,6 @@ class _HomeScreenState extends State<HomeScreen>
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
-                // swipe between All / Entertainment / Sports
                 children: _tabs.keys.map((key) {
                   final feed = _feeds[key]!;
                   return _FeedList(
@@ -576,7 +563,7 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 /* -------------------------------------------------------------------------- */
-/* Header action icon style (32x32 dark rounded square w/ subtle red border)  */
+/* Header action icon style                                                   */
 /* -------------------------------------------------------------------------- */
 
 class _HeaderIconButton extends StatelessWidget {
@@ -601,7 +588,7 @@ class _HeaderIconButton extends StatelessWidget {
     final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
 
     final iconColor =
-        isDark ? Colors.white : Colors.black87; // visible in light too
+        isDark ? Colors.white : Colors.black87;
 
     return Tooltip(
       message: tooltip,
@@ -646,10 +633,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   final int activeIndex;
   final ValueChanged<int> onSelect;
 
-  // "Latest first", "Trending now", etc.
   final String sortLabel;
-
-  // Needs context to open bottom sheet.
   final void Function(BuildContext ctx) onSortTap;
 
   @override
@@ -667,7 +651,6 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
     final isDark = theme.brightness == Brightness.dark;
     const accent = Color(0xFFdc2626);
 
-    // active chip: red fill
     Widget _activeChip(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -686,9 +669,9 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
               ),
             ],
           ),
-          child: Text(
-            label,
-            style: const TextStyle(
+          child: const Text(
+            'All', // placeholder, overridden below
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               height: 1.2,
@@ -699,7 +682,6 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
-    // inactive chip: transparent w/ red outline
     Widget _inactiveChip(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -727,20 +709,45 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
-    // which chip to render for a given index
     Widget _tabChip({
       required int index,
       required String label,
     }) {
       final isActive = (activeIndex == index);
       if (isActive) {
-        return _activeChip(label, () => onSelect(index));
+        return InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () => onSelect(index),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: accent,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: accent, width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withOpacity(0.4),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.2,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        );
       } else {
         return _inactiveChip(label, () => onSelect(index));
       }
     }
 
-    // sort pill (outline style same as inactive chip)
     Widget sortButton() {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -786,8 +793,6 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
-    // Whole sticky bar background:
-    // Dark navy, then a 1px divider on the bottom.
     return Container(
       color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
       child: Container(
@@ -805,7 +810,6 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left: category pills in a horizontal wrap/scroll
             Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -821,10 +825,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
                 ),
               ),
             ),
-
             const SizedBox(width: 12),
-
-            // Right: sort pill
             sortButton(),
           ],
         ),
@@ -867,40 +868,48 @@ class _FeedListState extends State<_FeedList>
   bool get wantKeepAlive => true;
 
   // Responsive grid delegate:
-  //
-  // Cards should look like your screenshot:
-  //    - 3 columns on desktop width, each ~360-400px wide
-  //    - each card ~400px tall (image on top, text+CTA below)
-  //
-  // So we keep the previous breakpoint logic and aspect ratio tuning.
+  // We intentionally make cards taller on tablet / desktop so that
+  // meta row + 3-line title + CTA/footer never collide.
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
-    // pick a target column width by breakpoint
+    // Pick target column width based on viewport width.
     double maxTileW;
     if (width < 520) {
-      maxTileW = width; // 1 col
+      // 1 column (phones)
+      maxTileW = width;
     } else if (width < 900) {
-      maxTileW = width / 2; // 2 cols
+      // 2 columns
+      maxTileW = width / 2;
     } else if (width < 1400) {
-      maxTileW = width / 3; // 3 cols
+      // 3 columns
+      maxTileW = width / 3;
     } else {
-      maxTileW = width / 4; // 4 cols
+      // 4 columns
+      maxTileW = width / 4;
     }
+
+    // Clamp so we don't end up with 600px wide monsters on 4k screens.
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // Base ratio (width / height). Bigger ratio => shorter card.
+    // childAspectRatio = (tileWidth / tileHeight)
+    //
+    // Lower ratio => taller tile.
+    // We make larger screens use LOWER ratios so each card
+    // has more vertical breathing room.
     double baseRatio;
     if (maxTileW <= 340) {
-      baseRatio = 0.90;
-    } else if (maxTileW <= 380) {
-      baseRatio = 0.95;
-    } else if (maxTileW <= 420) {
-      baseRatio = 0.90; // slightly taller for mid widths
+      // very narrow column -> phone-ish
+      baseRatio = 0.85;
+    } else if (maxTileW <= 400) {
+      // mid-width (foldables / small tablet / narrow desktop column)
+      baseRatio = 0.80;
     } else {
-      baseRatio = 1.05;
+      // wide columns (iPad landscape, desktop 3-col+, etc.)
+      baseRatio = 0.75;
     }
 
-    // If textScale is huge, let cards grow taller (ratio goes down).
-    final effectiveRatio = baseRatio / textScale.clamp(1.0, 1.8);
+    // If user has a big textScale, make card even taller.
+    // We only expand up to about 1.4x so we don't explode.
+    final effectiveRatio = baseRatio / textScale.clamp(1.0, 1.4);
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
@@ -983,8 +992,7 @@ class _FeedListState extends State<_FeedList>
             const horizontalPad = 12.0;
             const topPad = 0.0;
 
-            // We'll still leave bottom room for mobile bottom nav; it will be
-            // hidden on desktop in RootShell later.
+            // Leave space for bottom nav on phones. On desktop this is just extra padding.
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
 
@@ -1022,7 +1030,7 @@ class _FeedListState extends State<_FeedList>
               );
             }
 
-            // text filter from search bar
+            // Search filter
             final q = widget.searchText.text.trim().toLowerCase();
             final baseList = (q.isEmpty)
                 ? feed.items
@@ -1032,7 +1040,7 @@ class _FeedListState extends State<_FeedList>
                         (s.summary ?? '').toLowerCase().contains(q))
                     .toList();
 
-            // apply sort mode
+            // Sort mode
             final displayList = _applySortMode(baseList);
 
             if (displayList.isEmpty) {
@@ -1053,7 +1061,7 @@ class _FeedListState extends State<_FeedList>
               );
             }
 
-            // We can optionally paginate in future. For now it's off.
+            // Optional pagination button later
             const showLoadMore = false;
 
             return GridView.builder(
@@ -1215,8 +1223,7 @@ class _ModernBrandLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Matches the approved header look:
-    // Red rounded square ~28x28 with 🎬, then "CinePulse" in white 18px semibold.
+    // Red rounded square ~28x28 with 🎬, then "CinePulse"
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
