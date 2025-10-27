@@ -295,7 +295,9 @@ class _HomeScreenState extends State<HomeScreen>
         color: const Color(0xFFdc2626),
         child: CustomScrollView(
           slivers: [
-            // Glassy app bar
+            // Glassy header bar with new order:
+            // LEFT  : Brand block
+            // RIGHT : Discover → Refresh → Menu
             SliverAppBar(
               floating: true,
               pinned: true,
@@ -305,6 +307,9 @@ class _HomeScreenState extends State<HomeScreen>
                   : theme.colorScheme.surface.withOpacity(0.95),
               surfaceTintColor: Colors.transparent,
               toolbarHeight: 70,
+              // we REMOVE leading, because hamburger now lives in trailing actions
+              leading: null,
+              automaticallyImplyLeading: false,
               flexibleSpace: ClipRRect(
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
@@ -330,13 +335,17 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                 ),
               ),
-              leading: IconButton(
-                icon: const Icon(Icons.menu_rounded),
-                onPressed: widget.onMenuPressed,
-                tooltip: 'Menu',
-              ),
-              title: const _ModernBrandLogo(), // 🎬
+              // Brand block is the title (left aligned start of toolbar)
+              title: const _ModernBrandLogo(),
+              // Actions on the right in this order: Discover → Refresh → Menu
               actions: [
+                IconButton(
+                  tooltip: 'Discover',
+                  icon: Icon(
+                    kIsWeb ? Icons.explore_outlined : Icons.manage_search_rounded,
+                  ),
+                  onPressed: widget.onOpenDiscover,
+                ),
                 IconButton(
                   tooltip: 'Refresh',
                   icon: const Icon(Icons.refresh_rounded),
@@ -346,9 +355,9 @@ class _HomeScreenState extends State<HomeScreen>
                   },
                 ),
                 IconButton(
-                  tooltip: 'Discover',
-                  icon: Icon(kIsWeb ? Icons.explore_outlined : Icons.manage_search_rounded),
-                  onPressed: widget.onOpenDiscover,
+                  tooltip: 'Menu',
+                  icon: const Icon(Icons.menu_rounded),
+                  onPressed: widget.onMenuPressed,
                 ),
                 const SizedBox(width: 4),
               ],
@@ -378,7 +387,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // Tabs (sticky)
+            // Tabs row (sticky)
             SliverPersistentHeader(
               pinned: true,
               delegate: _ModernTabsDelegate(
@@ -417,11 +426,17 @@ class _HomeScreenState extends State<HomeScreen>
                             ],
                           ),
                           labelColor: Colors.white,
-                          labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                          unselectedLabelColor:
-                              isDark ? const Color(0xFF94a3b8) : theme.colorScheme.onSurfaceVariant,
-                          unselectedLabelStyle:
-                              const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                          labelStyle: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          unselectedLabelColor: isDark
+                              ? const Color(0xFF94a3b8)
+                              : theme.colorScheme.onSurfaceVariant,
+                          unselectedLabelStyle: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                          ),
                           tabs: _tabs.values.map((t) => Tab(text: t)).toList(),
                           onTap: (_) {
                             setState(() {});
@@ -436,7 +451,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-            // “Trending Now” header — compact
+            // “Trending Now” header
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 4),
@@ -469,7 +484,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-            // Main tabbed feed list — auto-responsive grid (slightly taller cards)
+            // Main tabbed feed list — responsive grid
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
@@ -492,7 +507,8 @@ class _HomeScreenState extends State<HomeScreen>
   }
 }
 
-// Tabs Delegate
+/* ----------------------------- Sticky tabs delegate ---------------------- */
+
 class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   _ModernTabsDelegate({required this.child});
   final Widget child;
@@ -509,7 +525,8 @@ class _ModernTabsDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_ModernTabsDelegate oldDelegate) => false;
 }
 
-// Responsive Feed List (auto columns + *slightly taller* tiles)
+/* ----------------------------- Feed list/grid --------------------------- */
+
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -562,8 +579,8 @@ class _FeedListState extends State<_FeedList>
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
-      mainAxisSpacing: 12,     //adjust this for padding
-      crossAxisSpacing: 12,    //adjust this for padding
+      mainAxisSpacing: 12, // tweak spacing here
+      crossAxisSpacing: 12,
       childAspectRatio: ratio,
     );
   }
@@ -582,7 +599,7 @@ class _FeedListState extends State<_FeedList>
             final textScale = MediaQuery.textScaleFactorOf(context);
             final gridDelegate = _gridDelegateFor(w, textScale);
 
-            final horizontalPad = 12.0;  //adjust this for padding
+            final horizontalPad = 12.0;
             final topPad = 0.0;
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
@@ -600,7 +617,8 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
+                padding:
+                    EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
@@ -625,7 +643,8 @@ class _FeedListState extends State<_FeedList>
                   ? "You're offline and no results match your search."
                   : "No matching items.";
               return ListView(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
+                padding:
+                    EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
@@ -636,7 +655,8 @@ class _FeedListState extends State<_FeedList>
             const showLoadMore = false;
 
             return GridView.builder(
-              padding: EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
+              padding:
+                  EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 2000,
               gridDelegate: gridDelegate,
@@ -666,7 +686,8 @@ class _FeedListState extends State<_FeedList>
   }
 }
 
-// Paging/feed model
+/* ----------------------------- Feed paging model ------------------------ */
+
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
   final String tab;
