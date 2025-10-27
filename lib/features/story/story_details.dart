@@ -1,12 +1,11 @@
 // lib/features/story/story_details.dart
 //
-// Updates in this version:
-// 1. Footer attribution no longer shows "rss:" prefix. We clean it.
-//    e.g. "rss:bollywoodhungama.com" -> "bollywoodhungama.com".
-//    Format is still: "Source: YouTube / BollywoodHungama.com"
-// 2. The big red NEWS badge is hidden for plain news stories,
-//    because the row already says "News • <timestamp>".
-//    We still show badges for non-news kinds like RELEASE / OTT / TRAILER.
+// Notes in this version:
+// - Meta row under the title now matches the card style
+//   (pill(s) + timestamp + freshness, no "•" bullets).
+// - CTA row order/align now matches the mock:
+//   [Watch/Read] [Save] [Share] all left-aligned.
+// - All other behavior is unchanged.
 
 import 'dart:math' as math;
 
@@ -181,7 +180,98 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return '';
   }
 
-  /* ---------------- UI ---------------- */
+  /* ---------------- Small helpers for UI rows ---------------- */
+
+  /// Build RichText spans for the meta line under the title,
+  /// matching the card style:
+  ///   [Release] [Netflix] Fri 27 Oct 2025, 3:30 PM +6m
+  /// We:
+  ///   - strip the "•" bullets from story.metaLine
+  ///   - color any trailing "+6m"/"+1h"/etc. in red
+  InlineSpan _buildMetaRichSpan(Color baseColor) {
+    final meta = (widget.story.metaLine).trim();
+    if (meta.isEmpty) {
+      return TextSpan(text: '', style: TextStyle(color: baseColor));
+    }
+
+    // Split on "•" so we can drop the bullets and insert spacing instead.
+    final parts = meta.split('•').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+
+    final spans = <TextSpan>[];
+    for (var i = 0; i < parts.length; i++) {
+      final chunk = parts[i];
+
+      // Add manual "  " spacing instead of the bullet.
+      if (i != 0) {
+        spans.add(TextSpan(text: '  ', style: TextStyle(color: baseColor)));
+      }
+
+      // If the chunk looks like "+6m", "+1h", etc. -> highlight red accent.
+      final looksFreshness = chunk.startsWith('+') || chunk.startsWith('-');
+      spans.add(
+        TextSpan(
+          text: chunk,
+          style: TextStyle(
+            color: looksFreshness ? const Color(0xFFdc2626) : baseColor,
+            fontWeight: looksFreshness ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+      );
+    }
+
+    return TextSpan(
+      children: spans,
+      style: TextStyle(
+        fontSize: 13,
+        height: 1.3,
+        color: baseColor,
+        fontWeight: FontWeight.w400,
+      ),
+    );
+  }
+
+  /// One row under the title:
+  /// [KindBadge?] [OttBadge?] <timestamp + freshness>
+  Widget _MetaRow({
+    required Color textColor,
+    required bool kindIsNews,
+  }) {
+    final chips = <Widget>[];
+
+    // only show the big colored kind badge if it's *not* plain "news"
+    if (!kindIsNews) {
+      chips.add(KindBadge(widget.story.kindLabel ?? widget.story.kind));
+    }
+
+    // show OTT / platform chip like "YouTube" / "Netflix" etc.
+    chips.add(
+      OttBadge.fromStory(
+        widget.story,
+        dense: true,
+      ),
+    );
+
+    // meta timestamp / +Xm freshness as RichText
+    final metaText = RichText(
+      text: _buildMetaRichSpan(textColor),
+    );
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // chips with small horizontal gaps
+        ...chips.where((w) => w is! SizedBox || (w as SizedBox).child != null).map((w) {
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: w,
+          );
+        }),
+
+        // timestamp/+Xm
+        Expanded(child: metaText),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -297,29 +387,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // badges row
-                      Wrap(
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          // only show kind badge when it's not plain News
-                          if (!kindIsNews)
-                            KindBadge(storyKindDisplay),
-                          OttBadge.fromStory(
-                            widget.story,
-                            dense: true,
-                          ),
-                          Text(
-                            widget.story.metaLine,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: cs.onSurfaceVariant,
-                                ),
-                          ),
-                        ],
+                      // NEW meta row (was Wrap before)
+                      _MetaRow(
+                        textColor: cs.onSurfaceVariant,
+                        kindIsNews: kindIsNews,
                       ),
 
                       const SizedBox(height: 16),
@@ -359,9 +430,11 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 20),
 
-                      // CTA row
+                      // CTA row (reordered / left aligned)
                       Row(
+                        mainAxisAlignment: MainAxisAlignment.start,
                         children: [
+                          // Watch / Read
                           Semantics(
                             button: true,
                             label: _ctaLabel,
@@ -384,21 +457,19 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                               label: Text(_ctaLabel),
                             ),
                           ),
+
                           const SizedBox(width: 10),
-                          OutlinedButton.icon(
-                            onPressed: () => _share(context),
-                            icon: const Icon(Icons.ios_share),
-                            label: const Text('Share'),
-                          ),
-                          const Spacer(),
+
+                          // Save bookmark (icon-only tonal)
                           AnimatedBuilder(
                             animation: SavedStore.instance,
                             builder: (_, __) {
                               final saved =
                                   SavedStore.instance.isSaved(widget.story.id);
                               return IconButton.filledTonal(
-                                tooltip:
-                                    saved ? 'Remove from Saved' : 'Save bookmark',
+                                tooltip: saved
+                                    ? 'Remove from Saved'
+                                    : 'Save bookmark',
                                 onPressed: () =>
                                     SavedStore.instance.toggle(widget.story.id),
                                 icon: Icon(
@@ -408,6 +479,15 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                 ),
                               );
                             },
+                          ),
+
+                          const SizedBox(width: 10),
+
+                          // Share
+                          OutlinedButton.icon(
+                            onPressed: () => _share(context),
+                            icon: const Icon(Icons.ios_share),
+                            label: const Text('Share'),
                           ),
                         ],
                       ),
