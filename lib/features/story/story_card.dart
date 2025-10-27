@@ -1,19 +1,37 @@
 // lib/features/story/story_card.dart
 //
-// FINAL LAYOUT:
+// VISUAL SPEC (matches the HTML mock approved):
 //
-// Row A: "<Kind>  [🕐 pill: publishedAt]"
-// Row B: [🕐 pill: addedAt (+gap)]
-// Row C: Title (3 lines max)
-// Row D: CTA row (Watch/Read + Save + Share)
-// Row E: "Source: <sourceDomain OR source>"  (single value, no slash combo)
+// Card:
+//   - radius: 8
+//   - bg: rgba(30,37,51,0.35) on dark
+//   - border: 1px solid rgba(255,255,255,0.2)
+//   - padding inside body: 12 all around
 //
-// Rules:
-// - Row A should SHOW the clock emoji pill again for the FIRST timestamp.
-// - Row B keeps the second timestamp pill like before.
-// - Bottom attribution should NOT combine both source + domain with "/".
-//   We show sourceDomain if present, else source.
-// - Everything else stays the same.
+// Layout inside body:
+//   Row A  : "<Kind>  •  <publishedAt formatted like '27 Oct 2025, 11:57 AM'>"
+//   Row B  : [🕒 badge]  "<addedAt (+Δm)>"
+//   Gap 8
+//   Title  : max 3 lines
+//   Spacer()
+//   CTA row: [ big red Watch/Read button ][ save ][ share ]
+//   Gap 8
+//   Source : "Source: <domain or source>"
+//
+// Row spacing:
+//   RowA
+//   4px
+//   RowB
+//   8px
+//   Title
+//   12px -> CTA row
+//   8px  -> Source
+//
+// NOTE:
+// - Title, CTA, etc are still interactive like before.
+// - We keep Spacer() before CTA so all cards stay equal height in the grid.
+// - We keep hover translateY(-2) on web, but with new radius/border/shadow.
+//
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -136,7 +154,7 @@ class _StoryCardState extends State<StoryCard> {
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
-  // e.g. "26 Oct 2025, 11:36 PM"
+  // e.g. "27 Oct 2025, 11:57 AM"
   String _formatMetaLike(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
@@ -149,7 +167,7 @@ class _StoryCardState extends State<StoryCard> {
     return '$day $m $y, $h:$mm $ap';
   }
 
-  // "(+33h)" etc
+  // "(+12m)" etc
   String _formatGap(Duration d) {
     final abs = d.isNegative ? -d : d;
     if (abs.inMinutes < 60) return '${abs.inMinutes}m';
@@ -157,30 +175,27 @@ class _StoryCardState extends State<StoryCard> {
     return '${abs.inDays}d';
   }
 
-  // Small pill row with emoji + timestamp text
-  Widget _timePill({required String emoji, required String text}) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.13),
-            shape: BoxShape.circle,
-          ),
-          child: _Emoji(emoji: emoji, size: 14),
+  // Little rounded badge with 🕒, used in Row B
+  Widget _timeBadge(String emoji) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        emoji,
+        style: const TextStyle(
+          fontSize: 12,
+          height: 1.0,
+          fontFamilyFallback: [
+            'Apple Color Emoji',
+            'Segoe UI Emoji',
+            'Noto Color Emoji',
+            'EmojiOne Color',
+          ],
         ),
-        const SizedBox(width: 8),
-        Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: Colors.grey[400],
-            fontSize: 13.5,
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -193,7 +208,7 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   // Bottom "Source: <x>" logic.
-  // Use domain if we have it, else fall back to source.
+  // Prefer domain, else source.
   String _attribution(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -230,8 +245,16 @@ class _StoryCardState extends State<StoryCard> {
     // hero/thumbnail
     final imageUrl = resolveStoryImageUrl(widget.story);
 
-    // attribution for footer
+    // attribution text
     final srcText = _attribution(widget.story);
+
+    // COLORS from mock:
+    //   card bg ~ rgba(30,37,51,0.35) on dark
+    final Color cardBgDark = const Color(0xFF1e2533).withOpacity(0.35);
+    final Color cardBgLight = scheme.surface;
+
+    final Color borderColor =
+        isDark ? Colors.white.withOpacity(0.20) : Colors.black.withOpacity(0.08);
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -239,20 +262,21 @@ class _StoryCardState extends State<StoryCard> {
       transform:
           _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
       decoration: BoxDecoration(
-        color: isDark
-            ? const Color(0xFF181E2A).withOpacity(0.92)
-            : scheme.surface.withOpacity(0.97),
-        borderRadius: BorderRadius.circular(18),
+        color: isDark ? cardBgDark : cardBgLight,
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color:
-              _hover ? const Color(0x33dc2626) : Colors.white.withOpacity(0.08),
-          width: 1.5,
+          color: _hover
+              ? (isDark
+                  ? Colors.white.withOpacity(0.28)
+                  : Colors.black.withOpacity(0.16))
+              : borderColor,
+          width: 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.18),
-            blurRadius: 20,
-            offset: const Offset(0, 6),
+            color: Colors.black.withOpacity(0.6),
+            blurRadius: 40,
+            offset: const Offset(0, 20),
           ),
         ],
       ),
@@ -271,14 +295,16 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // IMAGE
+                  // ------------------------------------------------------------------
+                  // THUMBNAIL (16:9)
+                  // ------------------------------------------------------------------
                   SizedBox(
                     height: mediaH,
                     child: Hero(
                       tag: 'thumb-${widget.story.id}',
                       child: ClipRRect(
                         borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(18),
+                          top: Radius.circular(8),
                         ),
                         child: Stack(
                           fit: StackFit.expand,
@@ -336,6 +362,8 @@ class _StoryCardState extends State<StoryCard> {
                                   child: _SampleIcon(kind: widget.story.kind),
                                 ),
                               ),
+
+                            // subtle bottom gradient overlay
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -357,76 +385,123 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
+                  // ------------------------------------------------------------------
                   // BODY
+                  // ------------------------------------------------------------------
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
+                      padding: const EdgeInsets.all(12), // <-- tighter padding (12)
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Row A:
-                          // "<Kind>  [🕐 publishedAt]"
+                          // ----------------------------------------------------------
+                          // Row A: "<Kind>  •  <publishedAt>"
+                          // ----------------------------------------------------------
                           Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                _kindDisplay(kind),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: Colors.grey[400],
-                                  fontSize: 13.5,
-                                  fontWeight: FontWeight.w600,
+                              Flexible(
+                                flex: 0,
+                                child: Text(
+                                  _kindDisplay(kind),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.3,
+                                  ),
                                 ),
                               ),
                               if (publishedText != null) ...[
-                                const SizedBox(width: 10),
+                                const SizedBox(width: 8),
+                                // dot •
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  margin: const EdgeInsets.only(top: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.9),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
                                 Flexible(
-                                  child: _timePill(
-                                    emoji: '🕐',
-                                    text: publishedText!,
+                                  child: Text(
+                                    publishedText!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                      height: 1.3,
+                                    ),
                                   ),
                                 ),
                               ],
                             ],
                           ),
 
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 4),
 
-                          // Row B:
-                          // second timestamp with gap, still pill
+                          // ----------------------------------------------------------
+                          // Row B: [🕒 badge]  "<addedAt (+Δm)>"
+                          // ----------------------------------------------------------
                           if (addedText != null)
-                            _timePill(
-                              emoji: '🕐',
-                              text: addedText!,
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _timeBadge('🕒'),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    addedText!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.grey[400],
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w400,
+                                      height: 1.3,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
 
                           const SizedBox(height: 8),
 
-                          // Row C: Title
+                          // ----------------------------------------------------------
+                          // Title (max 3 lines)
+                          // ----------------------------------------------------------
                           Flexible(
                             fit: FlexFit.loose,
                             child: Text(
                               widget.story.title,
                               maxLines: 3,
-                              softWrap: true,
                               overflow: TextOverflow.ellipsis,
                               style: GoogleFonts.inter(
-                                fontSize: 14.5,
-                                height: 1.26,
-                                fontWeight: FontWeight.w800,
-                                color: isDark
-                                    ? Colors.white.withOpacity(0.96)
-                                    : scheme.onSurface,
+                                fontSize: 15,
+                                height: 1.35,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white.withOpacity(0.96),
                               ),
                             ),
                           ),
 
+                          const SizedBox(height: 12),
+
+                          // push CTA row to bottom for consistent card height
                           const Spacer(),
 
-                          // Row D: CTA row
+                          // ----------------------------------------------------------
+                          // CTA row
+                          // ----------------------------------------------------------
                           Row(
                             children: [
+                              // Big red Watch/Read button
                               Expanded(
                                 child: Semantics(
                                   button: true,
@@ -452,14 +527,15 @@ class _StoryCardState extends State<StoryCard> {
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
                                           borderRadius:
-                                              BorderRadius.circular(8),
+                                              BorderRadius.circular(6),
                                         ),
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 12,
                                         ),
                                         textStyle: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 15,
+                                          height: 1.2,
                                         ),
                                       ),
                                       label: Text(_ctaLabel),
@@ -468,6 +544,8 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
                               const SizedBox(width: 8),
+
+                              // Save
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
@@ -484,7 +562,9 @@ class _StoryCardState extends State<StoryCard> {
                                   );
                                 },
                               ),
-                              const SizedBox(width: 6),
+                              const SizedBox(width: 8),
+
+                              // Share
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
@@ -496,20 +576,23 @@ class _StoryCardState extends State<StoryCard> {
                             ],
                           ),
 
-                          // Row E: bottom attribution
-                          if (srcText.isNotEmpty) ...[
-                            const SizedBox(height: 8),
+                          const SizedBox(height: 8),
+
+                          // ----------------------------------------------------------
+                          // Source row
+                          // ----------------------------------------------------------
+                          if (srcText.isNotEmpty)
                             Text(
                               'Source: $srcText',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                color: Colors.grey[500],
+                                color: Colors.grey[400],
                                 fontSize: 12,
-                                fontWeight: FontWeight.w500,
+                                fontWeight: FontWeight.w400,
+                                height: 1.3,
                               ),
                             ),
-                          ],
                         ],
                       ),
                     ),
@@ -528,7 +611,7 @@ class _StoryCardState extends State<StoryCard> {
       child: kIsWeb
           ? card
           : ClipRRect(
-              borderRadius: BorderRadius.circular(18),
+              borderRadius: BorderRadius.circular(8),
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
                 child: card,
@@ -593,7 +676,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* --------- Compact secondary action icon --------- */
+/* --------- Secondary action icon chip (Save / Share) --------- */
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -608,15 +691,26 @@ class _ActionIconBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // dark translucent chip from mock:
+    final bgColor = isDark
+        ? Colors.black.withOpacity(0.4)
+        : Colors.black.withOpacity(0.06);
+
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.15)
+        : Colors.black.withOpacity(0.15);
+
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: isDark
-            ? Colors.white.withOpacity(0.08)
-            : Colors.black.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(8),
+        color: bgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: borderColor, width: 1),
+        ),
         child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
           onTap: onTap,
           child: SizedBox(
             width: 36,
