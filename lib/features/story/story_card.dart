@@ -1,7 +1,7 @@
 // lib/features/story/story_card.dart
 //
 // Compact card layout:
-// - Thumbnail: fixed 16:9 (min 180px). Image is aligned to TOP so any crop
+// - Thumbnail: fixed 16:9 (min 160px). Image is aligned to TOP so any crop
 //   happens at the bottom. Placeholder uses same box, so every card is uniform.
 // - Body: tighter typography (12/14px), tighter spacing (4/6px).
 // - CTA row (Watch/Read + Save + Share) is pinned to the bottom using Stack,
@@ -10,9 +10,9 @@
 // - Save/Share icons also 36x36.
 // - No giant unused middle gap anymore.
 //
-// NOTE: Real remaining "extra space" in desktop grid still depends on the
-// grid's childAspectRatio from home_screen.dart. But inside the card itself,
-// we now waste as little vertical space as possible.
+// NOTE: Remaining "extra space" per tile also depends on the grid's
+// childAspectRatio in home_screen.dart. Inside the card itself, this wastes
+// as little vertical space as possible.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -37,14 +37,16 @@ class StoryCard extends StatefulWidget {
   const StoryCard({
     super.key,
     required this.story,
-
-    // Optional list + index so pager can swipe prev/next in context
     this.allStories,
     this.index,
   });
 
   final Story story;
+
+  /// Entire list this card belongs to (for horizontal swipe in pager).
   final List<Story>? allStories;
+
+  /// Index of [story] within [allStories].
   final int? index;
 
   @override
@@ -292,9 +294,9 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // fixed 16:9 hero box, min height 180
+              // fixed 16:9 hero box, min height 160 (more compact)
               final baseH = w / (16 / 9); // 16:9 => h = w * 0.5625
-              final mediaH = math.max(180.0, baseH);
+              final mediaH = math.max(160.0, baseH);
 
               // Row B (added time) OR spacer same height for all cards
               final Widget rowBWidget = (addedText != null)
@@ -524,8 +526,8 @@ class _StoryCardState extends State<StoryCard> {
                                                         BorderRadius.circular(
                                                             6),
                                                   ),
-                                                  padding: const EdgeInsets
-                                                      .symmetric(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
                                                     horizontal: 10,
                                                   ),
                                                   textStyle:
