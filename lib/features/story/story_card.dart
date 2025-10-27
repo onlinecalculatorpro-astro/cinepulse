@@ -1,21 +1,19 @@
 // lib/features/story/story_card.dart
 //
-// CinePulse "approved view" card:
+// CinePulse card (mobile-first).
 //
-// - Dark navy card (#0f172a style), subtle 1px border, 10px radius,
-//   heavy shadow/glow on hover.
+// - Dark navy card (#0f172a in dark mode), subtle 1px border, 10px radius,
+//   shadow/glow on hover (web only).
 // - 16:9 thumbnail cropped from top, min height ~160px.
-//   Divider line under the image for visual alignment.
-// - Meta line:
+// - Meta row:
 //      [Release] [27 Oct 2025, 3:30 PM] [+6m]
-//   kind pill, timestamp, freshness delta in red.
-// - Title: Inter 14px, 3 lines max.
-// - CTA row pinned to bottom (red Watch/Read button + 🔖 + 📤).
-//   Then a "Source: domain.com" line.
-// - No wasted vertical gap.
+//   with colored pill per kind (Release red, News blue, OTT purple, etc.).
+// - Title: Inter 14px, up to 3 lines.
+// - CTA row pinned to bottom (Watch/Read + Save + Share), then "Source:".
+// - Body reserves extra bottom space so the CTA row never overlaps the title.
 //
-// Remaining total card height still depends on the grid's `childAspectRatio`
-// in home_screen.dart.
+// Height of each card on screen is still influenced by the grid's
+// childAspectRatio in home_screen.dart.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -186,7 +184,7 @@ class _StoryCardState extends State<StoryCard> {
     return '+${abs.inDays}d';
   }
 
-  // 'Release', 'Trailer', 'OTT', etc.
+  // 'Release', 'Trailer', 'OTT', etc -> display label.
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -212,9 +210,9 @@ class _StoryCardState extends State<StoryCard> {
     final isDark = theme.brightness == Brightness.dark;
 
     final story = widget.story;
-    final kind = story.kind.toLowerCase();
+    final kindRaw = story.kind.toLowerCase();
 
-    // Pick timestamps for meta line.
+    // Timestamps for meta row.
     final DateTime? publishedAt = story.publishedAt ?? story.releaseDate;
     final DateTime? addedAt = story.normalizedAt ?? story.ingestedAtCompat;
 
@@ -234,11 +232,7 @@ class _StoryCardState extends State<StoryCard> {
     final imageUrl = resolveStoryImageUrl(story);
     final srcText = _sourceDomain(story);
 
-    // Card chrome from approved mock:
-    // - bg: dark navy (#0f172a) in dark mode, surface in light mode
-    // - border: 1px subtle
-    // - radius: ~10px
-    // - heavy shadow w/ red glow on hover
+    // Card chrome:
     final Color cardBg =
         isDark ? const Color(0xFF0f172a) : scheme.surface;
     final Color borderColor = isDark
@@ -248,9 +242,8 @@ class _StoryCardState extends State<StoryCard> {
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
       curve: Curves.easeOut,
-      transform: _hover
-          ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0))
-          : null,
+      transform:
+          _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
       decoration: BoxDecoration(
         color: cardBg,
         borderRadius: BorderRadius.circular(10),
@@ -286,16 +279,17 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // Maintain a top-aligned 16:9 thumbnail with min height.
+              // Thumbnail height = 16:9 crop aligned to top, min 160.
               final baseH = w / (16 / 9); // h = w * 0.5625
               final mediaH = math.max(160.0, baseH);
 
-              // Reserve vertical space inside body for pinned CTA + Source.
-              // CTA row (36) + gap(8) + source (~16) if present
+              // Reserve body bottom so text never collides with CTA row.
+              // CTA row (36) + gap(8) + source (~16) + EXTRA(12).
               final double reservedBottom =
                   36.0 +
                   8.0 +
-                  (srcText.isNotEmpty ? 16.0 : 0.0);
+                  (srcText.isNotEmpty ? 16.0 : 0.0) +
+                  12.0;
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -331,7 +325,7 @@ class _StoryCardState extends State<StoryCard> {
                                 kind: story.kind,
                               ),
 
-                            // subtle bottom fade overlay
+                            // subtle bottom gradient to help text if it overlaps
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -367,17 +361,16 @@ class _StoryCardState extends State<StoryCard> {
                         builder: (context, bodyBox) {
                           return Stack(
                             children: [
-                              // Top content
+                              // Top content (meta row + title)
                               Padding(
                                 padding: EdgeInsets.only(bottom: reservedBottom),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // Meta line row:
-                                    // [Release] [27 Oct 2025, 3:30 PM] [+6m]
                                     _MetaLine(
-                                      kindLabel: _kindDisplay(kind),
+                                      kindRaw: kindRaw,
+                                      kindLabel: _kindDisplay(kindRaw),
                                       timestampText: primaryTsText,
                                       freshnessText: freshnessText,
                                     ),
@@ -400,7 +393,7 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
 
-                              // Bottom CTA + source, pinned
+                              // Bottom CTA row + Source
                               Positioned(
                                 left: 0,
                                 right: 0,
@@ -433,7 +426,8 @@ class _StoryCardState extends State<StoryCard> {
                                                               autoplay: true);
                                                         } else {
                                                           _openExternalLink(
-                                                              context);
+                                                            context,
+                                                          );
                                                         }
                                                       }
                                                     : null,
@@ -454,7 +448,8 @@ class _StoryCardState extends State<StoryCard> {
                                                       RoundedRectangleBorder(
                                                     borderRadius:
                                                         BorderRadius.circular(
-                                                            6),
+                                                      6,
+                                                    ),
                                                     side: BorderSide(
                                                       color: Colors.white
                                                           .withOpacity(0.08),
@@ -531,7 +526,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Hover lift on web/desktop.
+    // Hover lift/glow is just for desktop/web.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -540,15 +535,79 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
+/* ─────────────────────── badge color helper ───────────────────────────── */
+
+class _KindStyle {
+  final Color bg;
+  final Color border;
+  final Color text;
+  const _KindStyle({
+    required this.bg,
+    required this.border,
+    required this.text,
+  });
+}
+
+// Pick badge colors by kind.
+// We try to keep text readable on dark cards.
+_KindStyle _styleForKind(String rawKind) {
+  final k = rawKind.toLowerCase().trim();
+
+  // base palettes
+  const red = Color(0xFFdc2626);
+  const blue = Color(0xFF3b82f6);
+  const purple = Color(0xFF8b5cf6);
+  const amber = Color(0xFFFACC15);
+  const gray = Color(0xFF94a3b8);
+
+  if (k.contains('release')) {
+    return _KindStyle(
+      bg: red.withOpacity(0.16),
+      border: red.withOpacity(0.4),
+      text: red,
+    );
+  }
+  if (k.contains('news')) {
+    return _KindStyle(
+      bg: blue.withOpacity(0.16),
+      border: blue.withOpacity(0.4),
+      text: blue,
+    );
+  }
+  if (k.contains('ott')) {
+    return _KindStyle(
+      bg: purple.withOpacity(0.16),
+      border: purple.withOpacity(0.4),
+      text: purple,
+    );
+  }
+  if (k.contains('trailer')) {
+    return _KindStyle(
+      bg: amber.withOpacity(0.16),
+      border: amber.withOpacity(0.4),
+      text: amber,
+    );
+  }
+
+  // fallback
+  return _KindStyle(
+    bg: gray.withOpacity(0.16),
+    border: gray.withOpacity(0.4),
+    text: gray,
+  );
+}
+
 /* ─────────────────────── META LINE ROW WIDGET ──────────────────────────── */
 
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
+    required this.kindRaw,
     required this.kindLabel,
     required this.timestampText,
     required this.freshnessText,
   });
 
+  final String kindRaw;
   final String kindLabel;
   final String? timestampText;
   final String? freshnessText;
@@ -556,21 +615,26 @@ class _MetaLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = const Color(0xFFdc2626);
+    final style = _styleForKind(kindRaw);
 
     final pill = kindLabel.isEmpty
         ? const SizedBox.shrink()
         : Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.08),
+              color: style.bg,
               borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                color: style.border,
+                width: 1,
+              ),
             ),
             child: Text(
               kindLabel,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: style.text,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
                 height: 1.2,
@@ -774,11 +838,67 @@ class _ActionIconBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // Matches the approved mock: dark square w/ thin border.
+    // dark square w/ thin border
     final bgColor = isDark
         ? const Color(0xFF0b0f17)
         : Colors.black.withOpacity(0.06);
 
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.12)
+        : Colors.black.withOpacity(0.12);
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: Material(
+        color: bgColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: borderColor, width: 1),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 36,
+            height: 36,
+            child: Center(
+              // icon is passed in, but we wrap in Center in caller;
+              // keeping this Center here makes tap target predictable.
+              child: null,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* NOTE:
+   We keep _ActionIconBox's layout contract the same as before,
+   but because we're returning `null` child above, caller should just
+   wrap icon directly instead. Let's tweak slightly so it still shows:
+
+   We'll re-implement InkWell child properly to avoid confusion.
+*/
+
+class _ActionIconBoxFixed extends StatelessWidget {
+  final Widget icon;
+  final VoidCallback onTap;
+  final String tooltip;
+
+  const _ActionIconBoxFixed({
+    required this.icon,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark
+        ? const Color(0xFF0b0f17)
+        : Colors.black.withOpacity(0.06);
     final borderColor = isDark
         ? Colors.white.withOpacity(0.12)
         : Colors.black.withOpacity(0.12);
@@ -805,6 +925,11 @@ class _ActionIconBox extends StatelessWidget {
     );
   }
 }
+
+/* We still want the original symbol name `_ActionIconBox` in callers,
+   so let's typedef it to the fixed one for compatibility.
+*/
+typedef _ActionIconBox = _ActionIconBoxFixed;
 
 /* ───────────────────── back-compat for ingestedAt ─────────────────────── */
 
