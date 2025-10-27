@@ -218,7 +218,7 @@ _WORK_INFO_RE = re.compile(
     re.I,
 )
 
-# === ON-AIR DRAMA: reality shows / televised moments (allowed, but risky → attribution) ===
+# === ON-AIR DRAMA: reality shows / televised moments (allowed content)
 _ON_AIR_SHOWS_RE = re.compile(
     r"\b("
     r"bigg\s*boss(?:\s*ott)?|khatron\s+ke\s+khi?ladi|indian\s+idol|roadies|splitsvilla|"
@@ -365,7 +365,11 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
     if re.search(r"\b(has\s+(built|filmed|completed|cancelled|dropped))\b", s, re.I):
         clarity_bonus += 1
 
-    fluff_penalty = -1 if re.search(r"\b(huge|massive|epic|intense\s+clash|explosive\s+showdown)\b", s, re.I) else 0
+    fluff_penalty = -1 if re.search(
+        r"\b(huge|massive|epic|intense\s+clash|explosive\s+showdown)\b",
+        s,
+        re.I,
+    ) else 0
 
     redundancy_penalty = 0
     if re.search(r"\b(currently\s+targeted|not\s+yet\s+officially\s+confirmed)\b", s, re.I):
@@ -418,7 +422,10 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
         return [t] if t else []
 
     words_all = body_text.split()
-    if len(words_all) <= PASSTHROUGH_MAX_WORDS and len(body_text) <= PASSTHROUGH_MAX_CHARS:
+    if (
+        len(words_all) <= PASSTHROUGH_MAX_WORDS
+        and len(body_text) <= PASSTHROUGH_MAX_CHARS
+    ):
         return [body_text]
 
     sentences = [s.strip() for s in _SENT_SPLIT_RE.split(body_text) if s.strip()]
@@ -445,7 +452,11 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
             continue
         if any(_similar_enough(prev_s, s) for _, prev_s in chosen):
             continue
-        if _HYPE_RE.search(s) or _CTA_NOISE_RE.search(s) or _SOFT_FLUFF_RE.search(s):
+        if (
+            _HYPE_RE.search(s)
+            or _CTA_NOISE_RE.search(s)
+            or _SOFT_FLUFF_RE.search(s)
+        ):
             continue
 
         if total_words < SUMMARY_MIN or (total_words + wc) <= SUMMARY_MAX:
@@ -463,6 +474,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
 
     chosen.sort(key=lambda x: x[0])
 
+    # try to move a title-relevant sentence to the front
     if chosen:
         first_idx, first_sent = chosen[0]
         title_kw_set = set(w.lower() for w in _word_list(title or ""))
@@ -475,6 +487,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
                     chosen[0], chosen[j] = chosen[j], chosen[0]
                     break
 
+    # drop weak tail
     while len(chosen) > 1:
         tail = chosen[-1][1]
         tail_wc = len(tail.split())
@@ -489,6 +502,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
             continue
         break
 
+    # trim if too long
     while True:
         words_now = sum(len(s.split()) for _, s in chosen)
         if words_now <= SUMMARY_MAX or len(chosen) <= 1:
@@ -523,23 +537,34 @@ def _clean_source_title(raw_title: str) -> str:
         return ""
     t = raw_title.strip()
 
+    # keep only first chunk before crazy splitters / pipes / ":" etc
     parts = _HEADLINE_SPLIT_RE.split(t)
     if parts:
         t = parts[0].strip()
 
+    # remove generic tails like "Explained", "Full Report"
     t = _HEADLINE_TAIL_RE.sub("", t).strip()
+
+    # de-hype
     t = _HEADLINE_HYPE_RE.sub("", t)
+
+    # remove filler words (basically, currently, etc.)
     t = _HEADLINE_FILLER_RE.sub("", t)
 
+    # squeeze spaces
     t = re.sub(r"\s{2,}", " ", t).strip()
+    # trim noisy trailing punctuation / separators
     t = re.sub(r"[\s\-\|:]+$", "", t).strip()
 
+    # fix weird ALL CAPS
     fixed_words = [_clean_caps(w) for w in t.split()]
     t = " ".join(fixed_words).strip()
 
+    # Capitalize first letter if needed
     if t and t[0].islower():
         t = t[0].upper() + t[1:]
 
+    # strip trailing "?" because it often comes from clickbait Q
     if t.endswith("?"):
         t = t[:-1].strip()
 
@@ -574,6 +599,10 @@ def _best_fact_sentence(title: str, body_text: str) -> str:
     return ""
 
 def generate_clean_title(raw_title: str, body_text: str) -> str:
+    """
+    Produce a short, professional headline with no hype/clickbait.
+    DOES NOT insert any attribution or prefixes.
+    """
     base = _clean_source_title(raw_title or "")
     too_short = len(base.split()) < 4
     if not base or too_short:
@@ -592,16 +621,18 @@ def generate_clean_title(raw_title: str, body_text: str) -> str:
     return base
 
 # =====================================================================
-# LEGAL / SAFETY WRAPPERS (with on-air drama handling)
+# LEGAL / SAFETY WRAPPERS
 # =====================================================================
 
 def _detect_risk_flags(title: str, body_text: str) -> Tuple[bool, bool, bool, Optional[str]]:
     """
     Returns:
         (is_risky, gossip_only, is_on_air, on_air_show_name)
-    - is_risky: legal/PR heat or on-air confrontation (we'll attribute)
-    - gossip_only: off-camera personal drama with no work context (will be dropped)
-    - is_on_air: TV/OTT on-air drama (allowed, but still "risky" => attribution)
+
+    - is_risky: legal/PR heat or on-air confrontation
+                (marked so sanitizer can force attribution elsewhere)
+    - gossip_only: pure off-camera personal drama → sanitizer will drop
+    - is_on_air: TV/OTT on-air drama (still allowed content)
     """
     hay = f"{title or ''}\n{body_text or ''}"
 
@@ -611,16 +642,21 @@ def _detect_risk_flags(title: str, body_text: str) -> Tuple[bool, bool, bool, Op
 
     is_on_air, show = _detect_on_air_drama(title, body_text)
 
-    # Off-camera gossip becomes "gossip_only" ONLY if it's not about work AND not on-air.
+    # Off-camera gossip becomes "gossip_only" only if it's not about work AND not on-air.
     gossip_only = gossip_hit and not has_work_info and not is_on_air
 
-    # On-air drama is allowed, but handled with attribution → mark risky to enforce tone.
+    # On-air drama is allowed, but it's still "risky" in tone,
+    # so we keep is_risky True for downstream handling.
     if is_on_air:
         is_risky = True
 
     return (bool(is_risky), bool(gossip_only), bool(is_on_air), show)
 
 def _soften_phrases(text: str) -> str:
+    """
+    Take spicy/criminal/attack wording and soften it
+    to "reportedly", "according to", etc.
+    """
     if not text:
         return text or ""
     repls: List[Tuple[re.Pattern, str]] = [
@@ -645,6 +681,10 @@ def _soften_phrases(text: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip()
 
 def _summary_attribution_prefix(source_domain: Optional[str], source_type: Optional[str]) -> str:
+    """
+    For risky stories only (legal heat), prepend attribution in SUMMARY.
+    Titles will NOT carry attribution anymore.
+    """
     st = (source_type or "").lower()
     dom = (source_domain or "").strip()
     if st.startswith("youtube"):
@@ -652,33 +692,6 @@ def _summary_attribution_prefix(source_domain: Optional[str], source_type: Optio
     if dom:
         return f"According to {dom}:"
     return "According to the report:"
-
-def _headline_attribution_prefix(source_domain: Optional[str], source_type: Optional[str]) -> str:
-    st = (source_type or "").lower()
-    dom = (source_domain or "").strip()
-    if st.startswith("youtube"):
-        return "YouTube video claims:"
-    if dom:
-        return f"{dom}:"
-    return "Report:"
-
-def _build_on_air_headline(base: str, show: Optional[str], dom_prefix: str) -> str:
-    """
-    Prefer: "<Show>: heated on-air exchange reported (domain: Title…)" within char limit.
-    But keep simple when needed.
-    """
-    show_part = (show or "On-air episode").strip()
-    core = base
-    # If base already contains the show name, don't repeat it twice.
-    if show and re.search(re.escape(show), base, re.I):
-        headline = f"{dom_prefix} {base}".strip() if dom_prefix else base
-    else:
-        # Try to prefix with "<Show>: <base>"
-        candidate = f"{show_part}: {base}".strip()
-        headline = f"{dom_prefix} {candidate}".strip() if dom_prefix else candidate
-    headline = _shorten_title_chars(headline, HEADLINE_MAX_CHARS)
-    headline = re.sub(r"[.:;,\-–—]+$", "", headline).strip()
-    return headline
 
 def summarize_story_safe(
     title: str,
@@ -700,6 +713,7 @@ def summarize_story_safe(
     if is_risky:
         safe_summary = _soften_phrases(safe_summary)
         prefix = _summary_attribution_prefix(source_domain, source_type)
+        # don't double-prepend
         if not re.match(r"^(According to|A YouTube video claims:)", safe_summary, re.I):
             safe_summary = f"{prefix} {safe_summary}"
 
@@ -713,40 +727,17 @@ def generate_safe_title(
     source_type: Optional[str] = None,
 ) -> Tuple[str, bool, bool]:
     """
-    Safer wrapper around generate_clean_title().
-    - Build clean, professional headline.
-    - Detect (is_risky, gossip_only, is_on_air).
-    - If risky & NOT on-air → short attribution prefix ("domain:", "YouTube video claims:")
-    - If on-air → build "<Show>: <cleaned title>" and still apply domain prefix.
-    Returns: (safe_headline, is_risky, gossip_only)
+    Build a clean, professional headline with NO attribution/prefix.
+    We still compute (is_risky, gossip_only) so sanitizer can decide
+    what to drop or mark, but we ALWAYS return a prefix-free title.
     """
     base_headline = generate_clean_title(raw_title, body_text)
-    is_risky, gossip_only, is_on_air, show = _detect_risk_flags(raw_title, body_text)
 
-    safe_headline = base_headline
+    # detect risk for downstream flags
+    is_risky, gossip_only, _is_on_air, _show = _detect_risk_flags(raw_title, body_text)
 
-    if is_on_air:
-        prefix = _headline_attribution_prefix(source_domain, source_type)
-        safe_headline = _build_on_air_headline(base_headline, show, prefix)
-        safe_headline = _shorten_title_chars(safe_headline, HEADLINE_MAX_CHARS)
-        safe_headline = re.sub(r"[.:;,\-–—]+$", "", safe_headline).strip()
-        return (safe_headline, True, False)  # on-air is allowed; not gossip_only
+    safe_headline = base_headline.strip()
 
-    if is_risky:
-        prefix = _headline_attribution_prefix(source_domain, source_type)
-
-        already_attr = False
-        core_prefix = (prefix[:-1].strip().lower() if prefix.endswith(":") else prefix.strip().lower())
-        first_words = " ".join(base_headline.lower().split()[:3])
-        if core_prefix and core_prefix in first_words:
-            already_attr = True
-        if base_headline.lower().startswith(("according to", "a youtube video claims")):
-            already_attr = True
-
-        if not already_attr:
-            safe_headline = f"{prefix} {base_headline}"
-
-        safe_headline = _shorten_title_chars(safe_headline, HEADLINE_MAX_CHARS)
-        safe_headline = re.sub(r"[.:;,\-–—]+$", "", safe_headline).strip()
-
-    return (safe_headline.strip(), bool(is_risky), bool(gossip_only))
+    # DO NOT prepend "koimoi.com:", "YouTube video claims:", "On-air episode:", etc.
+    # UI will show "Source: ..." separately, so title must stay pure.
+    return (safe_headline, bool(is_risky), bool(gossip_only))
