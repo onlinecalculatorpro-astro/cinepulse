@@ -11,73 +11,157 @@ import 'app/app.dart';
 import 'app/app_settings.dart';
 import 'core/api.dart'; // kApiBaseUrl, kDeepLinkBase
 import 'core/cache.dart';
-import 'core/fcm_bootstrap.dart'; // FCM init (Android only)
+import 'core/fcm_bootstrap.dart'; // initCinepulseFcm()
+
+// ─────────────────────────────────────────────────────────────
+// Simple in-app logger so we can see errors on the phone screen
+// (no laptop / no logcat required).
+// ─────────────────────────────────────────────────────────────
+
+final ValueNotifier<List<String>> _errorLog =
+    ValueNotifier<List<String>>(<String>[]);
+
+void _logLine(String line) {
+  final next = List<String>.from(_errorLog.value)..add(line);
+  // keep last ~50 lines max so it doesn't explode
+  if (next.length > 50) {
+    next.removeRange(0, next.length - 50);
+  }
+  _errorLog.value = next;
+}
+
+/// A tiny always-on overlay that renders at the top of the app.
+/// If no errors/logs yet, it stays hidden (SizedBox.shrink).
+class _DebugOverlay extends StatelessWidget {
+  const _DebugOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: true, // let touches pass through
+      child: SafeArea(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ValueListenableBuilder<List<String>>(
+            valueListenable: _errorLog,
+            builder: (context, lines, _) {
+              if (lines.isEmpty) {
+                return const SizedBox.shrink();
+              }
+              return Container(
+                width: double.infinity,
+                margin: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.8),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.redAccent,
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  lines.join('\n'),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.3,
+                    color: Colors.white,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// We mount the real app AND the overlay in a Stack so you always
+/// see logs even if the main UI is blank.
+class _RootWithOverlay extends StatelessWidget {
+  const _RootWithOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: const [
+        CinePulseApp(),
+        _DebugOverlay(),
+      ],
+    );
+  }
+}
 
 Future<void> main() async {
-  // Make sure Flutter engine/services are ready before we do async work.
+  // Needed before we do any async init.
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Only set up Firebase/FCM on Android (not on web/iOS/etc.).
-  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-    await initCinepulseFcm();
-  }
-
-  // Default locale (can be overridden later by user/device).
+  // Region/locale default.
   Intl.defaultLocale = 'en_US';
 
-  // App-wide persisted stuff.
+  // Init app settings + saved stories store.
   await AppSettings.instance.init();
   await SavedStore.instance.init();
 
-  // Log dart-define config so we know what the APK was built against.
-  debugPrint('[CinePulse] API_BASE_URL = $kApiBaseUrl');
-  debugPrint('[CinePulse] DEEP_LINK_BASE = $kDeepLinkBase');
+  // Try FCM only on Android real runtime.
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    try {
+      await initCinepulseFcm();
+      _logLine('[main] FCM init OK');
+    } catch (e, st) {
+      _logLine('[main] FCM init FAILED: $e');
+      _logLine(st.toString());
+    }
+  }
 
-  // ----- Global error handling -----
+  // Print important compile-time values (from --dart-define in CI).
+  _logLine('[main] kReleaseMode = $kReleaseMode');
+  _logLine('[main] API_BASE_URL = $kApiBaseUrl');
+  _logLine('[main] DEEP_LINK_BASE = $kDeepLinkBase');
 
-  // 1. Flutter framework build/layout errors.
+  // ───────── Global error capture hooks ─────────
+
+  // Any Flutter framework error (build/layout/paint, etc).
   FlutterError.onError = (FlutterErrorDetails details) {
-    // Still print the normal Flutter red screen in debug runs,
-    // but also forward to the zone so we can catch it there.
+    // still print red screen in debug internally
     FlutterError.presentError(details);
+
     final stack = details.stack ?? StackTrace.current;
     Zone.current.handleUncaughtError(details.exception, stack);
+
+    _logLine('[FlutterError] ${details.exception}');
+    _logLine(stack.toString());
   };
 
-  // 2. Platform / plugin / engine errors.
+  // Uncaught platform / engine side errors (MethodChannel, plugins, etc).
   ui.PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-    debugPrint('Unhandled platform error: $error\n$stack');
-    // Return true = we handled it, so the engine won't double-log.
-    return true;
+    _logLine('[PlatformDispatcher] $error');
+    _logLine(stack.toString());
+    return true; // we handled it
   };
 
-  // 3. Widget build failures.
-  //    By default Flutter shows a red/yellow box with black text, which on our
-  //    dark background can look basically "blank".
-  //
-  //    We override ErrorWidget.builder so that:
-  //    - In debug / non-release: we render the actual exception string,
-  //      in WHITE bold-ish text on our dark background.
-  //      => You can screenshot this on the phone and send it to us.
-  //
-  //    - In release builds: we hide details and just say "Something went wrong."
+  // Replace Flutter's red/yellow error widget with a dark one
+  // AND also push message into the overlay.
   ErrorWidget.builder = (FlutterErrorDetails details) {
-    final message = kReleaseMode
-        ? 'Something went wrong.'
-        : details.exceptionAsString();
+    final msg =
+        kReleaseMode ? 'Something went wrong.' : details.exceptionAsString();
+
+    _logLine('[ErrorWidget] $msg');
 
     return Material(
-      color: const Color(0xFF0b0f17), // our dark scaffold bg
+      color: Colors.black,
       child: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            message,
+            msg,
             textAlign: TextAlign.center,
             style: const TextStyle(
+              color: Colors.white,
               fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: Colors.white, // <-- high contrast so it's visible
             ),
           ),
         ),
@@ -85,11 +169,14 @@ Future<void> main() async {
     );
   };
 
-  // 4. Run the whole app in a guarded zone to catch uncaught async errors.
+  // Guard all async zones. Anything that explodes later ends up in overlay.
   runZonedGuarded(
-    () => runApp(const CinePulseApp()),
+    () {
+      runApp(const _RootWithOverlay());
+    },
     (error, stack) {
-      debugPrint('Uncaught zone error: $error\n$stack');
+      _logLine('[Zone] $error');
+      _logLine(stack.toString());
     },
   );
 }
