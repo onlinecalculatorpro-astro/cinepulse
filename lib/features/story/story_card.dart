@@ -5,6 +5,8 @@
 // - CTA row (Watch/Read + Save + Share) baseline-aligns across cards.
 // - Less awkward blank middle space while still keeping all metadata.
 // - Compact spacing, 8px/4px rhythm.
+// - When you tap a card (or Watch/Read), you now land in the pager
+//   (StoryDetailsPager) so you can swipe left/right to previous/next stories.
 //
 // Structure inside the card body:
 //
@@ -19,9 +21,9 @@
 // Source : "Source: <domain or source>"
 //
 // Spacer() keeps CTA pinned to the bottom of the body so all cards line up.
-// The hero image above is now taller (boosted 16:9), which removes most of the
-// giant "dead zone" you were seeing in the middle of cards and also reduces
-// head-cutting in screenshots.
+// The hero image is taller (boosted ~1.15x 16:9, min 180) so we don't chop
+// heads and we also eat up the giant dead zone.
+//
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -39,12 +41,20 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
-import 'story_details.dart';
-import 'story_image_url.dart'; // hero/thumbnail resolver
+import 'story_details_pager.dart'; // <-- new pager screen with PageView
+import 'story_image_url.dart';   // hero/thumbnail resolver
 
 class StoryCard extends StatefulWidget {
-  const StoryCard({super.key, required this.story});
+  const StoryCard({
+    super.key,
+    required this.story,
+    required this.allStories, // full list currently rendered in the grid
+    required this.index,      // index of this.story inside allStories
+  });
+
   final Story story;
+  final List<Story> allStories;
+  final int index;
 
   @override
   State<StoryCard> createState() => _StoryCardState();
@@ -60,6 +70,7 @@ class _StoryCardState extends State<StoryCard> {
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _linkUrl {
+    // Prefer video url if present
     final v = _videoUrl;
     if (v != null) return v;
 
@@ -127,10 +138,15 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
+  // Open pager at THIS story's index.
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
-        StoryDetailsScreen(story: widget.story, autoplay: autoplay),
+        StoryDetailsPager(
+          stories: widget.allStories,
+          initialIndex: widget.index,
+          autoplayInitial: autoplay,
+        ),
       ),
     );
   }
@@ -144,18 +160,8 @@ class _StoryCardState extends State<StoryCard> {
    * ------------------------------------------------------------------------*/
 
   static const List<String> _mon = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec'
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
   // e.g. "27 Oct 2025, 11:57 AM"
@@ -206,7 +212,7 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Capitalize kind
+  // Capitalize kind -> "Release", "News", "OTT", etc
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -294,6 +300,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
+          // tapping anywhere on card opens pager at THIS story
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -301,10 +308,9 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // OLD: mediaH = max(130, w/ (16/9))
-              // NEW: make the thumbnail taller (≈1.15x 16:9, min 180)
-              // so heads don't get cut and also so we "eat up"
-              // that giant blank middle space.
+              // Taller thumbnail:
+              // base 16:9 height for this width,
+              // boosted ~1.15x, and clamp to min 180.
               final baseH = w / (16 / 9);
               final boosted = baseH * 1.15;
               final mediaH = math.max(180.0, boosted);
@@ -427,7 +433,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               if (publishedText != null) ...[
                                 const SizedBox(width: 8),
-                                // bullet "•"
+                                // bullet "•" (but visually it's a small dot)
                                 Container(
                                   width: 6,
                                   height: 6,
@@ -500,8 +506,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 8),
 
-                          // Spacer keeps CTA row locked to the bottom of body,
-                          // so CTAs line up across cards.
+                          // Keep CTA row locked to the bottom for alignment.
                           const Spacer(),
 
                           // CTA row
@@ -520,8 +525,10 @@ class _StoryCardState extends State<StoryCard> {
                                           ? () {
                                               if (_isWatchCta &&
                                                   _videoUrl != null) {
+                                                // open pager and autoplay video
                                                 _openDetails(autoplay: true);
                                               } else {
+                                                // open external link (article, etc)
                                                 _openExternalLink(context);
                                               }
                                             }
@@ -551,7 +558,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               const SizedBox(width: 8),
 
-                              // Save button
+                              // Save chip
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
@@ -570,7 +577,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               const SizedBox(width: 8),
 
-                              // Share button
+                              // Share chip
                               _ActionIconBox(
                                 tooltip: 'Share',
                                 onTap: () => _share(context),
@@ -700,44 +707,6 @@ class _ActionIconBox extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    final bgColor = isDark
-        ? Colors.black.withOpacity(0.4)
-        : Colors.black.withOpacity(0.06);
-
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.15)
-        : Colors.black.withOpacity(0.15);
-
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: bgColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: const SizedBox(
-            width: 36,
-            height: 36,
-            child: Center(
-              // icon injected from parent
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/* The InkWell child above needs icon centered.
-   Override build to include icon cleanly. */
-extension on _ActionIconBox {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
