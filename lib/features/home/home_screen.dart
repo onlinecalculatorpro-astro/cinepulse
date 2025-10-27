@@ -18,6 +18,21 @@ import '../../widgets/skeleton_card.dart';
 import 'widgets/search_bar.dart';
 import '../story/story_card.dart';
 
+/* -------------------------------------------------------------------------- */
+/* Sort mode for the feed                                                     */
+/* -------------------------------------------------------------------------- */
+
+enum _SortMode {
+  latest,        // "Latest first" (default)
+  trending,      // "Trending now"
+  views,         // "Most viewed"
+  editorsPick,   // "Editor’s pick"
+}
+
+/* -------------------------------------------------------------------------- */
+/* HomeScreen                                                                 */
+/* -------------------------------------------------------------------------- */
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
@@ -64,6 +79,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   bool _offline = false;
   bool _isForeground = true;
+
+  // current "Sorting" mode in the header
+  _SortMode _sortMode = _SortMode.latest;
 
   // Connectivity / timers
   StreamSubscription? _connSub;
@@ -278,10 +296,6 @@ class _HomeScreenState extends State<HomeScreen>
     if (mounted) setState(() {});
   }
 
-  Future<void> _onTapSort() async {
-    // this is where a bottom sheet / menu would go
-  }
-
   // Manual pull-to-refresh: full reset + optional external hook.
   Future<void> _refresh() async {
     final key = _currentTabKey;
@@ -296,6 +310,109 @@ class _HomeScreenState extends State<HomeScreen>
     if (!_isForeground) return;
     if (_search.text.isNotEmpty) return; // don’t disturb while searching
     unawaited(_currentFeed.load(reset: false));
+  }
+
+  // pretty string for the sort button
+  String _sortModeLabel(_SortMode mode) {
+    switch (mode) {
+      case _SortMode.latest:
+        return 'Latest first';
+      case _SortMode.trending:
+        return 'Trending now';
+      case _SortMode.views:
+        return 'Most viewed';
+      case _SortMode.editorsPick:
+        return 'Editor’s pick';
+    }
+  }
+
+  // bottom sheet for sort selection
+  Future<void> _showSortSheet(BuildContext sheetContext) async {
+    final choice = await showModalBottomSheet<_SortMode>(
+      context: sheetContext,
+      showDragHandle: true,
+      backgroundColor: Theme.of(sheetContext).colorScheme.surface,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        final textColor = Theme.of(ctx).colorScheme.onSurface;
+        final subColor = Theme.of(ctx).colorScheme.onSurfaceVariant;
+
+        Widget tile({
+          required _SortMode mode,
+          required IconData icon,
+          required String title,
+          required String subtitle,
+        }) {
+          final selected = (_sortMode == mode);
+          return ListTile(
+            leading: Icon(
+              icon,
+              color: selected
+                  ? const Color(0xFFdc2626)
+                  : (isDark ? Colors.white : Colors.black87),
+            ),
+            title: Text(
+              title,
+              style: TextStyle(
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                color: textColor,
+              ),
+            ),
+            subtitle: Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 13,
+                color: subColor,
+              ),
+            ),
+            trailing: selected
+                ? const Icon(Icons.check_rounded, color: Color(0xFFdc2626))
+                : null,
+            onTap: () => Navigator.pop(ctx, mode),
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              tile(
+                mode: _SortMode.latest,
+                icon: Icons.access_time_rounded,
+                title: 'Latest first',
+                subtitle: 'Newest published stories first',
+              ),
+              tile(
+                mode: _SortMode.trending,
+                icon: Icons.local_fire_department_rounded,
+                title: 'Trending now',
+                subtitle: 'What’s getting attention',
+              ),
+              tile(
+                mode: _SortMode.views,
+                icon: Icons.visibility_rounded,
+                title: 'Most viewed',
+                subtitle: 'Top stories by views',
+              ),
+              tile(
+                mode: _SortMode.editorsPick,
+                icon: Icons.star_rounded,
+                title: 'Editor’s pick',
+                subtitle: 'Hand-picked highlights',
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted) return;
+    if (choice != null && choice != _sortMode) {
+      setState(() {
+        _sortMode = choice;
+      });
+    }
   }
 
   /* ------------------------------- UI -------------------------------------- */
@@ -347,8 +464,8 @@ class _HomeScreenState extends State<HomeScreen>
                               ],
                       ),
                       border: const Border(
-                        bottom: BorderSide(
-                            color: Color(0x0Fffffff), width: 1),
+                        bottom:
+                            BorderSide(color: Color(0x0Fffffff), width: 1),
                       ),
                     ),
                   ),
@@ -406,11 +523,12 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // CATEGORY BAR (pinned, sticky)
+            // CATEGORY + SORT BAR (pinned, sticky)
             SliverPersistentHeader(
               pinned: true,
               delegate: _FiltersHeaderDelegate(
                 activeIndex: _tab.index,
+                sortLabel: _sortModeLabel(_sortMode),
                 onSelect: (i) {
                   if (i >= 0 && i < _tab.length) {
                     _tab.animateTo(i);
@@ -419,7 +537,7 @@ class _HomeScreenState extends State<HomeScreen>
                     );
                   }
                 },
-                onSortTap: _onTapSort,
+                onSortTap: (ctx) => _showSortSheet(ctx),
               ),
             ),
 
@@ -435,6 +553,7 @@ class _HomeScreenState extends State<HomeScreen>
                     feed: feed,
                     searchText: _search,
                     offline: _offline,
+                    sortMode: _sortMode,
                   );
                 }).toList(),
               ),
@@ -453,14 +572,20 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   _FiltersHeaderDelegate({
     required this.activeIndex,
     required this.onSelect,
+    required this.sortLabel,
     required this.onSortTap,
   });
 
   final int activeIndex;
   final ValueChanged<int> onSelect;
-  final VoidCallback onSortTap;
 
-  // make the bar a bit shorter / tighter
+  // The label under the caret on the Sorting button ("Latest first", etc.)
+  final String sortLabel;
+
+  // We need BuildContext to open the bottom sheet from parent
+  final void Function(BuildContext ctx) onSortTap;
+
+  // compact height
   @override
   double get minExtent => 56;
   @override
@@ -468,7 +593,10 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(
-      BuildContext context, double shrinkOffset, bool overlapsContent) {
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
@@ -531,7 +659,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
     Widget sortButton() {
       return InkWell(
         borderRadius: BorderRadius.circular(8),
-        onTap: onSortTap,
+        onTap: () => onSortTap(context),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
@@ -554,15 +682,18 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
                     : theme.colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 6),
-              Text(
-                'Sorting',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  height: 1.2,
-                  color: isDark
-                      ? const Color(0xFFCBD5E1)
-                      : theme.colorScheme.onSurfaceVariant,
+              Flexible(
+                child: Text(
+                  sortLabel,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    height: 1.2,
+                    color: isDark
+                        ? const Color(0xFFCBD5E1)
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
               const SizedBox(width: 2),
@@ -579,8 +710,8 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
-    // We split the row:
-    // [scrollable tabs .................] [Sorting ▼ fixed at right]
+    // Layout:
+    // [ horizontally scrollable tabs .......... ] [ sort button fixed right ]
     return Container(
       color: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
       child: Container(
@@ -598,12 +729,11 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Tabs (can overflow horizontally on small screens)
+            // Tabs (scrollable)
             Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 physics: const BouncingScrollPhysics(),
-                // no Scrollbar widget here, so user can swipe but we never show a bar
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
@@ -631,7 +761,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
 
             const SizedBox(width: 12),
 
-            // Sorting button (fixed on right, never scrolls away)
+            // Sorting (fixed right)
             sortButton(),
           ],
         ),
@@ -641,7 +771,9 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   bool shouldRebuild(_FiltersHeaderDelegate oldDelegate) {
-    return oldDelegate.activeIndex != activeIndex;
+    // Rebuild if active tab OR sort label changed.
+    return oldDelegate.activeIndex != activeIndex ||
+        oldDelegate.sortLabel != sortLabel;
   }
 }
 
@@ -653,11 +785,13 @@ class _FeedList extends StatefulWidget {
     required this.feed,
     required this.searchText,
     required this.offline,
+    required this.sortMode,
   });
 
   final _PagedFeed feed;
   final TextEditingController searchText;
   final bool offline;
+  final _SortMode sortMode;
 
   @override
   State<_FeedList> createState() => _FeedListState();
@@ -668,6 +802,7 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
+  // responsive grid
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     // Determine columns via max cross-axis extent (auto responsive).
     double maxTileW;
@@ -702,6 +837,69 @@ class _FeedListState extends State<_FeedList>
       crossAxisSpacing: 12,
       childAspectRatio: ratio,
     );
+  }
+
+  // ---------- sort helpers ----------
+  double _trendingScore(Story s) {
+    // try dynamic fields like trendingScore / score / rank
+    try {
+      final dyn = (s as dynamic);
+      final v = dyn.trendingScore ?? dyn.score ?? dyn.rank ?? 0.0;
+      if (v is num) return v.toDouble();
+    } catch (_) {}
+    // fallback: newer is "hotter"
+    final dt = s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
+    return dt?.millisecondsSinceEpoch.toDouble() ?? 0.0;
+  }
+
+  int _viewsCount(Story s) {
+    // try dynamic fields like viewCount / views / impressions
+    try {
+      final dyn = (s as dynamic);
+      final v = dyn.viewCount ?? dyn.views ?? dyn.impressions ?? 0;
+      if (v is num) return v.toInt();
+    } catch (_) {}
+    return 0;
+  }
+
+  bool _isEditorsPick(Story s) {
+    // try dynamic flags: isEditorsPick / editorsPick / editorChoice
+    try {
+      final dyn = (s as dynamic);
+      final v = dyn.isEditorsPick ?? dyn.editorsPick ?? dyn.editorChoice;
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) return v.toLowerCase() == 'true';
+    } catch (_) {}
+    return false;
+  }
+
+  List<Story> _applySortMode(List<Story> input) {
+    switch (widget.sortMode) {
+      case _SortMode.latest:
+        // feed.items is already newest-first
+        return input;
+      case _SortMode.trending:
+        final list = [...input];
+        list.sort(
+          (a, b) => _trendingScore(b).compareTo(_trendingScore(a)),
+        );
+        return list;
+      case _SortMode.views:
+        final list = [...input];
+        list.sort(
+          (a, b) => _viewsCount(b).compareTo(_viewsCount(a)),
+        );
+        return list;
+      case _SortMode.editorsPick:
+        final picks = input.where(_isEditorsPick).toList();
+        if (picks.isNotEmpty) {
+          // show only editor picks if we have any
+          return picks;
+        }
+        // fallback to input
+        return input;
+    }
   }
 
   @override
@@ -742,26 +940,27 @@ class _FeedListState extends State<_FeedList>
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
-                    message:
-                        feed.errorMessage ?? 'Something went wrong.',
+                    message: feed.errorMessage ?? 'Something went wrong.',
                     onRetry: () => feed.load(reset: true),
                   ),
                 ],
               );
             }
 
+            // text filter
             final q = widget.searchText.text.trim().toLowerCase();
-            final filtered = (q.isEmpty)
+            final baseList = (q.isEmpty)
                 ? feed.items
                 : feed.items
                     .where((s) =>
                         s.title.toLowerCase().contains(q) ||
-                        (s.summary ?? '')
-                            .toLowerCase()
-                            .contains(q))
+                        (s.summary ?? '').toLowerCase().contains(q))
                     .toList();
 
-            if (filtered.isEmpty) {
+            // apply sort mode (Latest / Trending / Most viewed / Editor’s pick)
+            final displayList = _applySortMode(baseList);
+
+            if (displayList.isEmpty) {
               final msg = widget.offline
                   ? "You're offline and no results match your search."
                   : "No matching items.";
@@ -783,9 +982,9 @@ class _FeedListState extends State<_FeedList>
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 2000,
               gridDelegate: gridDelegate,
-              itemCount: filtered.length + (showLoadMore ? 1 : 0),
+              itemCount: displayList.length + (showLoadMore ? 1 : 0),
               itemBuilder: (_, i) {
-                if (showLoadMore && i == filtered.length) {
+                if (showLoadMore && i == displayList.length) {
                   return Center(
                     child: feed.isLoadingMore
                         ? const Padding(
@@ -794,18 +993,17 @@ class _FeedListState extends State<_FeedList>
                           )
                         : OutlinedButton.icon(
                             onPressed: feed.loadMore,
-                            icon: const Icon(
-                                Icons.expand_more_rounded),
+                            icon: const Icon(Icons.expand_more_rounded),
                             label: const Text('Load more'),
                           ),
                   );
                 }
 
-                // pass the entire filtered list + index into StoryCard,
-                // so pager can swipe prev/next within this filtered set.
+                // Pass the entire displayList + index into StoryCard,
+                // so pager can swipe prev/next within this *sorted/filtered* set.
                 return StoryCard(
-                  story: filtered[i],
-                  allStories: filtered,
+                  story: displayList[i],
+                  allStories: displayList,
                   index: i,
                 );
               },
