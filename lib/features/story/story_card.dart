@@ -3,28 +3,17 @@
 // CinePulse card (mobile-first).
 //
 // - Dark navy card (#0f172a in dark mode), subtle 1px border, 10px radius,
-//   shadow/glow on hover (web / desktop).
-// - 16:9 thumbnail cropped from the TOP, min height ~160px so we keep visual
-//   consistency between cards even if the source image is short.
+//   shadow/glow on hover (web only).
+// - 16:9 thumbnail cropped from top, min height ~160px.
 // - Meta row:
-//      [Release] 27 Oct 2025, 3:30 PM  +6m
-//   with a COLORED pill per kind:
-//      Release  -> red
-//      News     -> blue
-//      OTT      -> purple
-//      Trailer  -> amber
-//      fallback -> gray
+//      [Release] [27 Oct 2025, 3:30 PM] [+6m]
+//   with colored pill per kind (Release red, News blue, OTT purple, etc.).
 // - Title: Inter 14px, up to 3 lines.
-// - CTA row (Watch/Read + Save + Share) is PINNED to the bottom of the card
-//   body. "Source: domain.com" sits just under it.
-// - We now *reserve* extra bottom padding (reservedBottom) so the CTA/footer
-//   area never overlaps the last line of the title, even when:
-//      * textScaleFactor is large
-//      * meta row wraps
-//      * 3-line headline
+// - CTA row pinned to bottom (Watch/Read + Save + Share), then "Source:".
+// - Body reserves extra bottom space so CTA row never overlaps the title
+//   even with large text scale.
 //
-// Note: final vertical height in the grid is still affected by the grid's
-// childAspectRatio in home_screen.dart.
+// Overall tile height is still influenced by childAspectRatio in home_screen.dart.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -42,8 +31,8 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
-import 'story_image_url.dart';
-import 'story_pager.dart';
+import 'story_pager.dart'; // StoryPagerScreen
+import 'story_image_url.dart'; // resolveStoryImageUrl
 
 class StoryCard extends StatefulWidget {
   const StoryCard({
@@ -55,7 +44,7 @@ class StoryCard extends StatefulWidget {
 
   final Story story;
 
-  /// Entire list this card belongs to (used for swipe paging in StoryPagerScreen).
+  /// Entire list this card belongs to (for swipe paging in StoryPagerScreen).
   final List<Story>? allStories;
 
   /// Index of [story] within [allStories].
@@ -68,7 +57,7 @@ class StoryCard extends StatefulWidget {
 class _StoryCardState extends State<StoryCard> {
   bool _hover = false;
 
-  /* ───────────────────────────── CTA / link helpers ───────────────────────── */
+  /* ─────────────────────────── CTA / link helpers ───────────────────────── */
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
@@ -164,7 +153,7 @@ class _StoryCardState extends State<StoryCard> {
       ? const Icon(Icons.play_arrow_rounded, size: 20, color: Colors.white)
       : const _Emoji(emoji: '📖', size: 16);
 
-  /* ───────────────────────────── formatting helpers ───────────────────────── */
+  /* ───────────────────────── formatting helpers ────────────────────────── */
 
   static const List<String> _mon = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -212,7 +201,7 @@ class _StoryCardState extends State<StoryCard> {
     return '';
   }
 
-  /* ─────────────────────────────────── build ───────────────────────────────── */
+  /* ─────────────────────────────── build ──────────────────────────────── */
 
   @override
   Widget build(BuildContext context) {
@@ -281,7 +270,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // Whole card tap opens details. CTA buttons below do their own onTap.
+          // Whole card tap opens details (pager). CTA buttons override.
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -289,25 +278,28 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // Top image (16:9) cropped from top, but never shorter than 160px.
+              // Thumbnail height = 16:9 crop aligned to top, min 160.
               final baseH = w / (16 / 9); // h = w * 0.5625
               final mediaH = math.max(160.0, baseH);
 
-              // Reserve body bottom so text never collides with CTA row.
+              // Keep title from colliding with CTA:
               //
               // CTA row height (36)
-              // + gap under CTA (8)
-              // + source line (~16 if present)
-              final baseCtaBlock =
-                  36.0 + 8.0 + (srcText.isNotEmpty ? 16.0 : 0.0);
-
-              // extra breathing room above CTA block so a 3-line headline
-              // + long meta row + high textScale won't overlap
-              final safetyGap = 32.0; // bumped from 16 → 32
-
-              // scale padding with textScale (up to 1.4x) so large fonts get
-              // even more room.
+              // + spacing above CTA row (we'll give it comfortable air)
+              // + Source line (~16 if present)
+              //
+              // Plus: a "safety gap" to ensure we always have breathing room,
+              // scaled by textScale so large fonts don't crash into buttons.
               final textScale = MediaQuery.textScaleFactorOf(context);
+
+              final baseCtaBlock =
+                  36.0 + // button row
+                  8.0 + // gap between row and source
+                  (srcText.isNotEmpty ? 16.0 : 0.0); // "Source:" line
+
+              // big cushion above CTA/source block
+              const safetyGap = 32.0;
+
               final double reservedBottom =
                   (baseCtaBlock + safetyGap) * textScale.clamp(1.0, 1.4);
 
@@ -345,7 +337,7 @@ class _StoryCardState extends State<StoryCard> {
                                 kind: story.kind,
                               ),
 
-                            // subtle bottom fade overlay on the image
+                            // subtle bottom gradient overlay
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -367,7 +359,7 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // Divider under thumbnail
+                  // divider under thumbnail
                   Container(
                     height: 1,
                     color: Colors.white.withOpacity(0.07),
@@ -381,7 +373,7 @@ class _StoryCardState extends State<StoryCard> {
                         builder: (context, bodyBox) {
                           return Stack(
                             children: [
-                              // Top content (meta row + title).
+                              // Top content (meta row + title)
                               Padding(
                                 padding: EdgeInsets.only(bottom: reservedBottom),
                                 child: Column(
@@ -394,7 +386,6 @@ class _StoryCardState extends State<StoryCard> {
                                       timestampText: primaryTsText,
                                       freshnessText: freshnessText,
                                     ),
-
                                     const SizedBox(height: 8),
 
                                     // Title (up to 3 lines)
@@ -413,7 +404,7 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
 
-                              // Bottom CTA row + Source, pinned.
+                              // Bottom CTA row + Source (pinned)
                               Positioned(
                                 left: 0,
                                 right: 0,
@@ -490,7 +481,7 @@ class _StoryCardState extends State<StoryCard> {
 
                                           const SizedBox(width: 6),
 
-                                          // Save (🔖)
+                                          // Save button (🔖)
                                           AnimatedBuilder(
                                             animation: SavedStore.instance,
                                             builder: (_, __) {
@@ -499,8 +490,9 @@ class _StoryCardState extends State<StoryCard> {
                                               return _ActionIconBox(
                                                 tooltip:
                                                     saved ? 'Saved' : 'Save',
-                                                onTap: () => SavedStore.instance
-                                                    .toggle(story.id),
+                                                onTap: () =>
+                                                    SavedStore.instance
+                                                        .toggle(story.id),
                                                 icon: const _Emoji(
                                                   emoji: '🔖',
                                                   size: 16,
@@ -511,7 +503,7 @@ class _StoryCardState extends State<StoryCard> {
 
                                           const SizedBox(width: 6),
 
-                                          // Share (📤)
+                                          // Share button (📤)
                                           _ActionIconBox(
                                             tooltip: 'Share',
                                             onTap: () => _share(context),
@@ -546,7 +538,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Hover lift/glow only matters on desktop/web.
+    // Hover lift/glow is mainly for desktop/web.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -555,7 +547,7 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-/* ───────────────────────────── badge color helper ────────────────────────── */
+/* ─────────────────────── badge color helper ───────────────────────────── */
 
 class _KindStyle {
   final Color bg;
@@ -568,11 +560,12 @@ class _KindStyle {
   });
 }
 
-// Pick badge colors by kind. Keeps text readable on dark cards.
+// Pick badge colors by kind.
+// We keep text readable on dark cards.
 _KindStyle _styleForKind(String rawKind) {
   final k = rawKind.toLowerCase().trim();
 
-  // Tailwind-ish palette references:
+  // base palettes (Tailwind-ish tones)
   const red = Color(0xFFdc2626);
   const blue = Color(0xFF3b82f6);
   const purple = Color(0xFF8b5cf6);
@@ -608,7 +601,7 @@ _KindStyle _styleForKind(String rawKind) {
     );
   }
 
-  // fallback / generic
+  // fallback
   return _KindStyle(
     bg: gray.withOpacity(0.16),
     border: gray.withOpacity(0.4),
@@ -616,7 +609,7 @@ _KindStyle _styleForKind(String rawKind) {
   );
 }
 
-/* ─────────────────────────── META LINE ROW ──────────────────────────────── */
+/* ─────────────────────── META LINE ROW WIDGET ──────────────────────────── */
 
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
@@ -705,7 +698,7 @@ class _MetaLine extends StatelessWidget {
   }
 }
 
-/* ─────────────────────────── SOURCE FOOTER LINE ─────────────────────────── */
+/* ───────────────────────── SOURCE FOOTER LINE ─────────────────────────── */
 
 class _SourceLine extends StatelessWidget {
   const _SourceLine({required this.domain});
@@ -744,7 +737,7 @@ class _SourceLine extends StatelessWidget {
   }
 }
 
-/* ────────────────────────── fallback thumbnail ─────────────────────────── */
+/* ─────────────────────── fallback thumbnail widget ─────────────────────── */
 
 class _FallbackThumb extends StatelessWidget {
   final bool isDark;
@@ -782,7 +775,7 @@ class _FallbackThumb extends StatelessWidget {
   }
 }
 
-/* ─────────────────────── icon in fallback thumbnail ────────────────────── */
+/* ───────────────────── icon in fallback thumbnail ─────────────────────── */
 
 class _SampleIcon extends StatelessWidget {
   final String kind;
@@ -813,7 +806,7 @@ class _SampleIcon extends StatelessWidget {
   }
 }
 
-/* ───────────────────────────── emoji text ──────────────────────────────── */
+/* ───────────────────────────── emoji text ─────────────────────────────── */
 
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 16});
@@ -840,7 +833,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* ───────────────────── Save / Share square buttons ─────────────────────── */
+/* ───────────────────── Save / Share square buttons ────────────────────── */
 
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
@@ -857,61 +850,12 @@ class _ActionIconBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // dark square w/ thin border, matches the current CinePulse mock
+    // dark square w/ thin border, matches the approved look
     final bgColor =
         isDark ? const Color(0xFF0b0f17) : Colors.black.withOpacity(0.06);
 
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.12)
-        : Colors.black.withOpacity(0.12);
-
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: Material(
-        color: bgColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: const SizedBox(
-            width: 36,
-            height: 36,
-            child: Center(child: null), // replaced below via LayoutBuilder
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// We can't inject `icon` into the const child above, so give InkWell a builder.
-// Simpler: redefine _ActionIconBox with the icon child inline instead of const:
-
-class _ActionIconBoxFixed extends StatelessWidget {
-  final Widget icon;
-  final VoidCallback onTap;
-  final String tooltip;
-
-  const _ActionIconBoxFixed({
-    required this.icon,
-    required this.onTap,
-    required this.tooltip,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : Colors.black.withOpacity(0.06);
-
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.12)
-        : Colors.black.withOpacity(0.12);
+    final borderColor =
+        isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.12);
 
     return Tooltip(
       message: tooltip,
@@ -936,10 +880,7 @@ class _ActionIconBoxFixed extends StatelessWidget {
   }
 }
 
-// Alias so callsites can keep using _ActionIconBox(...)
-typedef _ActionIconBox = _ActionIconBoxFixed;
-
-/* ─────────────────────── back-compat for ingestedAt ────────────────────── */
+/* ───────────────────── back-compat for ingestedAt ─────────────────────── */
 
 extension _StoryCompat on Story {
   // Handle older payloads where "ingestedAt" might be nested.
