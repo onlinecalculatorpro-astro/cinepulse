@@ -284,12 +284,20 @@ class _StoryCardState extends State<StoryCard> {
               final mediaH = math.max(160.0, baseH);
 
               // Reserve body bottom so text never collides with CTA row.
-              // CTA row (36) + gap(8) + source (~16) + EXTRA(12).
+              // We scale this with the user's textScale so that bigger fonts
+              // get more breathing room and don't collide.
+              final textScale = MediaQuery.textScaleFactorOf(context);
+
+              // CTA row height (36) + spacing (8) + source line (~16 if present)
+              final baseCtaBlock =
+                  36.0 + 8.0 + (srcText.isNotEmpty ? 16.0 : 0.0);
+
+              // We also want at least ~16px of visual air above the CTA block.
+              final safetyGap = 16.0;
+
+              // Final reserved bottom space:
               final double reservedBottom =
-                  36.0 +
-                  8.0 +
-                  (srcText.isNotEmpty ? 16.0 : 0.0) +
-                  12.0;
+                  (baseCtaBlock + safetyGap) * textScale.clamp(1.0, 1.4);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
