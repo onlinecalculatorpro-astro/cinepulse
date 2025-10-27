@@ -827,7 +827,7 @@ class _FeedListState extends State<_FeedList>
     } else if (maxTileW <= 380) {
       baseRatio = 0.95;
     } else if (maxTileW <= 420) {
-      baseRatio = 1.00;
+      baseRatio = .92; // was 1.00, Lower value makes cards taller
     } else {
       baseRatio = 1.05;
     }
