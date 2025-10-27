@@ -867,50 +867,98 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
-  // Responsive grid delegate:
-  // We intentionally make cards taller on tablet / desktop so that
-  // meta row + 3-line title + CTA/footer never collide.
+  // Responsive grid delegate for ALL screen types.
+  //
+  // Goal:
+  // - Phone (1 col): card is a bit taller so title + CTA fits comfortably.
+  // - Tablet / small desktop (2 cols): slightly shorter but still roomy.
+  // - Desktop / wide (3+ cols): more compact, but NOT so short that the title
+  //   or CTA row collides / gets pushed out.
+  //
+  // We express height using childAspectRatio = tileWidth / tileHeight.
+  //   -> Bigger ratio  => shorter card.
+  //   -> Smaller ratio => taller card.
+  //
+  // We also adjust for textScale (accessibility font size). Larger text scale
+  // gets extra height automatically so it doesn't overlap CTA.
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
-    // Pick target column width based on viewport width.
-    double maxTileW;
+    // 1. Decide how many columns we *want* based on total available width.
+    //    This matches your breakpoints visually:
+    //      <520px    → 1 column
+    //      <900px    → 2 columns
+    //      <1400px   → 3 columns
+    //      otherwise → 4 columns
+    int estCols;
     if (width < 520) {
-      // 1 column (phones)
-      maxTileW = width;
+      estCols = 1;
     } else if (width < 900) {
-      // 2 columns
-      maxTileW = width / 2;
+      estCols = 2;
     } else if (width < 1400) {
-      // 3 columns
-      maxTileW = width / 3;
+      estCols = 3;
     } else {
-      // 4 columns
-      maxTileW = width / 4;
+      estCols = 4;
     }
 
-    // Clamp so we don't end up with 600px wide monsters on 4k screens.
+    // 2. Approximate target tile width from that column count.
+    double maxTileW = width / estCols;
+
+    // Clamp so we don't end up with 600px-wide monsters on 4K screens,
+    // or tiny 250px cards that feel cramped.
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // childAspectRatio = (tileWidth / tileHeight)
+    // 3. Pick a base aspect ratio (width / height) for this card *family*.
     //
-    // Lower ratio => taller tile.
-    // We make larger screens use LOWER ratios so each card
-    // has more vertical breathing room.
+    // Phones (1 col):
+    //   - We give a LITTLE extra vertical room so headline + meta + CTA
+    //     breathe. Slightly taller => ratio a bit under 1.0.
+    //
+    // Tablets / small desktops (2 cols):
+    //   - Still comfortable, but a touch shorter.
+    //
+    // Wider layouts (3+ cols):
+    //   - Can be more compact, but DON'T go super short (like 1.25+) because
+    //     then the title block collapses/overlaps in desktop view.
+    //
+    // Empirically:
+    //   ~0.90  = tall-ish (phone, single column)
+    //   ~0.95  = medium
+    //   ~1.00  = compact but still safe on desktop
     double baseRatio;
-    if (maxTileW <= 340) {
-      // very narrow column -> phone-ish
-      baseRatio = .95;
-    } else if (maxTileW <= 400) {
-      // mid-width (foldables / small tablet / narrow desktop column)
-      baseRatio = .90;
+    if (estCols == 1) {
+      // single-column phone portrait
+      baseRatio = 0.90;
+    } else if (estCols == 2) {
+      // foldables / tablets in portrait / narrow laptop split view
+      baseRatio = 0.95;
     } else {
-      // wide columns (iPad landscape, desktop 3-col+, etc.)
-      baseRatio = .85;
+      // 3+ columns (landscape tablet, desktop, ultrawide)
+      baseRatio = 1.00;
     }
 
-    // If user has a big textScale, make card even taller.
-    // We only expand up to about 1.4x so we don't explode.
-    final effectiveRatio = baseRatio / textScale.clamp(1.0, 1.4);
+    // 4. Accessibility / large text safety.
+    //
+    // If the user bumps system text size, the title block & CTA row get taller.
+    // We need to GIVE the card more vertical height so things don't overlap.
+    //
+    // We do that by *lowering* the effective ratio (which makes the card taller)
+    // as textScale grows. We cap at 1.4x so it can't explode infinitely.
+    //
+    // Example:
+    //   baseRatio = 1.00
+    //   textScale = 1.30  → clamp(...)=1.30
+    //   effectiveRatio = 1.00 / 1.30 ≈ 0.77  (taller card)
+    //
+    //   baseRatio = 0.90
+    //   textScale = 1.00  → ratio stays ~0.90 (normal phone height)
+    final double scaleForHeight = textScale.clamp(1.0, 1.4);
+    final double effectiveRatio = baseRatio / scaleForHeight;
 
+    // 5. Build the delegate.
+    //
+    // SliverGridDelegateWithMaxCrossAxisExtent will:
+    //  - make as many columns as fit with this maxCrossAxisExtent,
+    //    so it naturally matches what we computed above.
+    //  - use childAspectRatio to determine each card's height.
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
       mainAxisSpacing: 12,
