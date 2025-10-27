@@ -1,61 +1,58 @@
 // lib/features/story/story_pager.dart
 //
-// StoryDetailsPager
-// -----------------
-// This wraps the existing StoryDetailsScreen in a horizontal PageView,
-// so the user can swipe left/right to see previous / next stories
-// without going back to the grid.
+// Full-screen horizontal pager for story details.
 //
-// How it's meant to be used from StoryCard:
-//
-//   Navigator.of(context).push(
+// Usage (from StoryCard):
+//   Navigator.push(
+//     context,
 //     fadeRoute(
-//       StoryDetailsPager(
-//         stories: feedStories,        // the visible list in the grid
-//         initialIndex: storyIndex,    // the tapped card's index in that list
-//         autoplayInitial: autoplay,   // true if we should auto-play video on the first page
+//       StoryPagerScreen(
+//         stories: allStories,
+//         initialIndex: index,
+//         autoplayInitial: true/false,
 //       ),
 //     ),
 //   );
 //
 // Behavior:
-// - We show each story using the existing StoryDetailsScreen.
-// - Only the initially opened page gets `autoplayInitial == true`.
-//   All other pages get autoplay = false so we don't auto-play
-//   when you swipe.
-// - Back button inside StoryDetailsScreen still just pops the route,
-//   which will close the pager and drop you back to the grid.
+// - PageView.builder lets you swipe left/right between stories.
+// - Each page is a full StoryDetailsScreen.
+// - Only the initially opened page can autoplay video;
+//   swiping to another page never auto-plays.
 //
+// NOTE:
+// StoryDetailsScreen already builds its own Scaffold+SliverAppBar,
+// so we just embed it directly in each PageView page. Nesting Scaffolds
+// like this is fine for this use case.
 
 import 'package:flutter/material.dart';
 
 import '../../core/models.dart';
-import '../../core/utils.dart'; // (for fadeRoute type hints etc., not strictly required here)
 import 'story_details.dart';
 
-class StoryDetailsPager extends StatefulWidget {
-  const StoryDetailsPager({
+class StoryPagerScreen extends StatefulWidget {
+  const StoryPagerScreen({
     super.key,
     required this.stories,
     required this.initialIndex,
     this.autoplayInitial = false,
   });
 
-  /// Ordered list of stories from the feed / grid that the user was looking at.
+  /// The slice of stories we're paging through
   final List<Story> stories;
 
-  /// Index in [stories] that was originally tapped.
+  /// Which story to show first (index into `stories`)
   final int initialIndex;
 
-  /// Whether we should autoplay inline video for the initially opened story.
-  /// (Subsequent pages will not autoplay on swipe.)
+  /// If true AND we're on [initialIndex], we ask StoryDetailsScreen
+  /// to autoplay its inline video player (if any).
   final bool autoplayInitial;
 
   @override
-  State<StoryDetailsPager> createState() => _StoryDetailsPagerState();
+  State<StoryPagerScreen> createState() => _StoryPagerScreenState();
 }
 
-class _StoryDetailsPagerState extends State<StoryDetailsPager> {
+class _StoryPagerScreenState extends State<StoryPagerScreen> {
   late final PageController _pageController;
   late int _currentIndex;
 
@@ -63,10 +60,10 @@ class _StoryDetailsPagerState extends State<StoryDetailsPager> {
   void initState() {
     super.initState();
 
-    // Clamp the initial index just in case we're handed something out of range.
-    final safeIndex = widget.initialIndex.clamp(0, widget.stories.length - 1);
-    _currentIndex = safeIndex;
-    _pageController = PageController(initialPage: safeIndex);
+    // Clamp initial index just in case
+    final maxIdx = widget.stories.isEmpty ? 0 : widget.stories.length - 1;
+    _currentIndex = widget.initialIndex.clamp(0, maxIdx);
+    _pageController = PageController(initialPage: _currentIndex);
   }
 
   @override
@@ -75,35 +72,38 @@ class _StoryDetailsPagerState extends State<StoryDetailsPager> {
     super.dispose();
   }
 
+  bool _shouldAutoplayFor(int pageIndex) {
+    // Only let the first-opened page autoplay.
+    return widget.autoplayInitial && pageIndex == _currentIndex;
+  }
+
   @override
   Widget build(BuildContext context) {
-    // If we somehow have no stories at all, fall back to an empty scaffold.
+    // If somehow we have no stories, just pop.
     if (widget.stories.isEmpty) {
-      return const Scaffold(
-        body: Center(child: Text('No story')),
-      );
+      // Using a post-frame callback avoids setState during build.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).maybePop();
+      });
+      // Render an empty container for this one frame.
+      return const SizedBox.shrink();
     }
 
     return PageView.builder(
       controller: _pageController,
-      onPageChanged: (i) {
+      physics: const PageScrollPhysics(),
+      onPageChanged: (newPage) {
         setState(() {
-          _currentIndex = i;
+          _currentIndex = newPage;
         });
       },
       itemCount: widget.stories.length,
-      itemBuilder: (context, index) {
-        final story = widget.stories[index];
-
-        // We ONLY autoplay for the initially opened story,
-        // and ONLY on that first build of that page.
-        final shouldAutoplay =
-            (index == widget.initialIndex) && widget.autoplayInitial;
+      itemBuilder: (context, pageIndex) {
+        final story = widget.stories[pageIndex];
 
         return StoryDetailsScreen(
-          key: ValueKey('details-${story.id}-$index'),
           story: story,
-          autoplay: shouldAutoplay,
+          autoplay: _shouldAutoplayFor(pageIndex),
         );
       },
     );
