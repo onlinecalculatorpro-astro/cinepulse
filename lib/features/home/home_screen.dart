@@ -53,7 +53,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // We now have 3 logical feeds for the horizontal category row.
+  // 3 logical feeds for the pill row.
   static const Map<String, String> _tabs = {
     'all': 'All',
     'entertainment': 'Entertainment',
@@ -107,10 +107,8 @@ class _HomeScreenState extends State<HomeScreen>
       unawaited(f.load(reset: true));
     }
 
-    // keep UI in sync when tab changes
     _tab.addListener(_onTabChanged);
 
-    // Observe app lifecycle for resume refresh.
     WidgetsBinding.instance.addObserver(this);
 
     // Connectivity changes.
@@ -123,13 +121,12 @@ class _HomeScreenState extends State<HomeScreen>
       if (hasNetwork) {
         // Back online: gently fetch deltas for current tab and ensure WS is up.
         unawaited(_currentFeed.load(reset: false));
-        _ensureWebSocket(); // connect (or reconnect) when online
+        _ensureWebSocket();
       } else {
-        // Offline: drop the socket to avoid loop.
+        // Offline: drop socket to avoid loop.
         _teardownWebSocket();
       }
 
-      // If we just came back from offline, reset backoff for quick reconnects.
       if (hasNetwork && wasOffline) _wsBackoffSecs = 2;
     });
 
@@ -192,13 +189,12 @@ class _HomeScreenState extends State<HomeScreen>
   /* --------------------------- Realtime (WebSocket) ------------------------ */
 
   String _buildWsUrl() {
-    // Build ws/wss from your REST base, e.g.
-    // https://api.example.com -> wss://api.example.com/v1/realtime/ws
-    final base = kApiBaseUrl; // provided by core/api.dart
+    // Build ws/wss from your REST base
+    final base = kApiBaseUrl;
     final u = Uri.parse(base);
     final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
 
-    // If your API has a base path (e.g. /api), preserve it.
+    // preserve any base path
     final basePath = (u.path.isEmpty || u.path == '/') ? '' : u.path;
     final fullPath = '$basePath/v1/realtime/ws';
 
@@ -224,17 +220,14 @@ class _HomeScreenState extends State<HomeScreen>
           try {
             final obj = json.decode(data.toString());
             if (obj is Map && obj['type'] == 'ping') return;
-          } catch (_) {
-            // non-JSON? ignore.
-          }
+          } catch (_) {}
           _scheduleRealtimeRefresh();
         },
         onDone: _onWsClosed,
         onError: (_) => _onWsClosed(),
         cancelOnError: true,
       );
-      // Connected → reset backoff
-      _wsBackoffSecs = 2;
+      _wsBackoffSecs = 2; // connected → reset backoff
     } catch (_) {
       _onWsClosed();
     }
@@ -248,7 +241,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (_offline || !_isForeground) return;
 
-    // Exponential backoff reconnect (cap at 60s)
+    // Exponential backoff reconnect
     _wsReconnectTimer?.cancel();
     _wsReconnectTimer =
         Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
@@ -265,7 +258,6 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _scheduleRealtimeRefresh() {
-    // Debounce bursts of messages into a single gentle delta fetch.
     _realtimeDebounceTimer?.cancel();
     _realtimeDebounceTimer = Timer(_kRealtimeDebounce, () {
       if (!mounted) return;
@@ -303,16 +295,15 @@ class _HomeScreenState extends State<HomeScreen>
     widget.onHeaderRefresh?.call();
   }
 
-  // Background silent refresh tick (fallback if WS is blocked by proxies).
+  // Background silent refresh tick.
   void _tickAutoRefresh() {
     if (!mounted) return;
     if (_offline) return;
     if (!_isForeground) return;
-    if (_search.text.isNotEmpty) return; // don’t disturb while searching
+    if (_search.text.isNotEmpty) return;
     unawaited(_currentFeed.load(reset: false));
   }
 
-  // pretty string for the sort button
   String _sortModeLabel(_SortMode mode) {
     switch (mode) {
       case _SortMode.latest:
@@ -326,7 +317,6 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  // bottom sheet for sort selection
   Future<void> _showSortSheet(BuildContext sheetContext) async {
     final choice = await showModalBottomSheet<_SortMode>(
       context: sheetContext,
@@ -432,8 +422,6 @@ class _HomeScreenState extends State<HomeScreen>
         child: CustomScrollView(
           slivers: [
             // Sticky glass header bar:
-            // LEFT  : CinePulse brand
-            // RIGHT : Discover → Refresh → Menu
             SliverAppBar(
               floating: true,
               pinned: true,
@@ -464,8 +452,10 @@ class _HomeScreenState extends State<HomeScreen>
                               ],
                       ),
                       border: const Border(
-                        bottom:
-                            BorderSide(color: Color(0x0Fffffff), width: 1),
+                        bottom: BorderSide(
+                          color: Color(0x0Fffffff),
+                          width: 1,
+                        ),
                       ),
                     ),
                   ),
@@ -585,7 +575,6 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   // We need BuildContext to open the bottom sheet from parent
   final void Function(BuildContext ctx) onSortTap;
 
-  // compact height
   @override
   double get minExtent => 56;
   @override
@@ -606,7 +595,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
     Color textColor(bool active) {
       if (active) return Colors.white;
       return isDark
-          ? const Color(0xFFCBD5E1) // slate-300-ish
+          ? const Color(0xFFCBD5E1)
           : theme.colorScheme.onSurfaceVariant;
     }
 
@@ -649,7 +638,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
             fontWeight: FontWeight.w400,
             height: 1.2,
             color: isDark
-                ? const Color(0xFF64748B) // slate-500-ish
+                ? const Color(0xFF64748B)
                 : theme.colorScheme.onSurfaceVariant,
           ),
         ),
@@ -711,7 +700,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
     }
 
     // Layout:
-    // [ horizontally scrollable tabs .......... ] [ sort button fixed right ]
+    // [ tabs .... ] [ sort button ]
     return Container(
       color: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
       child: Container(
@@ -729,7 +718,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Tabs (scrollable)
+            // Tabs (scrollable horizontally)
             Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -761,7 +750,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
 
             const SizedBox(width: 12),
 
-            // Sorting (fixed right)
+            // Sorting (fixed at end)
             sortButton(),
           ],
         ),
@@ -771,7 +760,6 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   bool shouldRebuild(_FiltersHeaderDelegate oldDelegate) {
-    // Rebuild if active tab OR sort label changed.
     return oldDelegate.activeIndex != activeIndex ||
         oldDelegate.sortLabel != sortLabel;
   }
@@ -802,9 +790,20 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
-  // responsive grid
+  // RESPONSIVE GRID DELEGATE
+  //
+  // The big change here vs your previous version:
+  // We bumped childAspectRatio UP so each grid tile is SHORTER.
+  //
+  // Before:
+  //   ratio ~0.56 for 3-col desktop ⇒ card height ~1.8× width (super tall)
+  //
+  // Now:
+  //   ratio ~0.9..1.1 ⇒ card height ~0.9–1.1× width (much tighter).
+  //
+  // We still tweak for breakpoints + textScale, but baseline is compact.
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
-    // Determine columns via max cross-axis extent (auto responsive).
+    // pick a target column width by breakpoint
     double maxTileW;
     if (width < 520) {
       maxTileW = width; // 1 col
@@ -817,31 +816,36 @@ class _FeedListState extends State<_FeedList>
     }
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // childAspectRatio = width / height, so LOWER = TALLER.
-    double ratio;
+    // Base ratio (width / height). Bigger number = shorter tile.
+    //
+    // Narrower cards (phones ~320-340 wide) still need a little vertical
+    // breathing room for image + text, so we start ~0.9. Wider cards can go
+    // even shorter because text wraps less.
+    double baseRatio;
     if (maxTileW <= 340) {
-      ratio = 0.56; // taller on narrow phones
+      baseRatio = 0.90;
     } else if (maxTileW <= 380) {
-      ratio = 0.64;
+      baseRatio = 0.95;
     } else if (maxTileW <= 420) {
-      ratio = 0.72;
+      baseRatio = 1.00;
     } else {
-      ratio = 0.80;
+      baseRatio = 1.05;
     }
-    // Respect large text accessibility (taller with bigger text).
-    ratio /= textScale.clamp(1.0, 1.8);
+
+    // If the user bumps system textScale up, we allow the cards
+    // to get a bit taller (ratio goes DOWN).
+    final effectiveRatio = baseRatio / textScale.clamp(1.0, 1.8);
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
-      childAspectRatio: ratio,
+      childAspectRatio: effectiveRatio,
     );
   }
 
   // ---------- sort helpers ----------
   double _trendingScore(Story s) {
-    // try dynamic fields like trendingScore / score / rank
     try {
       final dyn = (s as dynamic);
       final v = dyn.trendingScore ?? dyn.score ?? dyn.rank ?? 0.0;
@@ -853,7 +857,6 @@ class _FeedListState extends State<_FeedList>
   }
 
   int _viewsCount(Story s) {
-    // try dynamic fields like viewCount / views / impressions
     try {
       final dyn = (s as dynamic);
       final v = dyn.viewCount ?? dyn.views ?? dyn.impressions ?? 0;
@@ -863,7 +866,6 @@ class _FeedListState extends State<_FeedList>
   }
 
   bool _isEditorsPick(Story s) {
-    // try dynamic flags: isEditorsPick / editorsPick / editorChoice
     try {
       final dyn = (s as dynamic);
       final v = dyn.isEditorsPick ?? dyn.editorsPick ?? dyn.editorChoice;
@@ -877,7 +879,6 @@ class _FeedListState extends State<_FeedList>
   List<Story> _applySortMode(List<Story> input) {
     switch (widget.sortMode) {
       case _SortMode.latest:
-        // feed.items is already newest-first
         return input;
       case _SortMode.trending:
         final list = [...input];
@@ -893,11 +894,7 @@ class _FeedListState extends State<_FeedList>
         return list;
       case _SortMode.editorsPick:
         final picks = input.where(_isEditorsPick).toList();
-        if (picks.isNotEmpty) {
-          // show only editor picks if we have any
-          return picks;
-        }
-        // fallback to input
+        if (picks.isNotEmpty) return picks;
         return input;
     }
   }
@@ -916,8 +913,8 @@ class _FeedListState extends State<_FeedList>
             final textScale = MediaQuery.textScaleFactorOf(context);
             final gridDelegate = _gridDelegateFor(w, textScale);
 
-            final horizontalPad = 12.0;
-            final topPad = 0.0;
+            const horizontalPad = 12.0;
+            const topPad = 0.0;
             final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
             final bottomPad = 28.0 + bottomSafe;
 
@@ -957,7 +954,7 @@ class _FeedListState extends State<_FeedList>
                         (s.summary ?? '').toLowerCase().contains(q))
                     .toList();
 
-            // apply sort mode (Latest / Trending / Most viewed / Editor’s pick)
+            // apply sort mode
             final displayList = _applySortMode(baseList);
 
             if (displayList.isEmpty) {
@@ -999,8 +996,6 @@ class _FeedListState extends State<_FeedList>
                   );
                 }
 
-                // Pass the entire displayList + index into StoryCard,
-                // so pager can swipe prev/next within this *sorted/filtered* set.
                 return StoryCard(
                   story: displayList[i],
                   allStories: displayList,
@@ -1079,7 +1074,7 @@ class _PagedFeed extends ChangeNotifier {
       // Cursor should be the NEWEST effective date we have (for delta fetch).
       final dates = _items
           .map(_eff)
-          .whereType<DateTime>(); // normalizedAt → publishedAt → releaseDate
+          .whereType<DateTime>();
       _sinceCursor = dates.isEmpty
           ? null
           : dates.reduce((a, b) => a.isAfter(b) ? a : b);
@@ -1118,9 +1113,7 @@ class _PagedFeed extends ChangeNotifier {
       if (db == null) return -1;
       final cmp = db.compareTo(da); // newest first
       if (cmp != 0) return cmp;
-      // Deterministic tie-break by id to avoid UI shuffling
-      // when times are equal.
-      return b.id.compareTo(a.id);
+      return b.id.compareTo(a.id); // stable tiebreak
     });
   }
 }
