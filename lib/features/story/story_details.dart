@@ -25,10 +25,10 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
-import '../../core/cache.dart';
+import '../../core/cache.dart'; // SavedStore
 import '../../core/models.dart';
 import '../../widgets/smart_video_player.dart';
-import 'story_image_url.dart'; // shared image sanitizing / fallback logic
+import 'story_image_url.dart'; // resolveStoryImageUrl
 
 class StoryDetailsScreen extends StatefulWidget {
   const StoryDetailsScreen({
@@ -271,7 +271,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
         freshnessText = _formatGapShort(diff);
       }
     }
-
     // ------------------------------------------------------------------------
 
     return Scaffold(
@@ -383,9 +382,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           ),
                         ),
 
-                      // (Keeping facets / languages / genres exactly as before,
-                      //  even if most stories won't show them. We are NOT
-                      //  deleting features you didn't ask us to.)
+                      // KEEPING facets block feature
                       if (widget.story.languages.isNotEmpty ||
                           widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
@@ -550,7 +547,6 @@ class _HeaderHero extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // unified "safe hero" URL (proxy cleaned, demo.tagdiv nuked, etc.)
     final imgUrl = resolveStoryImageUrl(story);
 
     return Hero(
@@ -558,7 +554,6 @@ class _HeaderHero extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // hero background image or nice gradient fallback
           if (imgUrl.isNotEmpty)
             CachedNetworkImage(
               imageUrl: imgUrl,
@@ -607,7 +602,7 @@ class _HeaderHero extends StatelessWidget {
               ),
             ),
 
-          // inline player overlay (only when user taps Watch)
+          // inline player overlay
           if (showPlayer && (videoUrl?.isNotEmpty ?? false))
             Center(
               child: ConstrainedBox(
@@ -631,7 +626,6 @@ class _HeaderHero extends StatelessWidget {
               ),
             )
           else
-            // dark gradient at the bottom for contrast
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
@@ -653,7 +647,7 @@ class _HeaderHero extends StatelessWidget {
   }
 }
 
-/* ---------------- Facet chip (unchanged feature) ---------------- */
+/* ---------------- Facet chip (kept for completeness) ---------------- */
 
 class _Facet extends StatelessWidget {
   const _Facet({required this.label, required this.value});
@@ -690,7 +684,7 @@ class _Facet extends StatelessWidget {
   }
 }
 
-/* ---------------- fallback icon in hero (unchanged feature) -------------- */
+/* ---------------- fallback icon for hero ---------------- */
 
 class _SampleIcon extends StatelessWidget {
   const _SampleIcon({required this.kind});
@@ -721,8 +715,7 @@ class _SampleIcon extends StatelessWidget {
   }
 }
 
-/* ---------------- BELOW: the same small helpers StoryCard uses ----------- */
-/* Kind badge colors, meta row widgets, emoji icon boxes, etc.              */
+/* ---------------- SAME helpers from StoryCard ---------------- */
 
 class _KindStyle {
   final Color bg;
@@ -735,11 +728,10 @@ class _KindStyle {
   });
 }
 
-// Pick badge colors by kind.
+// Pick badge colors by kind (Release red, News blue, etc).
 _KindStyle _styleForKind(String rawKind) {
   final k = rawKind.toLowerCase().trim();
 
-  // base palettes (Tailwind-ish tones)
   const red = Color(0xFFdc2626);
   const blue = Color(0xFF3b82f6);
   const purple = Color(0xFF8b5cf6);
@@ -775,7 +767,6 @@ _KindStyle _styleForKind(String rawKind) {
     );
   }
 
-  // fallback
   return _KindStyle(
     bg: gray.withOpacity(0.16),
     border: gray.withOpacity(0.4),
@@ -783,7 +774,7 @@ _KindStyle _styleForKind(String rawKind) {
   );
 }
 
-// EXACT meta row look from StoryCard
+// Meta line row, exactly like StoryCard
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
     required this.kindRaw,
@@ -802,9 +793,8 @@ class _MetaLine extends StatelessWidget {
     final accent = const Color(0xFFdc2626);
     final style = _styleForKind(kindRaw);
 
-    final pill = kindLabel.isEmpty
-        ? const SizedBox.shrink()
-        : Container(
+    final pill = kindLabel.isNotEmpty
+        ? Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
               color: style.bg,
@@ -825,7 +815,8 @@ class _MetaLine extends StatelessWidget {
                 height: 1.2,
               ),
             ),
-          );
+          )
+        : const SizedBox.shrink();
 
     final ts = (timestampText == null)
         ? const SizedBox.shrink()
@@ -871,7 +862,7 @@ class _MetaLine extends StatelessWidget {
   }
 }
 
-// Emoji text helper from StoryCard
+// Emoji text helper
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 16});
   final String emoji;
@@ -897,7 +888,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-// Square Save / Share boxes from StoryCard
+// Square Save / Share boxes, identical to StoryCard
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -931,71 +922,18 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: onTap,
-          child: const SizedBox(
-            width: 36,
-            height: 36,
-            child: Center(child: null),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // NOTE: We can't set `child: icon` above because InkWell needs rebuild.
-  // We'll override build again with icon included.
-  // Flutter doesn't let us easily mutate after const, so do this instead:
-  // We'll just inline a custom build wrapper:
-  @override
-  Element createElement() {
-    return _ActionIconBoxElement(this);
-  }
-}
-
-// Custom element so we can still show the icon without breaking const
-class _ActionIconBoxElement extends ComponentElement {
-  _ActionIconBoxElement(_ActionIconBox super.widget);
-
-  @override
-  Widget build() {
-    final w = widget as _ActionIconBox;
-    final isDark = Theme.of(this).brightness == Brightness.dark;
-
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : Colors.black.withOpacity(0.06);
-
-    final borderColor =
-        isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.12);
-
-    return Tooltip(
-      message: w.tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: Material(
-        color: bgColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: w.onTap,
           child: SizedBox(
             width: 36,
             height: 36,
-            child: Center(child: w.icon),
+            child: Center(child: icon),
           ),
         ),
       ),
     );
   }
-
-  @override
-  void update(covariant _ActionIconBox newWidget) {
-    super.update(newWidget);
-    markNeedsBuild();
-  }
 }
 
-/* ---------------- back-compat for ingestedAt (copied from StoryCard) ----- */
+/* ---------------- back-compat for ingestedAt from StoryCard ------------- */
 
 extension _StoryCompat on Story {
   // Handle older payloads where "ingestedAt" might be nested.
