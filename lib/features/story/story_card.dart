@@ -1,13 +1,18 @@
 // lib/features/story/story_card.dart
 //
-// Updates:
-// 1. Thumbnail area is a strict 16:9 box with min 180px height. Both real
-//    images and the placeholder use the SAME SizedBox, and images are aligned
-//    to the TOP so if they need to crop, they crop the bottom.
-// 2. CTA row is now *pinned to the bottom* of the card body using Stack +
-//    Positioned. That means the big red Watch/Read button + Save + Share
-//    will sit on the same baseline across every card in the same grid row,
-//    no matter how long/short the title is.
+// Compact card layout:
+// - Thumbnail: fixed 16:9 (min 180px). Image is aligned to TOP so any crop
+//   happens at the bottom. Placeholder uses same box, so every card is uniform.
+// - Body: tighter typography (12/14px), tighter spacing (4/6px).
+// - CTA row (Watch/Read + Save + Share) is pinned to the bottom using Stack,
+//   so buttons baseline-align across cards in the same grid row.
+// - CTA row height reduced to 36px to save vertical space.
+// - Save/Share icons also 36x36.
+// - No giant unused middle gap anymore.
+//
+// NOTE: Real remaining "extra space" in desktop grid still depends on the
+// grid's childAspectRatio from home_screen.dart. But inside the card itself,
+// we now waste as little vertical space as possible.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -32,16 +37,14 @@ class StoryCard extends StatefulWidget {
   const StoryCard({
     super.key,
     required this.story,
+
+    // Optional list + index so pager can swipe prev/next in context
     this.allStories,
     this.index,
   });
 
   final Story story;
-
-  /// Entire list this card belongs to (for horizontal swipe in pager).
   final List<Story>? allStories;
-
-  /// Index of [story] within [allStories].
   final int? index;
 
   @override
@@ -51,14 +54,12 @@ class StoryCard extends StatefulWidget {
 class _StoryCardState extends State<StoryCard> {
   bool _hover = false;
 
-  /* --------------------------------------------------------------------------
-   * CTA / link helpers
-   * ------------------------------------------------------------------------*/
+  /* ─────────────────────────── link helpers / CTA ───────────────────────── */
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _linkUrl {
-    // Prefer direct playable video URL.
+    // Prefer playable URL (video) first.
     final v = _videoUrl;
     if (v != null) return v;
 
@@ -124,6 +125,7 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
+  // Pager context helpers
   List<Story> get _effectiveStories =>
       (widget.allStories != null && widget.allStories!.isNotEmpty)
           ? widget.allStories!
@@ -145,20 +147,18 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   Widget _ctaLeading() => _isWatchCta
-      ? const Icon(Icons.play_arrow_rounded, size: 22, color: Colors.white)
-      : const _Emoji(emoji: '📖', size: 18);
+      ? const Icon(Icons.play_arrow_rounded, size: 20, color: Colors.white)
+      : const _Emoji(emoji: '📖', size: 16);
 
-  /* --------------------------------------------------------------------------
-   * Formatting helpers
-   * ------------------------------------------------------------------------*/
+  /* ─────────────────────────── formatting helpers ───────────────────────── */
 
   static const List<String> _mon = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
+  // "27 Oct 2025, 11:57 AM"
   String _formatMetaLike(DateTime dt) {
-    // "27 Oct 2025, 11:57 AM"
     final d = dt.toLocal();
     final day = d.day;
     final m = _mon[d.month - 1];
@@ -183,7 +183,7 @@ class _StoryCardState extends State<StoryCard> {
 
   Widget _timeBadge(String emoji) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.15),
         borderRadius: BorderRadius.circular(999),
@@ -191,7 +191,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Text(
         emoji,
         style: const TextStyle(
-          fontSize: 12,
+          fontSize: 11,
           height: 1.0,
           fontFamilyFallback: [
             'Apple Color Emoji',
@@ -211,6 +211,7 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
+  // "Source: koimoi.com"
   String _attribution(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -219,9 +220,7 @@ class _StoryCardState extends State<StoryCard> {
     return '';
   }
 
-  /* --------------------------------------------------------------------------
-   * Build
-   * ------------------------------------------------------------------------*/
+  /* ─────────────────────────────── build ──────────────────────────────── */
 
   @override
   Widget build(BuildContext context) {
@@ -232,6 +231,7 @@ class _StoryCardState extends State<StoryCard> {
     final story = widget.story;
     final kind = story.kind.toLowerCase();
 
+    // timestamps
     final DateTime? publishedAt = story.publishedAt;
     final DateTime? addedAt = story.ingestedAtCompat ?? story.normalizedAt;
 
@@ -249,10 +249,10 @@ class _StoryCardState extends State<StoryCard> {
     final imageUrl = resolveStoryImageUrl(story);
     final srcText = _attribution(story);
 
-    // Card chrome
-    final Color cardBgDark = const Color(0xFF1e2533).withOpacity(0.35);
-    final Color cardBgLight = scheme.surface;
-    final Color borderColor = isDark
+    // Card visual chrome
+    final cardBgDark = const Color(0xFF1e2533).withOpacity(0.35);
+    final cardBgLight = scheme.surface;
+    final borderColor = isDark
         ? Colors.white.withOpacity(0.20)
         : Colors.black.withOpacity(0.08);
 
@@ -284,6 +284,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
+          // whole card still opens details
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -291,20 +292,17 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // STRICT hero box:
-              // - exact 16:9 aspect ratio based on tile width
-              // - min height 180px so tiny columns on narrow phones don't get
-              //   microscopic posters
-              final baseH = w / (16 / 9);
+              // fixed 16:9 hero box, min height 180
+              final baseH = w / (16 / 9); // 16:9 => h = w * 0.5625
               final mediaH = math.max(180.0, baseH);
 
-              // Row B "added" line OR reserved spacer
+              // Row B (added time) OR spacer same height for all cards
               final Widget rowBWidget = (addedText != null)
                   ? Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _timeBadge('🕒'),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             addedText!,
@@ -312,7 +310,7 @@ class _StoryCardState extends State<StoryCard> {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: Colors.grey[400],
-                              fontSize: 13,
+                              fontSize: 12,
                               fontWeight: FontWeight.w400,
                               height: 1.3,
                             ),
@@ -321,20 +319,18 @@ class _StoryCardState extends State<StoryCard> {
                       ],
                     )
                   : const SizedBox(
-                      height: 20, // keeps Row B height consistent
+                      height: 16, // keeps line height stable if missing
                     );
 
-              // we'll pin CTA row to bottom using Stack
-              // how much vertical space to reserve at bottom so top text
-              // doesn't overlap CTA row:
-              // 40 (button row) + 8 gap + ~18 source line if present
+              // vertical space we must reserve at the bottom of body for CTA row
+              // CTA row (36) + gap(6) + "Source" line (~16) if present
               final double reservedBottom =
-                  40 + 8 + (srcText.isNotEmpty ? 18 : 0);
+                  36 + 6 + (srcText.isNotEmpty ? 16 : 0);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ─────────── THUMBNAIL (fixed-height box) ───────────
+                  /* ───── THUMBNAIL / HERO ───── */
                   SizedBox(
                     height: mediaH,
                     child: Hero(
@@ -350,8 +346,8 @@ class _StoryCardState extends State<StoryCard> {
                               CachedNetworkImage(
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
-                                // align to TOP so we crop bottom if tall
-                                alignment: Alignment.topCenter,
+                                alignment:
+                                    Alignment.topCenter, // crop from bottom
                                 memCacheWidth:
                                     (w.isFinite ? (w * 2).toInt() : 1600),
                                 fadeInDuration:
@@ -391,7 +387,7 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // ─────────── BODY (Stack with pinned CTA row) ───────────
+                  /* ───── BODY / TEXT / CTA ───── */
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(12),
@@ -399,16 +395,14 @@ class _StoryCardState extends State<StoryCard> {
                         builder: (context, bodyBox) {
                           return Stack(
                             children: [
-                              // TOP CONTENT (kind/date/added/time/title)
+                              // main text content
                               Padding(
-                                padding: EdgeInsets.only(
-                                  bottom: reservedBottom,
-                                ),
+                                padding: EdgeInsets.only(bottom: reservedBottom),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // Row A: "<Kind> • <publishedAt>"
+                                    // Row A: "<Kind>  •  <publishedAt>"
                                     Row(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
@@ -421,20 +415,19 @@ class _StoryCardState extends State<StoryCard> {
                                             overflow: TextOverflow.ellipsis,
                                             style: const TextStyle(
                                               color: Colors.white,
-                                              fontSize: 13,
+                                              fontSize: 12,
                                               fontWeight: FontWeight.w600,
                                               height: 1.3,
                                             ),
                                           ),
                                         ),
                                         if (publishedText != null) ...[
-                                          const SizedBox(width: 8),
-                                          // bullet dot
+                                          const SizedBox(width: 6),
                                           Container(
-                                            width: 6,
-                                            height: 6,
-                                            margin: const EdgeInsets.only(
-                                                top: 6),
+                                            width: 5,
+                                            height: 5,
+                                            margin:
+                                                const EdgeInsets.only(top: 5),
                                             decoration: BoxDecoration(
                                               color: Colors.white
                                                   .withOpacity(0.9),
@@ -442,7 +435,7 @@ class _StoryCardState extends State<StoryCard> {
                                                   BorderRadius.circular(999),
                                             ),
                                           ),
-                                          const SizedBox(width: 8),
+                                          const SizedBox(width: 6),
                                           Flexible(
                                             child: Text(
                                               publishedText!,
@@ -450,7 +443,7 @@ class _StoryCardState extends State<StoryCard> {
                                               overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
                                                 color: Colors.white,
-                                                fontSize: 13,
+                                                fontSize: 12,
                                                 fontWeight: FontWeight.w500,
                                                 height: 1.3,
                                               ),
@@ -462,29 +455,28 @@ class _StoryCardState extends State<StoryCard> {
 
                                     const SizedBox(height: 4),
 
-                                    // Row B (ingestedAt / (+Δm)) OR spacer of same height
+                                    // Row B (ingestedAt / (+Δm))
                                     rowBWidget,
 
-                                    const SizedBox(height: 8),
+                                    const SizedBox(height: 6),
 
-                                    // Title up to 3 lines
+                                    // Title (up to 3 lines)
                                     Text(
                                       story.title,
                                       maxLines: 3,
                                       overflow: TextOverflow.ellipsis,
                                       style: GoogleFonts.inter(
-                                        fontSize: 15,
-                                        height: 1.35,
+                                        fontSize: 14,
+                                        height: 1.3,
                                         fontWeight: FontWeight.w600,
-                                        color:
-                                            Colors.white.withOpacity(0.96),
+                                        color: Colors.white.withOpacity(0.96),
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
 
-                              // PINNED CTA + Source AT THE BOTTOM
+                              // bottom CTA row (pinned)
                               Positioned(
                                 left: 0,
                                 right: 0,
@@ -495,14 +487,14 @@ class _StoryCardState extends State<StoryCard> {
                                   children: [
                                     Row(
                                       children: [
-                                        // Big red Watch/Read button
+                                        // main red Watch/Read button
                                         Expanded(
                                           child: Semantics(
                                             button: true,
                                             label:
                                                 '${_ctaLabel} ${story.title}',
                                             child: SizedBox(
-                                              height: 40,
+                                              height: 36,
                                               child: ElevatedButton.icon(
                                                 icon: _ctaLeading(),
                                                 onPressed: hasUrl
@@ -511,20 +503,20 @@ class _StoryCardState extends State<StoryCard> {
                                                             _videoUrl !=
                                                                 null) {
                                                           _openDetails(
-                                                              autoplay: true);
+                                                            autoplay: true,
+                                                          );
                                                         } else {
                                                           _openExternalLink(
                                                               context);
                                                         }
                                                       }
                                                     : null,
-                                                style: ElevatedButton
-                                                    .styleFrom(
+                                                style:
+                                                    ElevatedButton.styleFrom(
                                                   foregroundColor:
                                                       Colors.white,
                                                   backgroundColor:
-                                                      const Color(
-                                                          0xFFdc2626),
+                                                      const Color(0xFFdc2626),
                                                   elevation: 0,
                                                   shape:
                                                       RoundedRectangleBorder(
@@ -534,13 +526,13 @@ class _StoryCardState extends State<StoryCard> {
                                                   ),
                                                   padding: const EdgeInsets
                                                       .symmetric(
-                                                    horizontal: 12,
+                                                    horizontal: 10,
                                                   ),
                                                   textStyle:
                                                       const TextStyle(
                                                     fontWeight:
                                                         FontWeight.w600,
-                                                    fontSize: 15,
+                                                    fontSize: 14,
                                                     height: 1.2,
                                                   ),
                                                 ),
@@ -550,9 +542,9 @@ class _StoryCardState extends State<StoryCard> {
                                           ),
                                         ),
 
-                                        const SizedBox(width: 8),
+                                        const SizedBox(width: 6),
 
-                                        // Save
+                                        // Save chip
                                         AnimatedBuilder(
                                           animation: SavedStore.instance,
                                           builder: (_, __) {
@@ -566,27 +558,27 @@ class _StoryCardState extends State<StoryCard> {
                                                       .toggle(story.id),
                                               icon: const _Emoji(
                                                 emoji: '🔖',
-                                                size: 18,
+                                                size: 16,
                                               ),
                                             );
                                           },
                                         ),
 
-                                        const SizedBox(width: 8),
+                                        const SizedBox(width: 6),
 
-                                        // Share
+                                        // Share chip
                                         _ActionIconBox(
                                           tooltip: 'Share',
                                           onTap: () => _share(context),
                                           icon: const _Emoji(
                                             emoji: '📤',
-                                            size: 18,
+                                            size: 16,
                                           ),
                                         ),
                                       ],
                                     ),
 
-                                    const SizedBox(height: 8),
+                                    const SizedBox(height: 6),
 
                                     if (srcText.isNotEmpty)
                                       Text(
@@ -595,7 +587,7 @@ class _StoryCardState extends State<StoryCard> {
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           color: Colors.grey[400],
-                                          fontSize: 12,
+                                          fontSize: 11,
                                           fontWeight: FontWeight.w400,
                                           height: 1.3,
                                         ),
@@ -617,7 +609,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Hover lift on web, blurred glass on mobile
+    // On web we lift up on hover. On mobile we add subtle blur glass backdrop.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -634,9 +626,8 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-/* --------------------------------------------------------------------------
- * Thumbnail fallback when the story has no usable image
- * ------------------------------------------------------------------------*/
+/* ─────────────────────── fallback thumbnail widget ─────────────────────── */
+
 class _FallbackThumb extends StatelessWidget {
   final bool isDark;
   final ColorScheme scheme;
@@ -672,9 +663,8 @@ class _FallbackThumb extends StatelessWidget {
   }
 }
 
-/* --------------------------------------------------------------------------
- * Icon shown in the fallback thumbnail gradient
- * ------------------------------------------------------------------------*/
+/* ───────────────────── icon in fallback thumbnail ─────────────────────── */
+
 class _SampleIcon extends StatelessWidget {
   final String kind;
   const _SampleIcon({required this.kind});
@@ -698,17 +688,16 @@ class _SampleIcon extends StatelessWidget {
 
     return Icon(
       iconData,
-      size: 60,
+      size: 52,
       color: iconColor.withOpacity(0.9),
     );
   }
 }
 
-/* --------------------------------------------------------------------------
- * Emoji widget for button icons
- * ------------------------------------------------------------------------*/
+/* ───────────────────────────── emoji text ─────────────────────────────── */
+
 class _Emoji extends StatelessWidget {
-  const _Emoji({required this.emoji, this.size = 18});
+  const _Emoji({required this.emoji, this.size = 16});
   final String emoji;
   final double size;
 
@@ -732,59 +721,8 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* --------------------------------------------------------------------------
- * Secondary action chip (Save / Share)
- * height locked to 40 to match the big red button
- * ------------------------------------------------------------------------*/
-class _ActionIconBox extends StatelessWidget {
-  final Widget icon;
-  final VoidCallback onTap;
-  final String tooltip;
+/* ───────────────────── Save / Share pill buttons ──────────────────────── */
 
-  const _ActionIconBox({
-    required this.icon,
-    required this.onTap,
-    required this.tooltip,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    final bgColor =
-        isDark ? Colors.black.withOpacity(0.4) : Colors.black.withOpacity(0.06);
-
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.15)
-        : Colors.black.withOpacity(0.15);
-
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: bgColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: const SizedBox(
-            width: 40,
-            height: 40,
-            child: Center(child: null),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/* NOTE:
- * We actually want to render [icon] inside the SizedBox above.
- * InkWell child can't be const because [icon] is dynamic.
- * Let's override build to inject it properly.
- */
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -819,8 +757,8 @@ class _ActionIconBox extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           onTap: onTap,
           child: SizedBox(
-            width: 40,
-            height: 40,
+            width: 36,
+            height: 36,
             child: Center(child: icon),
           ),
         ),
@@ -829,12 +767,11 @@ class _ActionIconBox extends StatelessWidget {
   }
 }
 
-/* --------------------------------------------------------------------------
- * Back-compat for ingestedAt
- * ------------------------------------------------------------------------*/
+/* ───────────────────── back-compat for ingestedAt ─────────────────────── */
+
 extension _StoryCompat on Story {
+  // old payloads sometimes stash this timestamp in funky places
   DateTime? get ingestedAtCompat {
-    // older payloads may stash this in random places
     try {
       final dyn = (this as dynamic);
       final v = dyn.ingestedAt;
