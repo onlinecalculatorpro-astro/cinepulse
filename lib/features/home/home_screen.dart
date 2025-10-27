@@ -894,7 +894,7 @@ class _FeedListState extends State<_FeedList>
     } else if (maxTileW <= 380) {
       baseRatio = 0.95;
     } else if (maxTileW <= 420) {
-      baseRatio = 0.85; // slightly taller for mid widths
+      baseRatio = 0.90; // slightly taller for mid widths
     } else {
       baseRatio = 1.05;
     }
