@@ -2,26 +2,30 @@
 //
 // Right-side settings / preferences drawer (endDrawer).
 //
-// Changes vs your previous version:
-//  - Drawer no longer shows inline multi-select chips for Categories.
-//    Instead it shows a single "Categories" row. Tapping that row calls
-//    widget.onCategoryTap(), which RootShell handles by opening the
-//    bottom-sheet category picker (_CategoryPicker).
+// Changes in this version:
 //
-//  - That row also live-updates a little pill like "All" or
-//    "Entertainment +2" using CategoryPrefs.instance.summary().
+// - "Categories" no longer shows inline chips.
+//   Instead it's a single row that opens the bottom-sheet category picker.
+//   That sheet is owned by RootShell (RootShell calls showModalBottomSheet).
+//   We trigger it using widget.onCategoryTap().
 //
-//  - Language preference chips (English / Hindi / Mixed) still live here
-//    and are persisted to SharedPreferences.
+// - We still show a live summary pill next to "Categories", like:
+//     "All"
+//     "Entertainment"
+//     "Entertainment +2"
+//   We build that summary from AppSettings.instance.selectedCategories.
 //
-//  - Theme row still calls widget.onThemeTap(), which RootShell
-//    handles by opening the theme bottom sheet.
+// - Language preference ("English" / "Hindi" / "Mixed") is still managed
+//   here and persisted via SharedPreferences.
 //
-// NOTE: CategoryPrefs is defined in root_shell.dart in this setup.
-// You can move it to its own file (recommended long-term) and import
-// from there. For now we import from root_shell.dart.
-
-import 'dart:convert';
+// - Theme row still calls widget.onThemeTap(), which RootShell handles by
+//   opening the theme bottom sheet.
+//
+// NOTE: We assume AppSettings.instance exists, exposes:
+//   - Set<String> get selectedCategories
+//     (values like 'all', 'entertainment', 'sports', 'travel', 'fashion')
+// and RootShell will call setSelectedCategories(...) + setState() so that
+// when the drawer reopens, this summary is fresh.
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -31,15 +35,15 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../root_shell.dart' show CategoryPrefs; // <-- uses the singleton
+import '../app/app_settings.dart';
 
 class AppDrawer extends StatefulWidget {
   const AppDrawer({
     super.key,
     required this.onClose,
-    this.onFiltersChanged,       // tell Home to refresh after changes
-    this.onThemeTap,             // open Theme bottom sheet
-    this.onCategoryTap,          // open Category picker bottom sheet
+    this.onFiltersChanged,   // tell Home/root to refresh after changes (lang etc.)
+    this.onThemeTap,         // open Theme bottom sheet
+    this.onCategoryTap,      // open Categories bottom sheet
     this.appShareUrl,
     this.privacyUrl,
     this.termsUrl,
@@ -59,12 +63,9 @@ class AppDrawer extends StatefulWidget {
 
 class _AppDrawerState extends State<AppDrawer> {
   // SharedPreferences keys
-  static const _kLang = 'cp.lang';           // 'english' | 'hindi' | 'mixed'
-  // (previously we also persisted categories here as cp.categories. In the
-  // new flow CategoryPrefs is global/in-memory + bottom sheet. You can
-  // persist it later if you want, but for now we don't do it here.)
+  static const _kLang = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
 
-  // local state
+  // Local state
   String _lang = 'mixed';
 
   late Future<void> _loader;
@@ -87,7 +88,52 @@ class _AppDrawerState extends State<AppDrawer> {
     widget.onFiltersChanged?.call();
   }
 
-  // small helpers
+  // Build a readable summary of the current category filter selection.
+  // Rules:
+  //  - if set contains 'all' OR is empty => "All"
+  //  - otherwise pretty-print each category key into a name,
+  //    sort, and do "First +N" if more than 1.
+  String _categoriesSummary(Set<String> raw) {
+    // Canonical keys we expect AppSettings to use.
+    const kAll = 'all';
+    const kEntertainment = 'entertainment';
+    const kSports = 'sports';
+    const kTravel = 'travel';
+    const kFashion = 'fashion';
+
+    if (raw.isEmpty || raw.contains(kAll)) {
+      return 'All';
+    }
+
+    List<String> pretty = [];
+    for (final key in raw) {
+      switch (key) {
+        case kEntertainment:
+          pretty.add('Entertainment');
+          break;
+        case kSports:
+          pretty.add('Sports');
+          break;
+        case kTravel:
+          pretty.add('Travel');
+          break;
+        case kFashion:
+          pretty.add('Fashion');
+          break;
+        default:
+          pretty.add(key);
+          break;
+      }
+    }
+
+    pretty.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    if (pretty.isEmpty) return 'All';
+    if (pretty.length == 1) return pretty.first;
+    return '${pretty.first} +${pretty.length - 1}';
+  }
+
+  // small UI helpers
 
   Widget _emoji(String e, {double size = 16}) => Text(
         e,
@@ -123,7 +169,13 @@ class _AppDrawerState extends State<AppDrawer> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // We were using a low-opacity white border in dark mode before.
+    // Keep that same subtle divider feel.
     final borderColor = Colors.white.withOpacity(0.06);
+
+    final Set<String> selectedCats =
+        AppSettings.instance.selectedCategories; // read once per build
+    final catSummary = _categoriesSummary(selectedCats);
 
     return Drawer(
       child: SafeArea(
@@ -133,7 +185,7 @@ class _AppDrawerState extends State<AppDrawer> {
             return ListView(
               padding: EdgeInsets.zero,
               children: [
-                // HEADER (brand + close)
+                // ───────────────── HEADER (brand block + close) ─────────────────
                 Container(
                   padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
                   decoration: BoxDecoration(
@@ -145,7 +197,7 @@ class _AppDrawerState extends State<AppDrawer> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // red badge with 🎬
+                      // Brand avatar (red film badge with 🎬)
                       Container(
                         width: 40,
                         height: 40,
@@ -177,7 +229,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
                       const SizedBox(width: 12),
 
-                      // CinePulse brand text + tagline
+                      // Brand text + tagline
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -214,6 +266,7 @@ class _AppDrawerState extends State<AppDrawer> {
                         ),
                       ),
 
+                      // Close icon
                       IconButton(
                         tooltip: 'Close',
                         icon: Icon(
@@ -226,10 +279,10 @@ class _AppDrawerState extends State<AppDrawer> {
                   ),
                 ),
 
-                // ────────────── CONTENT & FILTERS ──────────────
+                // ───────────────── CONTENT & FILTERS ─────────────────
                 _sectionTitle('Content & filters'),
 
-                // Language preference block (English / Hindi / Mixed)
+                // Language preference (chips)
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
@@ -286,80 +339,72 @@ class _AppDrawerState extends State<AppDrawer> {
                   ),
                 ),
 
-                // Categories row:
-                // - Tapping opens bottom-sheet category picker
-                // - We show current selection summary in a pill
+                // Categories row
+                // Tapping opens bottom sheet (handled by RootShell via onCategoryTap)
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 6,
                   ),
-                  child: AnimatedBuilder(
-                    animation: CategoryPrefs.instance,
-                    builder: (context, __) {
-                      final summary = CategoryPrefs.instance.summary();
-                      return InkWell(
-                        borderRadius: BorderRadius.circular(10),
-                        onTap: widget.onCategoryTap,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _emoji('🗂️'),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Categories',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: cs.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: cs.surfaceVariant
-                                          .withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        width: 1,
-                                        color: cs.onSurface.withOpacity(0.15),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      summary,
-                                      style: GoogleFonts.inter(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                        color: cs.onSurface,
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: widget.onCategoryTap,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _emoji('🗂️'),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Categories',
+                                style: GoogleFonts.inter(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: cs.onSurface,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Icon(
-                              Icons.chevron_right_rounded,
-                              color: cs.onSurface.withOpacity(0.6),
-                            ),
-                          ],
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: cs.surfaceVariant.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    width: 1,
+                                    color: cs.onSurface.withOpacity(0.15),
+                                  ),
+                                ),
+                                child: Text(
+                                  catSummary,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: cs.onSurface,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      );
-                    },
+                        const SizedBox(width: 8),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          color: cs.onSurface.withOpacity(0.6),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
 
                 const Divider(height: 24),
 
-                // ────────────── APPEARANCE ──────────────
+                // ───────────────── APPEARANCE ─────────────────
                 _sectionTitle('Appearance'),
 
                 ListTile(
@@ -371,7 +416,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
                 const Divider(height: 24),
 
-                // ────────────── SHARE & SUPPORT ──────────────
+                // ───────────────── SHARE & SUPPORT ─────────────────
                 _sectionTitle('Share & support'),
 
                 ListTile(
@@ -411,7 +456,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
                 const Divider(height: 24),
 
-                // ────────────── ABOUT & LEGAL ──────────────
+                // ───────────────── ABOUT & LEGAL ─────────────────
                 _sectionTitle('About & legal'),
 
                 ListTile(
