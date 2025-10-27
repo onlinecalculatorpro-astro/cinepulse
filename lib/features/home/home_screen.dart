@@ -51,10 +51,12 @@ class _HomeScreenState extends State<HomeScreen>
   // Debounce for rapid WS event bursts -> a single fetch.
   static const Duration _kRealtimeDebounce = Duration(milliseconds: 500);
 
-  late final TabController _tab = TabController(length: _tabs.length, vsync: this);
+  late final TabController _tab =
+      TabController(length: _tabs.length, vsync: this);
 
   final TextEditingController _search = TextEditingController();
-  final GlobalKey<RefreshIndicatorState> _refreshKey = GlobalKey<RefreshIndicatorState>();
+  final GlobalKey<RefreshIndicatorState> _refreshKey =
+      GlobalKey<RefreshIndicatorState>();
 
   final Map<String, _PagedFeed> _feeds = {
     for (final k in _tabs.keys) k: _PagedFeed(tab: k)
@@ -113,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen>
       if (hasNetwork && wasOffline) _wsBackoffSecs = 2;
     });
 
-    // Initial connectivity state.
+    // Initial connectivity state (async fire-and-forget).
     () async {
       final initial = await Connectivity().checkConnectivity();
       final hasNetwork = _hasNetworkFrom(initial);
@@ -123,7 +125,8 @@ class _HomeScreenState extends State<HomeScreen>
     }();
 
     // Auto refresh tick (silent).
-    _autoRefresh = Timer.periodic(_kAutoRefreshEvery, (_) => _tickAutoRefresh());
+    _autoRefresh =
+        Timer.periodic(_kAutoRefreshEvery, (_) => _tickAutoRefresh());
 
     _search.addListener(_onSearchChanged);
   }
@@ -204,7 +207,7 @@ class _HomeScreenState extends State<HomeScreen>
             final obj = json.decode(data.toString());
             if (obj is Map && obj['type'] == 'ping') return;
           } catch (_) {
-            // If not JSON, ignore—server always sends JSON though.
+            // non-JSON? ignore.
           }
           _scheduleRealtimeRefresh();
         },
@@ -229,7 +232,8 @@ class _HomeScreenState extends State<HomeScreen>
 
     // Exponential backoff reconnect (cap at 60s)
     _wsReconnectTimer?.cancel();
-    _wsReconnectTimer = Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
+    _wsReconnectTimer =
+        Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
     _wsBackoffSecs = (_wsBackoffSecs * 2).clamp(2, 60);
   }
 
@@ -275,7 +279,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _onTapSort() async {
-    // layout only for now – this is where a bottom sheet / menu would go
+    // this is where a bottom sheet / menu would go
   }
 
   // Manual pull-to-refresh: full reset + optional external hook.
@@ -302,7 +306,8 @@ class _HomeScreenState extends State<HomeScreen>
     final isDark = theme.brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
+      backgroundColor:
+          isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
       body: RefreshIndicator.adaptive(
         key: _refreshKey,
         onRefresh: _refresh,
@@ -321,7 +326,6 @@ class _HomeScreenState extends State<HomeScreen>
                   : theme.colorScheme.surface.withOpacity(0.95),
               surfaceTintColor: Colors.transparent,
               toolbarHeight: 70,
-              // menu icon is in actions so we don't want default leading
               leading: null,
               automaticallyImplyLeading: false,
               flexibleSpace: ClipRRect(
@@ -343,7 +347,8 @@ class _HomeScreenState extends State<HomeScreen>
                               ],
                       ),
                       border: const Border(
-                        bottom: BorderSide(color: Color(0x0Fffffff), width: 1),
+                        bottom: BorderSide(
+                            color: Color(0x0Fffffff), width: 1),
                       ),
                     ),
                   ),
@@ -354,7 +359,9 @@ class _HomeScreenState extends State<HomeScreen>
                 IconButton(
                   tooltip: 'Discover',
                   icon: Icon(
-                    kIsWeb ? Icons.explore_outlined : Icons.manage_search_rounded,
+                    kIsWeb
+                        ? Icons.explore_outlined
+                        : Icons.manage_search_rounded,
                   ),
                   onPressed: widget.onOpenDiscover,
                 ),
@@ -399,7 +406,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-            // HORIZONTAL CATEGORY BAR (pinned, sticky)
+            // CATEGORY BAR (pinned, sticky)
             SliverPersistentHeader(
               pinned: true,
               delegate: _FiltersHeaderDelegate(
@@ -416,11 +423,11 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-            // FEED GRID (no "Trending Now", just cards)
+            // FEED GRID
             SliverFillRemaining(
               child: TabBarView(
                 controller: _tab,
-                // user can still swipe between All / Entertainment / Sports
+                // swipe between All / Entertainment / Sports
                 children: _tabs.keys.map((key) {
                   final feed = _feeds[key]!;
                   return _FeedList(
@@ -453,13 +460,15 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
   final ValueChanged<int> onSelect;
   final VoidCallback onSortTap;
 
+  // make the bar a bit shorter / tighter
   @override
-  double get minExtent => 64; // height of the row
+  double get minExtent => 56;
   @override
-  double get maxExtent => 64; // same so it doesn't expand/collapse
+  double get maxExtent => 56;
 
   @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
@@ -484,7 +493,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           curve: Curves.easeOut,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: pillBg(active),
             borderRadius: BorderRadius.circular(8),
@@ -492,7 +501,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
           child: Text(
             label,
             style: TextStyle(
-              fontSize: 15,
+              fontSize: 14,
               fontWeight: active ? FontWeight.w600 : FontWeight.w500,
               height: 1.2,
               color: textColor(active),
@@ -504,11 +513,11 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
 
     Widget pipe() {
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
         child: Text(
           '|',
           style: TextStyle(
-            fontSize: 15,
+            fontSize: 14,
             fontWeight: FontWeight.w400,
             height: 1.2,
             color: isDark
@@ -524,7 +533,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
         borderRadius: BorderRadius.circular(8),
         onTap: onSortTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
@@ -548,7 +557,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
               Text(
                 'Sorting',
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: FontWeight.w500,
                   height: 1.2,
                   color: isDark
@@ -556,7 +565,7 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
                       : theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 2),
               Icon(
                 Icons.arrow_drop_down_rounded,
                 size: 18,
@@ -570,11 +579,10 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
       );
     }
 
+    // We split the row:
+    // [scrollable tabs .................] [Sorting ▼ fixed at right]
     return Container(
-      // sticky bar background + bottom divider
       color: isDark ? const Color(0xFF0a0e1a) : theme.colorScheme.surface,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      alignment: Alignment.centerLeft,
       child: Container(
         decoration: BoxDecoration(
           border: Border(
@@ -586,43 +594,46 @@ class _FiltersHeaderDelegate extends SliverPersistentHeaderDelegate {
             ),
           ),
         ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // All
-              tabItem(
-                label: 'All',
-                active: activeIndex == 0,
-                onTap: () => onSelect(0),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Tabs (can overflow horizontally on small screens)
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                // no Scrollbar widget here, so user can swipe but we never show a bar
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    tabItem(
+                      label: 'All',
+                      active: activeIndex == 0,
+                      onTap: () => onSelect(0),
+                    ),
+                    pipe(),
+                    tabItem(
+                      label: 'Entertainment',
+                      active: activeIndex == 1,
+                      onTap: () => onSelect(1),
+                    ),
+                    pipe(),
+                    tabItem(
+                      label: 'Sports',
+                      active: activeIndex == 2,
+                      onTap: () => onSelect(2),
+                    ),
+                  ],
+                ),
               ),
+            ),
 
-              pipe(),
+            const SizedBox(width: 12),
 
-              // Entertainment
-              tabItem(
-                label: 'Entertainment',
-                active: activeIndex == 1,
-                onTap: () => onSelect(1),
-              ),
-
-              pipe(),
-
-              // Sports
-              tabItem(
-                label: 'Sports',
-                active: activeIndex == 2,
-                onTap: () => onSelect(2),
-              ),
-
-              pipe(),
-
-              // Sorting control
-              sortButton(),
-            ],
-          ),
+            // Sorting button (fixed on right, never scrolls away)
+            sortButton(),
+          ],
         ),
       ),
     );
@@ -714,7 +725,8 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.isInitialLoading) {
               return GridView.builder(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 8, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(
+                    horizontalPad, 8, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 cacheExtent: 1800,
                 gridDelegate: gridDelegate,
@@ -725,11 +737,13 @@ class _FeedListState extends State<_FeedList>
 
             if (feed.hasError && feed.items.isEmpty) {
               return ListView(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(
+                    horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   ErrorView(
-                    message: feed.errorMessage ?? 'Something went wrong.',
+                    message:
+                        feed.errorMessage ?? 'Something went wrong.',
                     onRetry: () => feed.load(reset: true),
                   ),
                 ],
@@ -742,7 +756,9 @@ class _FeedListState extends State<_FeedList>
                 : feed.items
                     .where((s) =>
                         s.title.toLowerCase().contains(q) ||
-                        (s.summary ?? '').toLowerCase().contains(q))
+                        (s.summary ?? '')
+                            .toLowerCase()
+                            .contains(q))
                     .toList();
 
             if (filtered.isEmpty) {
@@ -750,7 +766,8 @@ class _FeedListState extends State<_FeedList>
                   ? "You're offline and no results match your search."
                   : "No matching items.";
               return ListView(
-                padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
+                padding: EdgeInsets.fromLTRB(
+                    horizontalPad, 24, horizontalPad, bottomPad),
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   Center(child: Text(msg)),
@@ -761,7 +778,8 @@ class _FeedListState extends State<_FeedList>
             const showLoadMore = false;
 
             return GridView.builder(
-              padding: EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
+              padding: EdgeInsets.fromLTRB(
+                  horizontalPad, topPad, horizontalPad, bottomPad),
               physics: const AlwaysScrollableScrollPhysics(),
               cacheExtent: 2000,
               gridDelegate: gridDelegate,
@@ -776,14 +794,15 @@ class _FeedListState extends State<_FeedList>
                           )
                         : OutlinedButton.icon(
                             onPressed: feed.loadMore,
-                            icon: const Icon(Icons.expand_more_rounded),
+                            icon: const Icon(
+                                Icons.expand_more_rounded),
                             label: const Text('Load more'),
                           ),
                   );
                 }
 
                 // pass the entire filtered list + index into StoryCard,
-                // so StoryDetailsPager can swipe prev/next within this set.
+                // so pager can swipe prev/next within this filtered set.
                 return StoryCard(
                   story: filtered[i],
                   allStories: filtered,
@@ -819,7 +838,8 @@ class _PagedFeed extends ChangeNotifier {
   bool get canLoadMore => _canLoadMore;
 
   // Effective timestamp for ordering and cursors.
-  DateTime? _eff(Story s) => s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
+  DateTime? _eff(Story s) =>
+      s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
   DateTime? _sinceCursor;
 
@@ -862,8 +882,9 @@ class _PagedFeed extends ChangeNotifier {
       final dates = _items
           .map(_eff)
           .whereType<DateTime>(); // normalizedAt → publishedAt → releaseDate
-      _sinceCursor =
-          dates.isEmpty ? null : dates.reduce((a, b) => a.isAfter(b) ? a : b);
+      _sinceCursor = dates.isEmpty
+          ? null
+          : dates.reduce((a, b) => a.isAfter(b) ? a : b);
 
       _hasError = false;
       _errorMessage = null;
@@ -892,12 +913,15 @@ class _PagedFeed extends ChangeNotifier {
     list.sort((a, b) {
       final da = _eff(a);
       final db = _eff(b);
-      if (da == null && db == null) return b.id.compareTo(a.id);
+      if (da == null && db == null) {
+        return b.id.compareTo(a.id);
+      }
       if (da == null) return 1; // nulls last
       if (db == null) return -1;
       final cmp = db.compareTo(da); // newest first
       if (cmp != 0) return cmp;
-      // Deterministic tie-break by id to avoid UI shuffling when times equal.
+      // Deterministic tie-break by id to avoid UI shuffling
+      // when times are equal.
       return b.id.compareTo(a.id);
     });
   }
@@ -932,7 +956,10 @@ class _ModernBrandLogo extends StatelessWidget {
             ],
           ),
           child: const Center(
-            child: Text('🎬', style: TextStyle(fontSize: 20, height: 1)),
+            child: Text(
+              '🎬',
+              style: TextStyle(fontSize: 20, height: 1),
+            ),
           ),
         ),
         const SizedBox(width: 10),
