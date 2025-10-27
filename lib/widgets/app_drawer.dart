@@ -2,19 +2,29 @@
 //
 // Right-side settings / preferences drawer (endDrawer).
 //
-// This version:
-//  - No inline category chips anymore.
-//  - Shows a single "Categories" row with a pill like "All" / "Entertainment +2".
-//    Tapping that row calls widget.onCategoryTap(), which RootShell handles by
-//    opening the _CategoryPicker bottom sheet.
-//  - Keeps Language preference here (English / Hindi / Mixed) and persists it
-//    to SharedPreferences.
-//  - Keeps Theme row here, which calls widget.onThemeTap() to open the theme
-//    picker bottom sheet.
-//  - Uses CategoryPrefs from root_shell.dart via import.
+// UPDATED TO MATCH THE APPROVED CINEPULSE POLISH:
 //
-// NOTE: Right now CategoryPrefs is in root_shell.dart. If you later move it to
-// a separate file, update this import.
+// - Dark, glassy / nav-style surface (0xFF0f172a) with subtle 1px separators.
+// - Strong CinePulse branding header with red badge, gradient text, and Close.
+// - Section headers are quiet, all-caps-ish labels at 12px, semi-transparent.
+// - Language chips now match our pill system:
+//     • Selected  = red fill (#dc2626), white text
+//     • Unselected = transparent bg, red border/text
+//   This keeps visual consistency with the header chips in HomeScreen.
+// - Categories row: shows a tappable row with a read-only summary pill
+//   (outline pill using accent border) instead of inline FilterChips.
+//   Tapping it triggers widget.onCategoryTap(), which pops a bottom sheet.
+// - Theme row: triggers widget.onThemeTap() -> Theme bottom sheet.
+// - Share / Report issue / About & legal rows styled like interactive rows.
+//
+// Behavior:
+// - We persist language preference (cp.lang) to SharedPreferences.
+// - We read CategoryPrefs.instance.summary() to render the pill that says
+//   "All", "Entertainment", or "Entertainment +2".
+// - We don't expose category chips here anymore. Category selection lives
+//   in the bottom sheet (_CategoryPicker) owned by RootShell.
+//
+// NOTE: CategoryPrefs currently lives in root_shell.dart.
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -57,6 +67,8 @@ class _AppDrawerState extends State<AppDrawer> {
   String _lang = 'mixed';
   late Future<void> _loader;
 
+  static const _accent = Color(0xFFdc2626);
+
   @override
   void initState() {
     super.initState();
@@ -75,45 +87,403 @@ class _AppDrawerState extends State<AppDrawer> {
     widget.onFiltersChanged?.call();
   }
 
-  // tiny helpers
+  // ───────────────────── Small helpers ─────────────────────
 
-  Widget _emoji(String e, {double size = 16}) => Text(
-        e,
-        style: TextStyle(
-          fontSize: size,
-          height: 1,
-          fontFamily: null,
-          fontFamilyFallback: const [
-            'Apple Color Emoji',
-            'Segoe UI Emoji',
-            'Noto Color Emoji',
-            'EmojiOne Color',
-          ],
-        ),
-      );
+  Widget _emoji(String e, {double size = 16}) {
+    return Text(
+      e,
+      style: TextStyle(
+        fontSize: size,
+        height: 1,
+        fontFamily: null,
+        fontFamilyFallback: const [
+          'Apple Color Emoji',
+          'Segoe UI Emoji',
+          'Noto Color Emoji',
+          'EmojiOne Color',
+        ],
+      ),
+    );
+  }
 
-  Widget _sectionTitle(String text) {
+  Widget _sectionHeader(BuildContext context, String text) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
       child: Text(
-        text,
+        text.toUpperCase(),
         style: GoogleFonts.inter(
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: FontWeight.w700,
-          letterSpacing: 0.2,
-          color: onSurface.withOpacity(0.72),
+          letterSpacing: 0.3,
+          color: onSurface.withOpacity(0.6),
         ),
       ),
     );
   }
 
+  Widget _langChip(String label, String value) {
+    final bool active = (_lang == value);
+
+    if (active) {
+      // FILLED red pill (matches active category chip in header)
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () {
+          setState(() => _lang = value);
+          _persistLanguage();
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: _accent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: _accent, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: _accent.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // OUTLINE pill
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: () {
+        setState(() => _lang = value);
+        _persistLanguage();
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: _accent.withOpacity(0.4),
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: _accent,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            height: 1.2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // A generic tappable row with leading widget, title/subtitle and trailing chevron.
+  Widget _settingsRow({
+    required Widget leading,
+    required String title,
+    String? subtitle,
+    required VoidCallback? onTap,
+  }) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final dividerColor = cs.onSurface.withOpacity(0.06);
+
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(width: 1, color: dividerColor),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            leading,
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface,
+                      height: 1.3,
+                    ),
+                  ),
+                  if (subtitle != null && subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                        height: 1.3,
+                        color: cs.onSurface.withOpacity(0.7),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: cs.onSurface.withOpacity(0.6),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Row for Categories specifically because we show the summary pill.
+  Widget _categoryRow() {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final dividerColor = cs.onSurface.withOpacity(0.06);
+
+    return AnimatedBuilder(
+      animation: CategoryPrefs.instance,
+      builder: (context, _) {
+        final summary = CategoryPrefs.instance.summary();
+        return InkWell(
+          onTap: widget.onCategoryTap,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(width: 1, color: dividerColor),
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _emoji('🗂️'),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Categories',
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurface,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // read-only pill mirroring inactive chip style
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.transparent,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            width: 1,
+                            color: _accent.withOpacity(0.4),
+                          ),
+                        ),
+                        child: Text(
+                          summary,
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: _accent,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: 20,
+                  color: cs.onSurface.withOpacity(0.6),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // The header at the very top of the drawer.
+  Widget _drawerHeader(bool isDark) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final dividerColor =
+        isDark ? Colors.white.withOpacity(0.06) : cs.onSurface.withOpacity(0.06);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+      decoration: BoxDecoration(
+        color: isDark
+            ? const Color(0xFF1e2537).withOpacity(0.15)
+            : cs.surface.withOpacity(0.05),
+        border: Border(
+          bottom: BorderSide(color: dividerColor, width: 1),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // red badge with 🎬
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFFdc2626),
+                  Color(0xFFef4444),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFdc2626).withOpacity(0.3),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Text(
+                '🎬',
+                style: TextStyle(fontSize: 20, height: 1),
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 12),
+
+          // CinePulse + tagline
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ShaderMask(
+                  shaderCallback: (bounds) => const LinearGradient(
+                    colors: [
+                      Color(0xFFdc2626),
+                      Color(0xFFef4444),
+                    ],
+                  ).createShader(bounds),
+                  child: Text(
+                    'CinePulse',
+                    style: GoogleFonts.inter(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      height: 1.1,
+                      color: Colors.white,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Movies & OTT, in a minute.',
+                  style: GoogleFonts.inter(
+                    fontSize: 12.5,
+                    height: 1.2,
+                    color: cs.onSurface.withOpacity(0.72),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          IconButton(
+            tooltip: 'Close',
+            icon: Icon(
+              Icons.close_rounded,
+              color: cs.onSurface,
+            ),
+            onPressed: widget.onClose,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // "Share CinePulse"
+  Future<void> _shareApp(BuildContext context) async {
+    final link = widget.appShareUrl ?? 'https://cinepulse.netlify.app';
+    if (!kIsWeb) {
+      await Share.share(link);
+    } else {
+      await Clipboard.setData(ClipboardData(text: link));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Link copied to clipboard'),
+          ),
+        );
+      }
+    }
+  }
+
+  // "Report an issue"
+  Future<void> _reportIssue() async {
+    final uri = Uri.parse(
+      'mailto:feedback@cinepulse.app?subject=CinePulse%20Feedback',
+    );
+    await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+  }
+
+  // Launch simple external URL
+  Future<void> _openExternal(String? url) async {
+    if (url == null || url.isEmpty) return;
+    await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.platformDefault,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final borderColor = Colors.white.withOpacity(0.06);
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
+    final drawerBg = isDark
+        ? const Color(0xFF0f172a)
+        : cs.surface;
 
     return Drawer(
+      backgroundColor: drawerBg,
       child: SafeArea(
         child: FutureBuilder<void>(
           future: _loader,
@@ -121,107 +491,22 @@ class _AppDrawerState extends State<AppDrawer> {
             return ListView(
               padding: EdgeInsets.zero,
               children: [
-                // ───────── HEADER (brand + close) ─────────
+                // HEADER
+                _drawerHeader(isDark),
+
+                // CONTENT & FILTERS
+                _sectionHeader(context, 'Content & filters'),
+
+                // Language preference
                 Container(
-                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                   decoration: BoxDecoration(
-                    color: cs.surface.withOpacity(0.05),
                     border: Border(
-                      bottom: BorderSide(color: borderColor, width: 1),
+                      bottom: BorderSide(
+                        width: 1,
+                        color: cs.onSurface.withOpacity(0.06),
+                      ),
                     ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // red film badge with 🎬
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Color(0xFFdc2626),
-                              Color(0xFFef4444),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFFdc2626).withOpacity(0.3),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: const Center(
-                          child: Text(
-                            '🎬',
-                            style: TextStyle(fontSize: 20, height: 1),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 12),
-
-                      // CinePulse text + tagline
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ShaderMask(
-                              shaderCallback: (bounds) =>
-                                  const LinearGradient(
-                                colors: [
-                                  Color(0xFFdc2626),
-                                  Color(0xFFef4444),
-                                ],
-                              ).createShader(bounds),
-                              child: Text(
-                                'CinePulse',
-                                style: GoogleFonts.inter(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w800,
-                                  height: 1.1,
-                                  color: Colors.white,
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Movies & OTT, in a minute.',
-                              style: GoogleFonts.inter(
-                                fontSize: 12.5,
-                                height: 1.2,
-                                color: cs.onSurface.withOpacity(0.72),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      IconButton(
-                        tooltip: 'Close',
-                        icon: Icon(
-                          Icons.close_rounded,
-                          color: cs.onSurface,
-                        ),
-                        onPressed: widget.onClose,
-                      ),
-                    ],
-                  ),
-                ),
-
-                // ───────── CONTENT & FILTERS ─────────
-                _sectionTitle('Content & filters'),
-
-                // Language preference group
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 6,
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -236,38 +521,19 @@ class _AppDrawerState extends State<AppDrawer> {
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
                               color: cs.onSurface,
+                              height: 1.3,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
                       Wrap(
                         spacing: 8,
+                        runSpacing: 8,
                         children: [
-                          ChoiceChip(
-                            label: const Text('English'),
-                            selected: _lang == 'english',
-                            onSelected: (_) {
-                              setState(() => _lang = 'english');
-                              _persistLanguage();
-                            },
-                          ),
-                          ChoiceChip(
-                            label: const Text('Hindi'),
-                            selected: _lang == 'hindi',
-                            onSelected: (_) {
-                              setState(() => _lang = 'hindi');
-                              _persistLanguage();
-                            },
-                          ),
-                          ChoiceChip(
-                            label: const Text('Mixed'),
-                            selected: _lang == 'mixed',
-                            onSelected: (_) {
-                              setState(() => _lang = 'mixed');
-                              _persistLanguage();
-                            },
-                          ),
+                          _langChip('English', 'english'),
+                          _langChip('Hindi', 'hindi'),
+                          _langChip('Mixed', 'mixed'),
                         ],
                       ),
                     ],
@@ -275,168 +541,54 @@ class _AppDrawerState extends State<AppDrawer> {
                 ),
 
                 // Categories row (opens bottom sheet picker)
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 6,
-                  ),
-                  child: AnimatedBuilder(
-                    animation: CategoryPrefs.instance,
-                    builder: (context, __) {
-                      final summary = CategoryPrefs.instance.summary();
-                      return InkWell(
-                        borderRadius: BorderRadius.circular(10),
-                        onTap: widget.onCategoryTap,
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _emoji('🗂️'),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Categories',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: cs.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: cs.surfaceVariant
-                                          .withOpacity(0.15),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        width: 1,
-                                        color:
-                                            cs.onSurface.withOpacity(0.15),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      summary,
-                                      style: GoogleFonts.inter(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500,
-                                        color: cs.onSurface,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Icon(
-                              Icons.chevron_right_rounded,
-                              color: cs.onSurface.withOpacity(0.6),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ),
+                _categoryRow(),
 
-                const Divider(height: 24),
-
-                // ───────── APPEARANCE ─────────
-                _sectionTitle('Appearance'),
-
-                ListTile(
-                  leading: const Icon(Icons.palette_outlined),
-                  title: const Text('Theme'),
-                  subtitle: const Text('System / Light / Dark'),
+                // APPEARANCE
+                _sectionHeader(context, 'Appearance'),
+                _settingsRow(
+                  leading: const Icon(Icons.palette_outlined, size: 20),
+                  title: 'Theme',
+                  subtitle: 'System / Light / Dark',
                   onTap: widget.onThemeTap,
                 ),
 
-                const Divider(height: 24),
-
-                // ───────── SHARE & SUPPORT ─────────
-                _sectionTitle('Share & support'),
-
-                ListTile(
+                // SHARE & SUPPORT
+                _sectionHeader(context, 'Share & support'),
+                _settingsRow(
                   leading: _emoji('📣'),
-                  title: const Text('Share CinePulse'),
-                  onTap: () async {
-                    final link = widget.appShareUrl ??
-                        'https://cinepulse.netlify.app';
-                    if (!kIsWeb) {
-                      await Share.share(link);
-                    } else {
-                      await Clipboard.setData(
-                        ClipboardData(text: link),
-                      );
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Link copied to clipboard'),
-                          ),
-                        );
-                      }
-                    }
-                  },
+                  title: 'Share CinePulse',
+                  subtitle: 'Send the app link',
+                  onTap: () => _shareApp(context),
                 ),
-                ListTile(
+                _settingsRow(
                   leading: _emoji('🛠️'),
-                  title: const Text('Report an issue'),
-                  onTap: () async {
-                    final uri = Uri.parse(
-                      'mailto:feedback@cinepulse.app'
-                      '?subject=CinePulse%20Feedback',
-                    );
-                    await launchUrl(
-                      uri,
-                      mode: LaunchMode.externalApplication,
-                    );
-                  },
+                  title: 'Report an issue',
+                  subtitle: 'Send us feedback',
+                  onTap: _reportIssue,
                 ),
 
-                const Divider(height: 24),
-
-                // ───────── ABOUT & LEGAL ─────────
-                _sectionTitle('About & legal'),
-
-                ListTile(
-                  leading: const Icon(Icons.info_outline_rounded),
-                  title: const Text('About CinePulse'),
-                  subtitle: const Text('Version 0.1.0'),
+                // ABOUT & LEGAL
+                _sectionHeader(context, 'About & legal'),
+                _settingsRow(
+                  leading: const Icon(Icons.info_outline_rounded, size: 20),
+                  title: 'About CinePulse',
+                  subtitle: 'Version 0.1.0',
                   onTap: widget.onClose,
                 ),
-                ListTile(
-                  leading: const Icon(Icons.privacy_tip_outlined),
-                  title: const Text('Privacy Policy'),
-                  onTap: () async {
-                    final url = widget.privacyUrl ?? '';
-                    if (url.isNotEmpty) {
-                      await launchUrl(
-                        Uri.parse(url),
-                        mode: LaunchMode.platformDefault,
-                      );
-                    }
-                  },
+                _settingsRow(
+                  leading: const Icon(Icons.privacy_tip_outlined, size: 20),
+                  title: 'Privacy Policy',
+                  subtitle: null,
+                  onTap: () => _openExternal(widget.privacyUrl),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.gavel_outlined),
-                  title: const Text('Terms of Use'),
-                  onTap: () async {
-                    final url = widget.termsUrl ?? '';
-                    if (url.isNotEmpty) {
-                      await launchUrl(
-                        Uri.parse(url),
-                        mode: LaunchMode.platformDefault,
-                      );
-                    }
-                  },
+                _settingsRow(
+                  leading: const Icon(Icons.gavel_outlined, size: 20),
+                  title: 'Terms of Use',
+                  subtitle: null,
+                  onTap: () => _openExternal(widget.termsUrl),
                 ),
 
-                const SizedBox(height: 18),
+                const SizedBox(height: 24),
               ],
             );
           },
