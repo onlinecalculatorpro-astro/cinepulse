@@ -5,25 +5,23 @@
 // - CTA row (Watch/Read + Save + Share) baseline-aligns across cards.
 // - Less awkward blank middle space while still keeping all metadata.
 // - Compact spacing, 8px/4px rhythm.
-// - When you tap a card (or Watch/Read), you now land in StoryPagerScreen
+// - When you tap a card (or Watch/Read), you go to StoryPagerScreen
 //   so you can swipe left/right to previous/next stories.
 //
-// Structure inside the card body:
+// Body layout:
 //
-// Row A  : "<Kind>  •  <publishedAt, e.g. '27 Oct 2025, 11:57 AM'>"
+// Row A  : "<Kind>  •  <publishedAt e.g. '27 Oct 2025, 11:57 AM'>"
 // Row B  : [🕒 badge]  "<addedAt (+Δm)>"
 // Gap 8
 // Title  : up to 3 lines
 // Gap 8
 // Spacer()
-// CTA row: [big red Watch/Read button][ Save ][ Share ]
+// CTA row: [Watch/Read button][ Save ][ Share ]
 // Gap 8
 // Source : "Source: <domain or source>"
 //
-// Spacer() keeps CTA pinned to the bottom of the body so all cards line up.
-// The hero image is taller (boosted ~1.15x 16:9, min 180) so we don't chop
-// heads and we also eat up the giant dead zone.
-//
+// Spacer() pins CTAs to the bottom so all cards line up.
+// Thumbnail is ~1.15x taller than 16:9 (min 180px) to avoid face crop.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -41,20 +39,26 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
-import 'story_pager.dart';        // <- correct pager screen
-import 'story_image_url.dart';   // hero/thumbnail resolver
+import 'story_pager.dart';        // StoryPagerScreen
+import 'story_image_url.dart';   // thumbnail resolver
 
 class StoryCard extends StatefulWidget {
   const StoryCard({
     super.key,
     required this.story,
-    required this.allStories, // full list currently rendered in the grid
-    required this.index,      // index of this.story inside allStories
+
+    // Optional so old screens (Saved, Alerts) keep compiling.
+    this.allStories,
+    this.index,
   });
 
   final Story story;
-  final List<Story> allStories;
-  final int index;
+
+  /// The full list this card lives in (for swipe prev/next). Optional.
+  final List<Story>? allStories;
+
+  /// Index of [story] in [allStories]. Optional.
+  final int? index;
 
   @override
   State<StoryCard> createState() => _StoryCardState();
@@ -138,13 +142,24 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // Open pager at THIS story's index.
+  // List + index we will actually use for pager.
+  List<Story> get _effectiveStories =>
+      (widget.allStories != null && widget.allStories!.isNotEmpty)
+          ? widget.allStories!
+          : <Story>[widget.story];
+
+  int get _effectiveIndex =>
+      (widget.index != null && widget.index! >= 0)
+          ? widget.index!
+          : 0;
+
+  // Open pager starting at THIS story.
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
         StoryPagerScreen(
-          stories: widget.allStories,
-          initialIndex: widget.index,
+          stories: _effectiveStories,
+          initialIndex: _effectiveIndex,
           autoplayInitial: autoplay,
         ),
       ),
@@ -309,8 +324,9 @@ class _StoryCardState extends State<StoryCard> {
               final w = box.maxWidth;
 
               // Taller thumbnail:
-              // base 16:9 height for this width,
-              // boosted ~1.15x, and clamp to min 180.
+              // 1. Take base 16:9 -> baseH = w / (16/9)
+              // 2. Boost ~1.15x
+              // 3. Clamp min 180
               final baseH = w / (16 / 9);
               final boosted = baseH * 1.15;
               final mediaH = math.max(180.0, boosted);
@@ -433,7 +449,7 @@ class _StoryCardState extends State<StoryCard> {
                               ),
                               if (publishedText != null) ...[
                                 const SizedBox(width: 8),
-                                // bullet "•" (visually a 6px dot)
+                                // bullet "•" (visual 6px dot)
                                 Container(
                                   width: 6,
                                   height: 6,
