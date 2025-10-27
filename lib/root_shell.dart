@@ -25,6 +25,7 @@
 // CategoryPrefs.instance.selected (not wired in this file yet, just conceptually).
 
 import 'dart:async';
+import 'dart:ui' show ImageFilter; // <-- added for blurred bottom bar
 
 import 'package:flutter/foundation.dart' show kIsWeb, ChangeNotifier;
 import 'package:flutter/material.dart';
@@ -43,16 +44,6 @@ import 'widgets/app_drawer.dart';
 
 /* ────────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS
- *
- * Global singleton for the currently selected verticals.
- *
- * Rules:
- *  - "all" means everything.
- *  - If "all" is in the set, ignore any other categories (collapse to {'all'}).
- *  - User can choose multiple (Entertainment + Sports, etc.).
- *  - We never allow an empty set; fallback to {'all'}.
- *
- * This is in-memory only right now. Wire SharedPreferences later if needed.
  * ────────────────────────────────────────────────────────────────────────────*/
 class CategoryPrefs extends ChangeNotifier {
   CategoryPrefs._internal();
@@ -121,13 +112,6 @@ class CategoryPrefs extends ChangeNotifier {
 
 /* ────────────────────────────────────────────────────────────────────────────
  * ROOT SHELL
- *
- * Hosts:
- *  - IndexedStack of tabs (Home / Discover / Saved / Alerts)
- *  - Right-side drawer
- *  - Bottom nav (but ONLY on narrow/mobile, hidden on desktop width ≥768px)
- *  - Deep link handling (/s/<id> opens StoryDetails)
- *  - Opens Theme & Category pickers as bottom sheets
  * ────────────────────────────────────────────────────────────────────────────*/
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
@@ -219,30 +203,22 @@ class _RootShellState extends State<RootShell> {
 
   /* ───────────────────────── header icon callbacks ────────────────────── */
 
-  // Called by HomeScreen header Discover / Search icon.
-  // This should take us to the Discover placeholder page and hide the inline
-  // search bar.
   void _openDiscover() {
+    // header Discover/Search icon
     setState(() {
-      _pageIndex = 1;     // show Discover placeholder
+      _pageIndex = 1;     // Discover placeholder
       _navIndex = (_navIndex == 1) ? 0 : _navIndex;
       _showSearchBar = false;
     });
   }
 
-  // Called by HomeScreen header menu icon.
-  // Opens the endDrawer we define below.
   void _openEndDrawer() {
+    // header menu icon
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
   /* ───────────────────────── bottom nav taps ──────────────────────────── */
 
-  // Bottom nav items:
-  // - Tapping "Home" => show Home normally.
-  // - Tapping "Search" => show Home but force inline search bar visible.
-  // - Tapping "Saved" => go to Saved tab.
-  // - Tapping "Alerts" => go to Alerts tab.
   void _onDestinationSelected(int i) {
     if (i == 1) {
       // "Search"
@@ -307,24 +283,16 @@ class _RootShellState extends State<RootShell> {
 
   /* ───────────────────────── responsive helpers ───────────────────────── */
 
-  // Compact = phone-ish layout.
-  // We'll use 768px as our cutoff because the approved mock hides
-  // the bottom nav on wider/desktop views.
   bool _isCompact(BuildContext context) =>
       MediaQuery.of(context).size.width < 768;
 
   @override
   Widget build(BuildContext context) {
     final compact = _isCompact(context);
-
-    // Bottom nav ONLY on compact screens.
-    // Even if we're on web (kIsWeb == true), on a wide browser window
-    // we should *not* show the bottom nav. This matches the approved
-    // "desktop web" look, where bottom nav disappears.
-    final showBottomNav = compact;
+    final showBottomNav = compact; // hide nav on ≥768px
 
     return WillPopScope(
-      // Back button on Android:
+      // Android back:
       // If we have routes stacked (like StoryDetails), pop that first.
       onWillPop: () async {
         final canPop = Navigator.of(context).canPop();
@@ -335,14 +303,10 @@ class _RootShellState extends State<RootShell> {
         key: _scaffoldKey,
 
         // Right-side drawer (endDrawer).
-        // We explicitly disable drag-to-open so horizontal back-swipe on
-        // Android/iOS doesn't accidentally open it.
         drawer: null,
         drawerEnableOpenDragGesture: false,
         endDrawerEnableOpenDragGesture: false,
         endDrawer: Builder(
-          // Builder gives us a context inside the drawer so we can call
-          // Navigator.pop(drawerCtx) when needed (Theme/Category sheets).
           builder: (drawerCtx) {
             return AppDrawer(
               onClose: () => Navigator.of(drawerCtx).pop(),
@@ -356,10 +320,7 @@ class _RootShellState extends State<RootShell> {
           },
         ),
 
-        // Main content body.
-        // We wrap IndexedStack with _ResponsiveWidth so that on desktop/tablet
-        // the content column is centered and clamped to ~1300px max width,
-        // matching the mock's max-page-width.
+        // Main content body, width-clamped on desktop/tablet.
         body: _ResponsiveWidth(
           child: IndexedStack(
             index: _pageIndex,
@@ -377,62 +338,11 @@ class _RootShellState extends State<RootShell> {
           ),
         ),
 
-        // Bottom nav bar (Home / Search / Saved / Alerts)
-        // Shows only on compact. Hidden entirely on wide screens.
+        // NEW: glassy CineBottomNavBar instead of stock Material NavigationBar.
         bottomNavigationBar: showBottomNav
-            ? SafeArea(
-                top: false,
-                child: NavigationBarTheme(
-                  data: NavigationBarThemeData(
-                    height: 70,
-                    labelTextStyle:
-                        MaterialStateProperty.resolveWith((states) {
-                      return TextStyle(
-                        fontSize: 12,
-                        fontWeight: states.contains(MaterialState.selected)
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                        letterSpacing: 0.1,
-                      );
-                    }),
-                  ),
-                  child: NavigationBar(
-                    selectedIndex: _navIndex,
-                    labelBehavior:
-                        NavigationDestinationLabelBehavior.alwaysShow,
-                    onDestinationSelected: _onDestinationSelected,
-                    destinations: const [
-                      NavigationDestination(
-                        icon: Text('🏠',
-                            style: TextStyle(fontSize: 20, height: 1)),
-                        selectedIcon: Text('🏠',
-                            style: TextStyle(fontSize: 22, height: 1)),
-                        label: 'Home',
-                      ),
-                      NavigationDestination(
-                        icon: Text('🔍',
-                            style: TextStyle(fontSize: 20, height: 1)),
-                        selectedIcon: Text('🔍',
-                            style: TextStyle(fontSize: 22, height: 1)),
-                        label: 'Search',
-                      ),
-                      NavigationDestination(
-                        icon: Text('🔖',
-                            style: TextStyle(fontSize: 20, height: 1)),
-                        selectedIcon: Text('🔖',
-                            style: TextStyle(fontSize: 22, height: 1)),
-                        label: 'Saved',
-                      ),
-                      NavigationDestination(
-                        icon: Text('🔔',
-                            style: TextStyle(fontSize: 20, height: 1)),
-                        selectedIcon: Text('🔔',
-                            style: TextStyle(fontSize: 22, height: 1)),
-                        label: 'Alerts',
-                      ),
-                    ],
-                  ),
-                ),
+            ? CineBottomNavBar(
+                currentIndex: _navIndex,
+                onTap: _onDestinationSelected,
               )
             : null,
       ),
@@ -448,7 +358,6 @@ class _ThemePicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Record-style map so we get entry.value.label / entry.value.icon
     final options = <ThemeMode, ({String label, IconData icon})>{
       ThemeMode.system: (label: 'System', icon: Icons.auto_awesome),
       ThemeMode.light: (label: 'Light', icon: Icons.light_mode_outlined),
@@ -491,11 +400,8 @@ class _ThemePicker extends StatelessWidget {
   }
 }
 
-/* ────────────────────────── CATEGORY PICKER SHEET ─────────────────────────
- * Called from drawer -> Categories.
- * User can pick All / Entertainment / Sports / Travel / Fashion.
- * "Apply" returns a Set<String> back to RootShell.
- * ───────────────────────────────────────────────────────────────────────────*/
+/* ────────────────────────── CATEGORY PICKER SHEET ───────────────────────── */
+
 class _CategoryPicker extends StatefulWidget {
   const _CategoryPicker({required this.initial});
   final Set<String> initial; // CategoryPrefs.instance.selected
@@ -712,10 +618,6 @@ class _DiscoverPlaceholder extends StatelessWidget {
 /* ───────────────────────────── RESPONSIVE WIDTH ────────────────────────────
  * Centers app content on desktop/tablet and clamps to ~1300px max width.
  * On phones (<768px) we just return child directly for full-bleed.
- *
- * This mirrors the HTML mock's layout:
- *   max-page-width: 1300px;
- *   side padding handled inside HomeScreen (16px).
  * ───────────────────────────────────────────────────────────────────────────*/
 class _ResponsiveWidth extends StatelessWidget {
   const _ResponsiveWidth({super.key, required this.child});
@@ -726,10 +628,10 @@ class _ResponsiveWidth extends StatelessWidget {
     return LayoutBuilder(builder: (context, c) {
       final w = c.maxWidth;
 
-      // Phone / narrow (<768px): use full width, no additional centering.
+      // Phone / narrow (<768px): full width.
       if (w < 768) return child;
 
-      // Tablet / desktop: clamp to 1300px just like the mock.
+      // Tablet / desktop: clamp to 1300px like the mock.
       const maxW = 1300.0;
       return Center(
         child: ConstrainedBox(
@@ -738,5 +640,209 @@ class _ResponsiveWidth extends StatelessWidget {
         ),
       );
     });
+  }
+}
+
+/* ────────────────────────── CINE BOTTOM NAV BAR ───────────────────────────
+ * Glassy, blurred, gradient bar anchored to bottom on compact screens.
+ * Pills match our header chips:
+ *   - active tab: red bg (#dc2626), red glow, white icon+label
+ *   - inactive: transparent bg, 1px red border @ 40% alpha, red icon+label
+ * Safe-area aware. Hidden entirely on width >=768px by RootShell.
+ * --------------------------------------------------------------------------*/
+
+class CineBottomNavBar extends StatelessWidget {
+  const CineBottomNavBar({
+    super.key,
+    required this.currentIndex,
+    required this.onTap,
+  });
+
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+
+  static const _accent = Color(0xFFdc2626);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    // same vibe as header gradient+blur
+    final bgGradientColors = isDark
+        ? <Color>[
+            const Color(0xFF1e2537).withOpacity(0.9),
+            const Color(0xFF0b0f17).withOpacity(0.95),
+          ]
+        : <Color>[
+            theme.colorScheme.surface.withOpacity(0.95),
+            theme.colorScheme.surface.withOpacity(0.9),
+          ];
+
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.06)
+        : Colors.black.withOpacity(0.06);
+
+    final items = <_NavItemSpec>[
+      _NavItemSpec(
+        icon: Icons.home_rounded,
+        label: 'Home',
+      ),
+      _NavItemSpec(
+        icon: Icons.search_rounded,
+        label: 'Search',
+      ),
+      _NavItemSpec(
+        icon: Icons.bookmark_rounded,
+        label: 'Saved',
+      ),
+      _NavItemSpec(
+        icon: Icons.notifications_rounded,
+        label: 'Alerts',
+      ),
+    ];
+
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: bgGradientColors,
+            ),
+            border: Border(
+              top: BorderSide(
+                color: borderColor,
+                width: 1,
+              ),
+            ),
+            boxShadow: [
+              // upward glow like system chrome
+              BoxShadow(
+                color: Colors.black.withOpacity(0.6),
+                blurRadius: 30,
+                spreadRadius: 0,
+                offset: const Offset(0, -20),
+              ),
+            ],
+          ),
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 8,
+            bottom: bottomInset == 0 ? 12 : bottomInset,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: List.generate(items.length, (i) {
+              final spec = items[i];
+              final selected = i == currentIndex;
+              return Expanded(
+                child: _NavButton(
+                  icon: spec.icon,
+                  label: spec.label,
+                  selected: selected,
+                  onTap: () => onTap(i),
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NavItemSpec {
+  const _NavItemSpec({
+    required this.icon,
+    required this.label,
+  });
+  final IconData icon;
+  final String label;
+}
+
+class _NavButton extends StatelessWidget {
+  const _NavButton({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  static const _accent = Color(0xFFdc2626);
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final Color activeBg = _accent;
+    final Color activeBorder = _accent;
+    final Color activeText = Colors.white;
+
+    final Color inactiveBg = Colors.transparent;
+    final Color inactiveBorder = _accent.withOpacity(0.4);
+    final Color inactiveText = _accent;
+
+    final boxShadow = selected
+        ? [
+            BoxShadow(
+              color: _accent.withOpacity(0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ]
+        : null;
+
+    final bg = selected ? activeBg : inactiveBg;
+    final borderColor = selected ? activeBorder : inactiveBorder;
+    final fg = selected ? activeText : inactiveText;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: borderColor, width: 1),
+            boxShadow: boxShadow,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: fg,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  height: 1.2,
+                  color: fg,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
