@@ -1,28 +1,12 @@
 // lib/features/story/story_card.dart
 //
-// Card layout goals:
-// - Consistent, equal-height thumbnails across ALL cards in the grid.
-// - Thumbnail crops from the *bottom* (top stays visible for faces).
-// - CTA row (Watch/Read + Save + Share) baseline-aligns across cards.
-// - Compact spacing (8px / 4px rhythm).
-// - Tapping the card (or Watch/Read) opens StoryPagerScreen so you can
-//   swipe left/right through the surrounding stories.
-//
-// Body layout:
-//
-// Row A  : "<Kind>  •  <publishedAt e.g. '27 Oct 2025, 11:57 AM'>"
-// Row B  : [🕒 badge]  "<addedAt (+Δm)>"
-// Gap 8
-// Title  : up to 3 lines
-// Gap 8
-// Spacer()
-// CTA row: [Watch/Read button][ Save ][ Share ]
-// Gap 8
-// Source : "Source: <domain or source>"
-//
-// The thumbnail height is now derived from a plain 16:9 box with a floor of
-// 180px. No extra boost. That keeps every card's media box the same height,
-// and prevents some cards from looking taller/shorter than others.
+// Card layout goals (updated):
+// - Uniform thumbnail height across ALL cards (real image + placeholder).
+//   -> fixed 16:9 box (min 180px), image aligned to top so we crop bottom.
+// - CTA row (Watch + Save + Share) baseline-aligns across cards in a row.
+//   -> all action buttons are 40px tall
+//   -> we always reserve space for the meta rows above CTA so vertical flow is stable
+// - Compact spacing inside header rows.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -40,25 +24,25 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
-import 'story_pager.dart';        // StoryPagerScreen
-import 'story_image_url.dart';   // thumbnail resolver
+import 'story_pager.dart'; // StoryPagerScreen
+import 'story_image_url.dart'; // thumbnail resolver
 
 class StoryCard extends StatefulWidget {
   const StoryCard({
     super.key,
     required this.story,
 
-    // Optional so SavedScreen / AlertsScreen don't have to pass them.
+    // Optional so legacy callers (SavedScreen, AlertsScreen, etc.) keep compiling.
     this.allStories,
     this.index,
   });
 
   final Story story;
 
-  /// Full list this card lives in (for horizontal swipe in pager). Optional.
+  /// The full list this card is part of (for swipe prev/next in pager).
   final List<Story>? allStories;
 
-  /// Index of [story] in [allStories]. Optional.
+  /// Index of [story] within [allStories].
   final int? index;
 
   @override
@@ -75,7 +59,7 @@ class _StoryCardState extends State<StoryCard> {
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
   Uri? get _linkUrl {
-    // Prefer video url if present
+    // Prefer playable video URL if present.
     final v = _videoUrl;
     if (v != null) return v;
 
@@ -92,9 +76,7 @@ class _StoryCardState extends State<StoryCard> {
 
     final host = _linkUrl?.host?.toLowerCase() ?? '';
     final byHost = host.contains('youtube.com') || host.contains('youtu.be');
-
     final byType = widget.story.kind.toLowerCase() == 'trailer';
-
     final bySource = (widget.story.source ?? '').toLowerCase() == 'youtube';
 
     return byHost || byType || bySource;
@@ -143,7 +125,7 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // List + index we feed into pager
+  // The list + index we'll actually feed into the pager.
   List<Story> get _effectiveStories =>
       (widget.allStories != null && widget.allStories!.isNotEmpty)
           ? widget.allStories!
@@ -152,7 +134,7 @@ class _StoryCardState extends State<StoryCard> {
   int get _effectiveIndex =>
       (widget.index != null && widget.index! >= 0) ? widget.index! : 0;
 
-  // Open pager starting at THIS story
+  // Open pager starting at THIS story. Pager lets the user swipe prev/next.
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
@@ -174,8 +156,18 @@ class _StoryCardState extends State<StoryCard> {
    * ------------------------------------------------------------------------*/
 
   static const List<String> _mon = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
   ];
 
   // e.g. "27 Oct 2025, 11:57 AM"
@@ -226,7 +218,7 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  // Capitalize kind -> "Release", "News", "OTT", etc
+  // Capitalize "news"→"News", keep "OTT" uppercase, etc.
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -234,7 +226,7 @@ class _StoryCardState extends State<StoryCard> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // Bottom "Source: <x>" logic (prefer domain, else source)
+  // Bottom "Source: <x>" (prefer sourceDomain, else source)
   String _attribution(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -279,7 +271,6 @@ class _StoryCardState extends State<StoryCard> {
     final srcText = _attribution(widget.story);
 
     // Card colors:
-    // dark bg ~ rgba(30,37,51,0.35)
     final Color cardBgDark = const Color(0xFF1e2533).withOpacity(0.35);
     final Color cardBgLight = scheme.surface;
     final Color borderColor = isDark
@@ -314,7 +305,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // tap anywhere on card -> pager
+          // tap anywhere on the card → pager
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -322,16 +313,38 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // NEW: consistent media box height
-              //
-              // We use a plain 16:9 box (h = w / (16/9)).
-              // We clamp to min 180 so it's never tiny on very narrow layouts.
-              //
-              // NOTE: we REMOVED the old 1.15 height "boost". That boost caused
-              // some cards to look taller than others depending on width and
-              // made placeholder space feel random.
+              // NEW thumbnail logic:
+              // - Use a consistent 16:9 box (height = w / (16/9)).
+              // - Clamp minimum height to 180.
+              // - No extra "boost", so placeholder and real images match.
               final baseH = w / (16 / 9);
               final mediaH = math.max(180.0, baseH);
+
+              // Build Row B widget with stable reserved height:
+              final Widget rowBWidget = (addedText != null)
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _timeBadge('🕒'),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            addedText!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.grey[400],
+                              fontSize: 13,
+                              fontWeight: FontWeight.w400,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : const SizedBox(
+                      height: 20, // reserve approx same vertical space
+                    );
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -352,25 +365,21 @@ class _StoryCardState extends State<StoryCard> {
                               CachedNetworkImage(
                                 imageUrl: imageUrl,
                                 fit: BoxFit.cover,
-
-                                // IMPORTANT:
-                                // topCenter means we keep the *top* visible
-                                // (usually faces / title card area) and crop
-                                // off the bottom if needed.
+                                // align image to TOP so we crop bottom,
+                                // keeps faces in frame
                                 alignment: Alignment.topCenter,
-
                                 memCacheWidth:
                                     (w.isFinite ? (w * 2).toInt() : 1600),
                                 fadeInDuration:
                                     const Duration(milliseconds: 160),
-                                errorWidget: (_, __, ___) => _FallbackArt(
+                                errorWidget: (_, __, ___) => _FallbackThumb(
                                   isDark: isDark,
                                   scheme: scheme,
                                   kind: widget.story.kind,
                                 ),
                               )
                             else
-                              _FallbackArt(
+                              _FallbackThumb(
                                 isDark: isDark,
                                 scheme: scheme,
                                 kind: widget.story.kind,
@@ -455,28 +464,8 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 4),
 
-                          // Row B: [🕒] "<addedAt (+Δm)>"
-                          if (addedText != null)
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _timeBadge('🕒'),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    addedText!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.grey[400],
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w400,
-                                      height: 1.3,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                          // Row B (or reserved space if missing)
+                          rowBWidget,
 
                           const SizedBox(height: 8),
 
@@ -498,7 +487,7 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 8),
 
-                          // Spacer keeps CTA row locked to the bottom.
+                          // Spacer keeps CTA row locked at the bottom
                           const Spacer(),
 
                           // CTA row
@@ -520,7 +509,7 @@ class _StoryCardState extends State<StoryCard> {
                                                 // open pager and autoplay video
                                                 _openDetails(autoplay: true);
                                               } else {
-                                                // open external link
+                                                // open external article/etc.
                                                 _openExternalLink(context);
                                               }
                                             }
@@ -548,6 +537,7 @@ class _StoryCardState extends State<StoryCard> {
                                   ),
                                 ),
                               ),
+
                               const SizedBox(width: 8),
 
                               // Save chip
@@ -567,6 +557,7 @@ class _StoryCardState extends State<StoryCard> {
                                   );
                                 },
                               ),
+
                               const SizedBox(width: 8),
 
                               // Share chip
@@ -608,7 +599,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Web hover lift; on mobile we wrap with a blur glass for style parity.
+    // Hover lift on web; blurred glass on mobile.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -626,19 +617,18 @@ class _StoryCardState extends State<StoryCard> {
 }
 
 /* --------------------------------------------------------------------------
- * Thumbnail fallback art (when image missing or fails)
- * Matches the same height BoxFit/Alignment logic so there's no jump.
+ * Thumbnail fallback (no image or failed image load)
  * ------------------------------------------------------------------------*/
-class _FallbackArt extends StatelessWidget {
-  const _FallbackArt({
+class _FallbackThumb extends StatelessWidget {
+  final bool isDark;
+  final ColorScheme scheme;
+  final String kind;
+
+  const _FallbackThumb({
     required this.isDark,
     required this.scheme,
     required this.kind,
   });
-
-  final bool isDark;
-  final ColorScheme scheme;
-  final String kind;
 
   @override
   Widget build(BuildContext context) {
@@ -657,9 +647,7 @@ class _FallbackArt extends StatelessWidget {
           ],
         ),
       ),
-      alignment: Alignment.topCenter, // keep important top area visible
-      child: Padding(
-        padding: const EdgeInsets.only(top: 24),
+      child: Center(
         child: _SampleIcon(kind: kind),
       ),
     );
@@ -728,6 +716,7 @@ class _Emoji extends StatelessWidget {
 
 /* --------------------------------------------------------------------------
  * Compact secondary action chip (Save / Share)
+ *  - height bumped to 40 to match Watch button height
  * ------------------------------------------------------------------------*/
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
@@ -747,8 +736,9 @@ class _ActionIconBox extends StatelessWidget {
     final bgColor =
         isDark ? Colors.black.withOpacity(0.4) : Colors.black.withOpacity(0.06);
 
-    final borderColor =
-        isDark ? Colors.white.withOpacity(0.15) : Colors.black.withOpacity(0.15);
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.15)
+        : Colors.black.withOpacity(0.15);
 
     return Tooltip(
       message: tooltip,
@@ -762,8 +752,8 @@ class _ActionIconBox extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           onTap: onTap,
           child: SizedBox(
-            width: 36,
-            height: 36,
+            width: 40,
+            height: 40,
             child: Center(child: icon),
           ),
         ),
