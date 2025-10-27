@@ -2,46 +2,20 @@
 //
 // CinePulse "approved view" card:
 //
-// - Dark navy card (#0f172a style), subtle 1px border, 10-12px radius,
-//   heavy shadow. No glass blur on mobile anymore.
+// - Dark navy card (#0f172a style), subtle 1px border, 10px radius,
+//   heavy shadow/glow on hover.
+// - 16:9 thumbnail cropped from top, min height ~160px.
+//   Divider line under the image for visual alignment.
+// - Meta line:
+//      [Release] [27 Oct 2025, 3:30 PM] [+6m]
+//   kind pill, timestamp, freshness delta in red.
+// - Title: Inter 14px, 3 lines max.
+// - CTA row pinned to bottom (red Watch/Read button + 🔖 + 📤).
+//   Then a "Source: domain.com" line.
+// - No wasted vertical gap.
 //
-// - Thumbnail:
-//   * Always a 16:9 box aligned to Alignment.topCenter so we crop bottom.
-//   * Minimum height ~160px so very narrow columns don't create tiny postage stamps.
-//   * After the image we ALWAYS draw a 1px divider line. This visually
-//     separates media from text, and makes cards look aligned even if
-//     thumbnails differ in real content.
-//
-// - Meta line (SINGLE ROW):
-//     [Release] [27 Oct 2025, 3:30 PM] [+6m]
-//   * "Release" is a small pill (11px text, white on translucent bg).
-//   * Date/time uses 12px, medium weight, white-ish.
-//   * Freshness (+6m) uses accent red #dc2626.
-//   * We no longer show 2 separate timestamp rows.
-//
-// - Title:
-//   * Inter 14px, weight 600, up to 3 lines, white.
-//   * Sits under the meta line with tight spacing.
-//   * No giant gap after title.
-//
-// - CTA row pinned to bottom of the card body using a Stack:
-//   * Red button ("Watch" or "Read"), 36px height, radius 6px.
-//   * Two square icon boxes (🔖 / 📤), each 36x36, same baseline.
-//   * Row left-aligned, not stretched wide.
-//   * On web/desktop we later can tooltip+hover outline red, but base visuals
-//     match the mock: dark boxes w/ subtle border.
-//
-// - "Source: xyz.com" footer line under the CTA row:
-//   * Dim "Source:" label (≈45% white).
-//   * Domain is slightly brighter (~65%) with semi-bold.
-//   * 12px text.
-//
-// - Hover lift on desktop/web: raise card by ~2px, stronger shadow / glow.
-//   * On mobile we still wrap in MouseRegion but _hover just never triggers.
-//
-// NOTE:
-// Remaining per-card height also depends on the grid's childAspectRatio
-// in home_screen.dart. The card itself is now as tight as the approved mock.
+// Remaining total card height still depends on the grid's `childAspectRatio`
+// in home_screen.dart.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -72,7 +46,7 @@ class StoryCard extends StatefulWidget {
 
   final Story story;
 
-  /// Entire list this card belongs to (for swipe-in-pager context).
+  /// Entire list this card belongs to (for swipe paging).
   final List<Story>? allStories;
 
   /// Index of [story] within [allStories].
@@ -240,21 +214,17 @@ class _StoryCardState extends State<StoryCard> {
     final story = widget.story;
     final kind = story.kind.toLowerCase();
 
-    // Published vs ingested/normalized, to compute freshness delta.
+    // Pick timestamps for meta line.
     final DateTime? publishedAt = story.publishedAt ?? story.releaseDate;
     final DateTime? addedAt = story.normalizedAt ?? story.ingestedAtCompat;
 
-    // Pick which timestamp to actually show in the meta line:
-    // (fallback to whichever exists).
     final DateTime? primaryTs = publishedAt ?? addedAt;
     final String? primaryTsText =
         (primaryTs != null) ? _formatMetaTimestamp(primaryTs) : null;
 
-    // Fresh delta (e.g. +6m):
     String? freshnessText;
     if (publishedAt != null && addedAt != null) {
       final diff = addedAt.difference(publishedAt);
-      // Only show if it's meaningful (> 0 min).
       if (diff.inMinutes.abs() >= 1) {
         freshnessText = _formatGapShort(diff);
       }
@@ -265,13 +235,12 @@ class _StoryCardState extends State<StoryCard> {
     final srcText = _sourceDomain(story);
 
     // Card chrome from approved mock:
-    // - bg: dark navy (#0f172a style) in dark mode, surface in light mode
-    // - border: 1px rgba(255,255,255,0.07) in dark
-    // - radius: ~10-12px
-    // - strong shadow
-    final Color cardBg = isDark
-        ? const Color(0xFF0f172a)
-        : scheme.surface;
+    // - bg: dark navy (#0f172a) in dark mode, surface in light mode
+    // - border: 1px subtle
+    // - radius: ~10px
+    // - heavy shadow w/ red glow on hover
+    final Color cardBg =
+        isDark ? const Color(0xFF0f172a) : scheme.surface;
     final Color borderColor = isDark
         ? Colors.white.withOpacity(0.07)
         : Colors.black.withOpacity(0.08);
@@ -309,7 +278,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // Whole card tap opens details (pager). CTA buttons override if tapped.
+          // Whole card tap opens details (pager). CTA buttons override.
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -317,22 +286,21 @@ class _StoryCardState extends State<StoryCard> {
             builder: (context, box) {
               final w = box.maxWidth;
 
-              // fixed 16:9 hero box. Keep a min height so narrow columns
-              // don't become too short.
-              final baseH = w / (16 / 9); // 16:9 => h = w * 0.5625
+              // Maintain a top-aligned 16:9 thumbnail with min height.
+              final baseH = w / (16 / 9); // h = w * 0.5625
               final mediaH = math.max(160.0, baseH);
 
-              // vertical space we must reserve for the pinned CTA section:
-              // CTA row (36) + gap(8) + "Source" (~16) if present
-              final reservedBottom =
-                  36 +
-                  8 +
-                  (srcText.isNotEmpty ? 16 : 0);
+              // Reserve vertical space inside body for pinned CTA + Source.
+              // CTA row (36) + gap(8) + source (~16) if present
+              final double reservedBottom =
+                  36.0 +
+                  8.0 +
+                  (srcText.isNotEmpty ? 16.0 : 0.0);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  /* ───── THUMBNAIL / HERO (top-cropped 16:9) ───── */
+                  /* ───── THUMBNAIL / HERO ───── */
                   SizedBox(
                     height: mediaH,
                     child: Hero(
@@ -385,13 +353,13 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // divider under thumbnail for consistent visual break
+                  // divider under thumbnail
                   Container(
                     height: 1,
                     color: Colors.white.withOpacity(0.07),
                   ),
 
-                  /* ───── BODY / TEXT / CTA (stacked) ───── */
+                  /* ───── BODY / TEXT / CTA ───── */
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(12),
@@ -399,15 +367,14 @@ class _StoryCardState extends State<StoryCard> {
                         builder: (context, bodyBox) {
                           return Stack(
                             children: [
-                              // main text content above reserved CTA space
+                              // Top content
                               Padding(
-                                padding:
-                                    EdgeInsets.only(bottom: reservedBottom),
+                                padding: EdgeInsets.only(bottom: reservedBottom),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // META LINE (single row)
+                                    // Meta line row:
                                     // [Release] [27 Oct 2025, 3:30 PM] [+6m]
                                     _MetaLine(
                                       kindLabel: _kindDisplay(kind),
@@ -417,7 +384,7 @@ class _StoryCardState extends State<StoryCard> {
 
                                     const SizedBox(height: 8),
 
-                                    // TITLE (max 3 lines)
+                                    // Title (up to 3 lines)
                                     Text(
                                       story.title,
                                       maxLines: 3,
@@ -433,7 +400,7 @@ class _StoryCardState extends State<StoryCard> {
                                 ),
                               ),
 
-                              // bottom CTA + source footer (pinned)
+                              // Bottom CTA + source, pinned
                               Positioned(
                                 left: 0,
                                 right: 0,
@@ -448,7 +415,7 @@ class _StoryCardState extends State<StoryCard> {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          // Main red button ("Read"/"Watch")
+                                          // Red Watch/Read button
                                           Semantics(
                                             button: true,
                                             label:
@@ -470,10 +437,12 @@ class _StoryCardState extends State<StoryCard> {
                                                         }
                                                       }
                                                     : null,
-                                                style: ElevatedButton.styleFrom(
+                                                style:
+                                                    ElevatedButton.styleFrom(
                                                   backgroundColor:
                                                       const Color(0xFFdc2626),
-                                                  foregroundColor: Colors.white,
+                                                  foregroundColor:
+                                                      Colors.white,
                                                   elevation: 0,
                                                   minimumSize:
                                                       const Size(0, 36),
@@ -514,8 +483,9 @@ class _StoryCardState extends State<StoryCard> {
                                               return _ActionIconBox(
                                                 tooltip:
                                                     saved ? 'Saved' : 'Save',
-                                                onTap: () => SavedStore.instance
-                                                    .toggle(story.id),
+                                                onTap: () =>
+                                                    SavedStore.instance
+                                                        .toggle(story.id),
                                                 icon: const _Emoji(
                                                   emoji: '🔖',
                                                   size: 16,
@@ -541,7 +511,7 @@ class _StoryCardState extends State<StoryCard> {
 
                                     const SizedBox(height: 8),
 
-                                    // Source footer line
+                                    // Source footer
                                     if (srcText.isNotEmpty)
                                       _SourceLine(domain: srcText),
                                   ],
@@ -561,8 +531,7 @@ class _StoryCardState extends State<StoryCard> {
       ),
     );
 
-    // Hover lift on desktop / web. On mobile, _hover never really triggers,
-    // but MouseRegion is fine (no visual cost).
+    // Hover lift on web/desktop.
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -662,7 +631,7 @@ class _SourceLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // "Source:" is dimmer (~45% white). Domain is brighter (~65%) bold-ish.
+    // "Source:" dimmer (~45% white). Domain brighter (~65%) semi-bold.
     return RichText(
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -805,48 +774,7 @@ class _ActionIconBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // Matches mock: a dark little square w/ thin border.
-    final bgColor = isDark
-        ? const Color(0xFF0b0f17)
-        : Colors.black.withOpacity(0.06);
-
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.12)
-        : Colors.black.withOpacity(0.12);
-
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: Material(
-        color: bgColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: const SizedBox(
-            width: 36,
-            height: 36,
-            child: Center(
-              // icon is passed in, but SizedBox const can't contain non-const,
-              // so we keep this const wrapper minimal and let icon above be const.
-              child: null,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // We can't put the icon directly in the const SizedBox above because "icon"
-  // isn't const. So we override build() again using Stack to overlay "icon".
-  // (Tiny trick to keep InkWell ripple nice & centered without extra padding.)
-  @override
-  Widget buildInkWell(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
+    // Matches the approved mock: dark square w/ thin border.
     final bgColor = isDark
         ? const Color(0xFF0b0f17)
         : Colors.black.withOpacity(0.06);
@@ -876,16 +804,12 @@ class _ActionIconBox extends StatelessWidget {
       ),
     );
   }
-
-  // Actually return buildInkWell in build().
-  @override
-  Widget build(BuildContext context) => buildInkWell(context);
 }
 
 /* ───────────────────── back-compat for ingestedAt ─────────────────────── */
 
 extension _StoryCompat on Story {
-  // Handle older payloads where "ingestedAt" might be nested strangely.
+  // Handle older payloads where "ingestedAt" might be nested.
   DateTime? get ingestedAtCompat {
     try {
       final dyn = (this as dynamic);
