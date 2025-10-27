@@ -898,13 +898,13 @@ class _FeedListState extends State<_FeedList>
     double baseRatio;
     if (maxTileW <= 340) {
       // very narrow column -> phone-ish
-      baseRatio = 1.05;
+      baseRatio = .95;
     } else if (maxTileW <= 400) {
       // mid-width (foldables / small tablet / narrow desktop column)
-      baseRatio = 1.15;
+      baseRatio = .90;
     } else {
       // wide columns (iPad landscape, desktop 3-col+, etc.)
-      baseRatio = 1.30;
+      baseRatio = .85;
     }
 
     // If user has a big textScale, make card even taller.
