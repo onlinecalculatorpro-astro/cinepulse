@@ -74,6 +74,10 @@ class _HomeScreenState extends State<HomeScreen>
     for (final k in _tabs.keys) k: _PagedFeed(tab: k)
   };
 
+  // keys for each category chip ("All", "Entertainment", "Sports")
+  final List<GlobalKey> _chipKeys =
+      List.generate(_tabs.length, (_) => GlobalKey());
+
   bool _offline = false;
   bool _isForeground = true;
 
@@ -272,14 +276,45 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
+  void _ensureChipVisible(int tabIndex) {
+    if (!mounted) return;
+    if (tabIndex < 0 || tabIndex >= _chipKeys.length) return;
+
+    // wait until layout is done so the chip actually has a context/size
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _chipKeys[tabIndex].currentContext;
+      if (ctx == null) return;
+
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+      );
+    });
+  }
+
   void _onTabChanged() {
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+      _ensureChipVisible(_tab.index);
+    }
   }
 
   Future<void> _refreshManually() async {
     final key = _currentTabKey;
     await _feeds[key]!.load(reset: true);
     widget.onHeaderRefresh?.call();
+  }
+
+  void _onTabTap(int i) {
+    if (i >= 0 && i < _tab.length) {
+      _tab.animateTo(i);
+      unawaited(_feeds[_tabs.keys.elementAt(i)]!.load(reset: false));
+      _ensureChipVisible(i);
+    }
   }
 
   void _tickAutoRefresh() {
@@ -522,12 +557,8 @@ class _HomeScreenState extends State<HomeScreen>
             sortMode: _sortMode,
             isDark: isDark,
             theme: theme,
-            onSelect: (i) {
-              if (i >= 0 && i < _tab.length) {
-                _tab.animateTo(i);
-                unawaited(_feeds[_tabs.keys.elementAt(i)]!.load(reset: false));
-              }
-            },
+            chipKeys: _chipKeys,
+            onSelect: _onTabTap,
             onSortTap: (ctx) => _showSortSheet(ctx),
           ),
 
@@ -563,6 +594,7 @@ class _FiltersRow extends StatelessWidget {
     required this.sortMode,
     required this.isDark,
     required this.theme,
+    required this.chipKeys,
     required this.onSelect,
     required this.onSortTap,
   });
@@ -572,6 +604,7 @@ class _FiltersRow extends StatelessWidget {
   final _SortMode sortMode;
   final bool isDark;
   final ThemeData theme;
+  final List<GlobalKey> chipKeys;
   final ValueChanged<int> onSelect;
   final void Function(BuildContext ctx) onSortTap;
 
@@ -579,37 +612,6 @@ class _FiltersRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget activeChip(String label, VoidCallback onTap) {
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: accent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: accent, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: accent.withOpacity(0.4),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: const Text(
-            'All', // We'll override below with copyWith
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
-              color: Colors.white,
-            ),
-          ),
-        ),
-      );
-    }
-
     Widget inactiveChip(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -637,10 +639,11 @@ class _FiltersRow extends StatelessWidget {
       );
     }
 
-    Widget tabChip(int index, String label) {
+    Widget tabChip(int index, String label, Key itemKey) {
       final sel = (activeIndex == index);
       if (sel) {
         return InkWell(
+          key: itemKey,
           borderRadius: BorderRadius.circular(999),
           onTap: () => onSelect(index),
           child: Container(
@@ -669,7 +672,10 @@ class _FiltersRow extends StatelessWidget {
           ),
         );
       }
-      return inactiveChip(label, () => onSelect(index));
+      return Container(
+        key: itemKey,
+        child: inactiveChip(label, () => onSelect(index)),
+      );
     }
 
     Widget sortButton() {
@@ -756,11 +762,11 @@ class _FiltersRow extends StatelessWidget {
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  tabChip(0, 'All'),
+                  tabChip(0, 'All', chipKeys[0]),
                   const SizedBox(width: 8),
-                  tabChip(1, 'Entertainment'),
+                  tabChip(1, 'Entertainment', chipKeys[1]),
                   const SizedBox(width: 8),
-                  tabChip(2, 'Sports'),
+                  tabChip(2, 'Sports', chipKeys[2]),
                 ],
               ),
             ),
