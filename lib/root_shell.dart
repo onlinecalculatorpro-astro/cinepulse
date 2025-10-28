@@ -583,10 +583,13 @@ class _RootShellState extends State<RootShell> {
     final compact = _isCompact(context);
     final showBottomNav = compact;
 
-    // Drawer header line, e.g. "Entertainment · English"
+    // Drawer header status line, e.g. "Entertainment · English"
     final categorySummary = CategoryPrefs.instance.summary();
     final langSummary = _langHeaderSummary(_currentLang);
     final feedStatusLine = '$categorySummary · $langSummary';
+
+    // Content type pill under "Content type" row in drawer
+    final contentTypeLabel = ContentTypePrefs.instance.summary();
 
     // About row text, e.g. "Version 0.1.0 · Early access"
     final versionLabel = 'Version $_kAppVersion · Early access';
@@ -612,14 +615,17 @@ class _RootShellState extends State<RootShell> {
         endDrawer: Builder(
           builder: (drawerCtx) {
             return AppDrawer(
-              // close button in header
+              // required stuff:
               onClose: () => Navigator.of(drawerCtx).pop(),
+              feedStatusLine: feedStatusLine,
+              versionLabel: versionLabel,
+              contentTypeLabel: contentTypeLabel,
 
-              // hook so HomeScreen could refresh if prefs change
+              // so HomeScreen etc can refresh if prefs change
               onFiltersChanged: () => setState(() {}),
 
               // CONTENT & FILTERS
-              onCategoriesTap: () => _openCategoriesPicker(drawerCtx),
+              onCategoryTap: () => _openCategoriesPicker(drawerCtx),
               onContentTypeTap: () => _openContentTypePicker(drawerCtx),
 
               // APPEARANCE
@@ -640,10 +646,6 @@ class _RootShellState extends State<RootShell> {
               appShareUrl: 'https://cinepulse.netlify.app',
               privacyUrl: 'https://example.com/privacy', // TODO real link
               termsUrl: 'https://example.com/terms', // TODO real link
-
-              // info shown in drawer header + About section
-              feedStatusLine: feedStatusLine,
-              versionLabel: versionLabel,
             );
           },
         ),
@@ -1071,8 +1073,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
                   ),
                 ),
                 onPressed: () {
-                  // This fixes the "Apply doesn't work" bug:
-                  // Close the sheet and return the selected type.
+                  // Close sheet and return chosen content type.
                   Navigator.pop(context, _localType);
                 },
               ),
