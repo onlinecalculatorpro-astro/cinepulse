@@ -2,33 +2,48 @@
 //
 // RootShell = main scaffold / shell for the whole app.
 // It owns:
-//  - the tab pages (Home / Discover / Saved / Alerts) via IndexedStack
-//  - the global right-side drawer (AppDrawer)
-//  - the bottom nav on phones only (<768px width)
-//  - deep link handling for /s/<id> → StoryDetailsScreen
+//  • Tab pages (Home / Discover / Saved / Alerts) via an IndexedStack
+//  • The global right-side drawer (AppDrawer)
+//  • The bottom nav on phones only (<768px width)
+//  • Deep link handling for /s/<id> → StoryDetailsScreen
 //
-// In this version we align RootShell with the new drawer/UX model:
+// This version matches the new drawer / header experience you showed:
 //
-// 1. Drawer talks in CinePulse voice:
-//    - Header shows “<CategorySummary> · <LanguageSummary>”
-//      e.g. “All · Mixed language”
-//    - “Version 0.1.0 · Early access”
-//    - Rows are: Show stories in / What to show / Theme / Share / Report / About…
+// 1. Drawer speaks in CinePulse voice.
+//    - Header shows "<CategorySummary> · <LanguageSummary>"
+//      e.g. "Entertainment · English"
+//    - About row shows "Version 0.1.0 · Early access"
+//    - Rows are now:
+//        Show stories in      (> opens language sheet)
+//        What to show         (> opens category sheet)
+//        Theme                (> opens theme sheet)
+//        Share / Report
+//        About / Privacy / Terms
 //
-// 2. Category, Theme, and Language are all changed via bottom sheets
-//    (not inline inside the drawer).
-//    - _openCategoryPicker(), _openThemePicker(), _openLanguagePicker()
+// 2. Drawer rows are now just previews + chevrons.
+//    There are no inline chips/checkboxes in the drawer anymore.
+//    When you tap a row, RootShell opens a bottom sheet:
+//      • _openLanguagePicker()
+//      • _openCategoryPicker()
+//      • _openThemePicker()
 //
-// 3. RootShell keeps minimal session state:
-//    - Which tab is active
-//    - Whether HomeScreen should show its inline search bar
-//    - The user’s current language pref (cp.lang)
+// 3. RootShell keeps lightweight session state:
+//    • Which page is active
+//    • Whether HomeScreen is showing its inline search bar
+//    • The current language pref ('english' | 'hindi' | 'mixed')
+//      so we can label the drawer and header line
 //
-// 4. We still keep phone-vs-desktop responsive behavior exactly the same.
+// 4. Responsive stays the same:
+//    • On <768px width we show the frosted bottom nav
+//    • On ≥768px width we hide bottom nav and center content up to 1300px
 //
-// NOTE: AppDrawer must expose `onLanguageTap`, `onCategoryTap`, `onThemeTap`,
-// and display summary pills for language/categories instead of full controls.
+// NOTE: AppDrawer (widgets/app_drawer.dart) is updated to expect:
+//    onLanguageTap, onCategoryTap, onThemeTap, and it shows
+//    just the summary badge + label for language / category,
+//    not full pickers.
 //
+// NOTE: We persist language via SharedPreferences under 'cp.lang'.
+//       CategoryPrefs is a ChangeNotifier so the drawer can react to it.
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -54,9 +69,8 @@ const String _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
 
 /* ────────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS
- * (What verticals the feed shows)
+ * "What to show" categories that drive the feed.
  * ────────────────────────────────────────────────────────────────────────────*/
-
 class CategoryPrefs extends ChangeNotifier {
   CategoryPrefs._internal();
   static final CategoryPrefs instance = CategoryPrefs._internal();
@@ -67,14 +81,14 @@ class CategoryPrefs extends ChangeNotifier {
   static const String keyTravel = 'travel';
   static const String keyFashion = 'fashion';
 
-  // default feed is "All" (mostly Entertainment right now)
+  // default feed is "All" (which basically means Entertainment today)
   final Set<String> _selected = {keyAll};
 
   Set<String> get selected => Set.unmodifiable(_selected);
 
   bool isSelected(String k) => _selected.contains(k);
 
-  /// Accept a new choice from the sheet, clean it up, and notify.
+  /// Called after user taps "Apply" in the category sheet.
   void applySelection(Set<String> incoming) {
     _selected
       ..clear()
@@ -83,11 +97,7 @@ class CategoryPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// For UI surfaces (“What to show” badge, Drawer header, etc.)
-  /// Examples:
-  ///   "All"
-  ///   "Entertainment"
-  ///   "Entertainment +2"
+  /// Human summary for UI ("All", "Entertainment", "Entertainment +2", ...)
   String summary() {
     if (_selected.contains(keyAll)) return 'All';
 
@@ -113,8 +123,8 @@ class CategoryPrefs extends ChangeNotifier {
   }
 
   /// Guardrails:
-  /// - If “all” plus others are both selected, collapse back to just “all”.
-  /// - Never allow empty.
+  ///  - If "all" and others are both set, collapse back to just "all".
+  ///  - Never allow empty.
   void _sanitize() {
     if (_selected.contains(keyAll) && _selected.length > 1) {
       _selected
@@ -131,7 +141,6 @@ class CategoryPrefs extends ChangeNotifier {
 /* ────────────────────────────────────────────────────────────────────────────
  * ROOT SHELL
  * ────────────────────────────────────────────────────────────────────────────*/
-
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
   @override
@@ -141,23 +150,23 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // IndexedStack page index:
+  // Which tab page is visible:
   // 0 = Home, 1 = Discover, 2 = Saved, 3 = Alerts
   int _pageIndex = 0;
 
-  // Bottom nav highlight:
-  // 0 = Home, 1 = Search (Home+search), 2 = Saved, 3 = Alerts
+  // Which bottom nav item is active:
+  // 0 = Home, 1 = Search (Home+search bar), 2 = Saved, 3 = Alerts
   int _navIndex = 0;
 
-  // Whether HomeScreen should reveal the inline search bar
-  // (used by tapping the "Search" item in bottom nav).
+  // Whether HomeScreen should reveal the inline search bar.
+  // This is how the "Search" tab works on phones.
   bool _showSearchBar = false;
 
-  // Language preference (persisted via SharedPreferences).
-  // Values: 'english' | 'hindi' | 'mixed'
+  // Language pref from SharedPreferences:
+  // 'english' | 'hindi' | 'mixed'
   String _currentLang = 'mixed';
 
-  // Deep link handling (/s/<id>)
+  // Deep link stuff for /s/<id>
   String? _pendingDeepLinkId;
   bool _deepLinkHandled = false;
 
@@ -171,8 +180,7 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /// Load language pref from SharedPreferences so drawer header + pills
-  /// reflect the real setting the first time we open it.
+  /// Pull the saved language so drawer header has the right value.
   Future<void> _loadLangPref() async {
     final sp = await SharedPreferences.getInstance();
     final stored = sp.getString(_kLangPrefKey);
@@ -184,7 +192,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /// For the drawer header line:
+  /// Convert pref string to a nice header string.
   /// english -> "English"
   /// hindi   -> "Hindi"
   /// mixed   -> "Mixed language"
@@ -201,9 +209,9 @@ class _RootShellState extends State<RootShell> {
 
   /* ───────────────────── Deep link helpers ───────────────────── */
 
-  /// Look for /s/<id> in the launch URL, stash it so we can push details later.
+  /// Look for "/s/<id>" in the initial URL so we can open StoryDetails on launch.
   void _captureInitialDeepLink() {
-    final frag = Uri.base.fragment; // on web we might have "#/s/abcdef"
+    final frag = Uri.base.fragment; // e.g. "#/s/abc123" on web
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
     final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
     if (match != null) {
@@ -211,9 +219,9 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /// Try to open pending deep link:
-  /// 1. Poll FeedCache for up to ~4s
-  /// 2. Otherwise fetchStory() directly
+  /// Try to resolve the pending story:
+  /// 1. Poll FeedCache briefly
+  /// 2. Fallback to fetchStory()
   Future<void> _tryOpenPendingDeepLink() async {
     if (_deepLinkHandled || _pendingDeepLinkId == null) return;
 
@@ -237,12 +245,12 @@ class _RootShellState extends State<RootShell> {
       await _openDetails(s);
       return;
     } catch (_) {
-      // swallow network error
+      // swallow errors; just don't open anything
     }
   }
 
-  /// Push StoryDetailsScreen on top of the shell.
-  /// We make sure Home tab is active underneath first.
+  /// Push StoryDetailsScreen for that Story.
+  /// Make sure Home tab is active beneath.
   Future<void> _openDetails(Story s) async {
     _deepLinkHandled = true;
 
@@ -250,6 +258,7 @@ class _RootShellState extends State<RootShell> {
       setState(() => _pageIndex = 0);
     }
 
+    // wait a tick so Scaffold / Navigator are laid out
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!mounted) return;
 
@@ -263,7 +272,7 @@ class _RootShellState extends State<RootShell> {
   void _openDiscover() {
     setState(() {
       _pageIndex = 1;
-      // If Search was highlighted in nav, reset it to Home highlight.
+      // if bottom nav was highlighting Search (index=1), reset to Home highlight
       _navIndex = (_navIndex == 1) ? 0 : _navIndex;
       _showSearchBar = false;
     });
@@ -291,15 +300,15 @@ class _RootShellState extends State<RootShell> {
 
   /* ───────────────────────── Bottom nav taps ─────────────────────────
    *
-   * Bottom nav items:
+   * Bottom nav:
    *   0 = Home
-   *   1 = Search (Home + inline search bar)
+   *   1 = Search (still Home page, but showSearchBar=true)
    *   2 = Saved
    *   3 = Alerts
    */
   void _onDestinationSelected(int i) {
     if (i == 1) {
-      // "Search"
+      // Search tap
       setState(() {
         _pageIndex = 0;
         _navIndex = 1;
@@ -317,16 +326,14 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  /* ───────────────────────── Theme picker (drawer → bottom sheet) ─────────────────────────
+  /* ───────────────────────── THEME PICKER SHEET ─────────────────────────
    *
-   * Sequence:
-   *  - Close the drawer
-   *  - showModalBottomSheet<_ThemePicker>()
-   *  - Save new ThemeMode to AppSettings
+   * Drawer row "Theme" → close drawer → open bottom sheet.
    */
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final current = AppSettings.instance.themeMode;
 
+    // close drawer first
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<ThemeMode>(
@@ -341,12 +348,9 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ─────────────────────── Category picker (drawer → bottom sheet) ───────────────────────
+  /* ─────────────────────── CATEGORY PICKER SHEET ───────────────────────
    *
-   * Sequence:
-   *  - Close the drawer
-   *  - showModalBottomSheet<_CategoryPicker>()
-   *  - CategoryPrefs.instance.applySelection(...)
+   * Drawer row "What to show"
    */
   Future<void> _openCategoryPicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
@@ -366,15 +370,9 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ─────────────────────── Language picker (drawer → bottom sheet) ───────────────────────
+  /* ─────────────────────── LANGUAGE PICKER SHEET ───────────────────────
    *
-   * Drawer row "Show stories in" should act like Theme / Category rows.
-   *
-   * Sequence:
-   *  - Close drawer
-   *  - showModalBottomSheet<_LanguagePicker>()
-   *  - Save new language string ('english' | 'hindi' | 'mixed') to SharedPreferences
-   *  - setState() so Drawer header + pills update next open
+   * Drawer row "Show stories in"
    */
   Future<void> _openLanguagePicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
@@ -398,9 +396,8 @@ class _RootShellState extends State<RootShell> {
 
   /* ───────────────────────── Responsive helpers ─────────────────────────
    *
-   * "compact" == phone-ish width
-   * On compact: bottom nav is visible
-   * On >=768px: bottom nav hidden, desktop-style layout
+   * "compact" == phone-ish. On compact we show the frosted bottom nav.
+   * On >=768px we hide it so the app feels like desktop web.
    */
   bool _isCompact(BuildContext context) =>
       MediaQuery.of(context).size.width < 768;
@@ -410,20 +407,21 @@ class _RootShellState extends State<RootShell> {
     final compact = _isCompact(context);
     final showBottomNav = compact;
 
-    // "What you're seeing right now" line for the drawer header.
-    // e.g. "All · Mixed language"
+    // Drawer header status line:
+    // "<CategorySummary> · <LanguageSummary>"
+    // e.g. "Entertainment · English"
     final categorySummary = CategoryPrefs.instance.summary();
     final langSummary = _langHeaderSummary(_currentLang);
     final feedStatusLine = '$categorySummary · $langSummary';
 
-    // for About CinePulse row
+    // About CinePulse row label:
     final versionLabel = 'Version $_kAppVersion · Early access';
 
     return WillPopScope(
       onWillPop: () async {
-        // Android back button:
-        // If StoryDetailsScreen (or similar) is pushed on top of RootShell's
-        // Navigator, pop that instead of tearing down the whole app.
+        // Android back btn behavior:
+        // If there's something pushed above RootShell (like StoryDetails),
+        // pop that instead of exiting the shell entirely.
         final canPop = Navigator.of(context).canPop();
         if (canPop) Navigator.of(context).maybePop();
         return !canPop;
@@ -431,54 +429,55 @@ class _RootShellState extends State<RootShell> {
       child: Scaffold(
         key: _scaffoldKey,
 
+        // Left drawer is unused
         drawer: null,
         drawerEnableOpenDragGesture: false,
 
-        // Right-side drawer
+        // Right drawer ("Menu")
         endDrawerEnableOpenDragGesture: false,
         endDrawer: Builder(
           builder: (drawerCtx) {
             return AppDrawer(
-              // Close button in header
+              // Tap X in the header
               onClose: () => Navigator.of(drawerCtx).pop(),
 
-              // RootShell should refresh badges/summary text if prefs change
+              // Not strictly required with new sheets, but keep so we can refresh UI
               onFiltersChanged: () => setState(() {}),
 
-              // Rows in drawer, each opens a bottom sheet
+              // Drawer rows:
               onLanguageTap: () => _openLanguagePicker(drawerCtx),
               onCategoryTap: () => _openCategoryPicker(drawerCtx),
               onThemeTap: () => _openThemePicker(drawerCtx),
 
-              // basic links
+              // Links
               appShareUrl: 'https://cinepulse.netlify.app',
-              privacyUrl: 'https://example.com/privacy', // TODO real
-              termsUrl: 'https://example.com/terms',     // TODO real
+              privacyUrl: 'https://example.com/privacy', // TODO real link
+              termsUrl: 'https://example.com/terms',     // TODO real link
 
-              // drawer header + about section metadata
+              // Header + About section text
               feedStatusLine: feedStatusLine,
               versionLabel: versionLabel,
             );
           },
         ),
 
-        // Body with tabs
+        // Body content. We clamp the width on desktop via _ResponsiveWidth.
         body: _ResponsiveWidth(
           child: IndexedStack(
             index: _pageIndex,
             children: [
               _DebugPageWrapper(
                 builder: (ctx) => HomeScreen(
-                  // "Search" state
+                  // Search state (Search tab just toggles this)
                   showSearchBar: _showSearchBar,
 
-                  // header buttons
+                  // Header actions inside HomeScreen
                   onMenuPressed: _openEndDrawer,
                   onOpenDiscover: _openDiscover,
                   onOpenSaved: _openSaved,
                   onOpenAlerts: _openAlerts,
 
-                  // pull-to-refresh / header refresh icon
+                  // Pull-to-refresh / manual refresh from header
                   onHeaderRefresh: () {},
                 ),
               ),
@@ -495,7 +494,7 @@ class _RootShellState extends State<RootShell> {
           ),
         ),
 
-        // Bottom nav bar only on compact screens
+        // Frosted bottom nav only on phones
         bottomNavigationBar: showBottomNav
             ? CineBottomNavBar(
                 currentIndex: _navIndex,
@@ -510,7 +509,7 @@ class _RootShellState extends State<RootShell> {
 /* ───────────────────────── THEME PICKER SHEET ─────────────────────────
  *
  * Bottom sheet for Theme.
- * We keep the CinePulse voice: "Affects Home and story cards".
+ * We use the app voice + keep System / Light / Dark radio list.
  */
 class _ThemePicker extends StatelessWidget {
   const _ThemePicker({required this.current});
@@ -569,14 +568,8 @@ class _ThemePicker extends StatelessWidget {
 
 /* ───────────────────────── LANGUAGE PICKER SHEET ─────────────────────────
  *
- * Bottom sheet for language selection ("Show stories in").
- * Options:
- *   - English
- *   - Hindi
- *   - Mixed
- *
- * Returns the chosen string ('english' | 'hindi' | 'mixed') via Navigator.pop.
- * RootShell then persists it and updates state.
+ * Bottom sheet for "Show stories in".
+ * Returns 'english' | 'hindi' | 'mixed'.
  */
 class _LanguagePicker extends StatefulWidget {
   const _LanguagePicker({required this.current});
@@ -601,37 +594,41 @@ class _LanguagePickerState extends State<_LanguagePicker> {
     });
   }
 
+  Widget _langTile({
+    required String value,
+    required String label,
+    required String desc,
+  }) {
+    final active = (_local == value);
+    final theme = Theme.of(context);
+
+    return RadioListTile<String>(
+      value: value,
+      groupValue: _local,
+      onChanged: (val) => _setLang(val ?? value),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.bodyLarge?.copyWith(
+              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
+          Text(
+            desc,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    Widget langTile({
-      required String value,
-      required String label,
-      required String desc,
-    }) {
-      final active = (_local == value);
-      return RadioListTile<String>(
-        value: value,
-        groupValue: _local,
-        onChanged: (val) => _setLang(val ?? value),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-                  ),
-            ),
-            Text(
-              desc,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-            ),
-          ],
-        ),
-      );
-    }
+    final theme = Theme.of(context);
 
     return SafeArea(
       top: false,
@@ -651,23 +648,23 @@ class _LanguagePickerState extends State<_LanguagePicker> {
             const SizedBox(height: 4),
             Text(
               'Pick the language you want surfaced first.',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 16),
 
-            langTile(
+            _langTile(
               value: 'english',
               label: 'English',
               desc: 'Mostly English titles / captions',
             ),
-            langTile(
+            _langTile(
               value: 'hindi',
               label: 'Hindi',
               desc: 'Mostly Hindi titles / captions',
             ),
-            langTile(
+            _langTile(
               value: 'mixed',
               label: 'Mixed',
               desc: 'Bit of both where it makes sense',
@@ -701,8 +698,8 @@ class _LanguagePickerState extends State<_LanguagePicker> {
 
 /* ───────────────────────── CATEGORY PICKER SHEET ─────────────────────────
  *
- * Bottom sheet for "What to show" categories.
- * We keep the CinePulse tone and explain what's in each bucket.
+ * Bottom sheet for "What to show".
+ * Explains each vertical in normal language.
  */
 class _CategoryPicker extends StatefulWidget {
   const _CategoryPicker({required this.initial});
@@ -744,66 +741,67 @@ class _CategoryPickerState extends State<_CategoryPicker> {
 
   bool _isChecked(String key) => _local.contains(key);
 
+  Widget _row({
+    required String catKey,
+    required IconData icon,
+    required String title,
+    required String desc,
+  }) {
+    final active = _isChecked(catKey);
+    final theme = Theme.of(context);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () => _toggle(catKey),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Checkbox(
+              value: active,
+              onChanged: (_) => _toggle(catKey),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              icon,
+              size: 20,
+              color: active
+                  ? const Color(0xFFdc2626)
+                  : theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
+                  Text(
+                    desc,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    Widget row({
-      required String catKey,
-      required IconData icon,
-      required String title,
-      required String desc,
-    }) {
-      final active = _isChecked(catKey);
-      return InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => _toggle(catKey),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Checkbox(
-                value: active,
-                onChanged: (_) => _toggle(catKey),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(
-                icon,
-                size: 20,
-                color: active
-                    ? const Color(0xFFdc2626)
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        fontWeight:
-                            active ? FontWeight.w600 : FontWeight.w500,
-                      ),
-                    ),
-                    Text(
-                      desc,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
 
     return SafeArea(
       top: false,
@@ -829,31 +827,31 @@ class _CategoryPickerState extends State<_CategoryPicker> {
             ),
             const SizedBox(height: 16),
 
-            row(
+            _row(
               catKey: CategoryPrefs.keyAll,
               icon: Icons.apps_rounded,
               title: 'All',
               desc: 'Everything we have (Entertainment)',
             ),
-            row(
+            _row(
               catKey: CategoryPrefs.keyEntertainment,
               icon: Icons.local_movies_rounded,
               title: 'Entertainment',
               desc: 'Movies, OTT, on-air drama, box office',
             ),
-            row(
+            _row(
               catKey: CategoryPrefs.keySports,
               icon: Icons.sports_cricket_rounded,
               title: 'Sports',
               desc: 'Match talk, highlights (coming soon)',
             ),
-            row(
+            _row(
               catKey: CategoryPrefs.keyTravel,
               icon: Icons.flight_takeoff_rounded,
               title: 'Travel',
               desc: 'Trips, destinations, culture clips (coming soon)',
             ),
-            row(
+            _row(
               catKey: CategoryPrefs.keyFashion,
               icon: Icons.checkroom_rounded,
               title: 'Fashion',
@@ -888,7 +886,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
 
 /* ───────────────────────── DISCOVER PLACEHOLDER ─────────────────────────
  *
- * Simple placeholder for tab 1 until Discover is actually built.
+ * Placeholder tab for "Discover" until it's built.
  */
 class _DiscoverPlaceholder extends StatelessWidget {
   const _DiscoverPlaceholder();
@@ -908,8 +906,9 @@ class _DiscoverPlaceholder extends StatelessWidget {
 
 /* ───────────────────────── RESPONSIVE WIDTH ─────────────────────────
  *
- * Centers & clamps content on desktop/tablet so the grid doesn't get too wide.
- * On narrow screens (<768px) we just use full width.
+ * On desktop/tablet we center and clamp the width to 1300px
+ * so cards don't stretch across absurdly long rows.
+ * On phones (<768px) we just return child directly.
  */
 class _ResponsiveWidth extends StatelessWidget {
   const _ResponsiveWidth({super.key, required this.child});
@@ -919,6 +918,7 @@ class _ResponsiveWidth extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
       final w = c.maxWidth;
+
       if (w < 768) return child;
 
       const maxW = 1300.0;
@@ -934,11 +934,11 @@ class _ResponsiveWidth extends StatelessWidget {
 
 /* ───────────────────────── CINE BOTTOM NAV BAR ─────────────────────────
  *
- * Frosted bottom nav for phones.
- * 0 = Home
- * 1 = Search (Home with inline search bar)
- * 2 = Saved
- * 3 = Alerts
+ * Frosted bottom nav (phone only).
+ *   0 = Home
+ *   1 = Search (Home + inline search bar)
+ *   2 = Saved
+ *   3 = Alerts
  */
 class CineBottomNavBar extends StatelessWidget {
   const CineBottomNavBar({
@@ -1053,8 +1053,7 @@ class _NavItemSpec {
   final String label;
 }
 
-/// A single nav button (Home / Search / Saved / Alerts)
-/// Red glow/red border when selected.
+/// Single bottom-nav item (Home / Search / Saved / Alerts) with red glow on active.
 class _NavButton extends StatelessWidget {
   const _NavButton({
     required this.icon,
@@ -1139,13 +1138,13 @@ class _NavButton extends StatelessWidget {
   }
 }
 
-/* ───────────────────── DEBUG WRAPPER / ERROR FALLBACK ─────────────────────
+/* ───────────────────────── DEBUG WRAPPER / ERROR FALLBACK ─────────────────────
  *
- * If a tab throws during build in release APK, you'd normally see blank/white.
- * _DebugPageWrapper catches that and shows a text dump instead, so we can
- * screenshot and debug.
+ * If a tab/widget throws during build (esp. in release builds),
+ * Flutter might just render a blank region.
+ * _DebugPageWrapper instead shows an error page with the exception + stack,
+ * so you can screenshot it and send it.
  */
-
 class _DebugPageWrapper extends StatelessWidget {
   const _DebugPageWrapper({required this.builder});
 
