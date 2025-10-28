@@ -651,15 +651,24 @@ class _RootShellState extends State<RootShell> {
         ),
 
         // Main body: active tab page, width-clamped on desktop
-        body: _ResponsiveWidth(
-          child: IndexedStack(
-            index: _pageIndex,
-            children: const [
-              _HomeTabHost(),
-              _DiscoverPlaceholder(),
-              SavedScreen(),
-              AlertsScreen(),
-            ],
+        //
+        // CHANGE MADE HERE:
+        // We wrap the IndexedStack host in a SafeArea with top:true and bottom:false
+        // so our custom header on HomeScreen does NOT sit under the system
+        // status bar on phones.
+        body: SafeArea(
+          top: true,
+          bottom: false,
+          child: _ResponsiveWidth(
+            child: IndexedStack(
+              index: _pageIndex,
+              children: const [
+                _HomeTabHost(),
+                _DiscoverPlaceholder(),
+                SavedScreen(),
+                AlertsScreen(),
+              ],
+            ),
           ),
         ),
 
