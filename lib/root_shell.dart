@@ -8,17 +8,17 @@
 //  • The bottom nav on phones only (<768px width)
 //  • Deep link handling for /s/<id> → StoryDetailsScreen
 //
-// Drawer spec:
+// DRAWER SPEC (LATEST):
 //
 // HEADER
 //   CinePulse brand block
 //   tagline ("Movies & OTT, in a minute.")
-//   "<CategorySummary> · <LanguageSummary>"  (feedStatusLine)
+//   "<CategorySummary> · <LanguageSummary>"  (feedStatusLine from RootShell)
 //   "x" close button
 //
 // CONTENT & FILTERS
-//   Show stories in     (> opens _openLanguagePicker sheet)
-//   What to show        (> opens _openCategoryPicker sheet)
+//   Categories          (> opens _openCategoryPicker sheet)
+//   Content type        (> opens _openContentTypePicker sheet)
 //
 // APPEARANCE
 //   Theme               (> opens _openThemePicker sheet)
@@ -39,12 +39,16 @@
 //   Terms of Use
 //
 // RootShell is responsible for:
-//   • reading language preference from SharedPreferences ('english' | 'hindi' | 'mixed' ...)
+//   • reading feed language preference from SharedPreferences
+//       ('english' | 'hindi' | 'mixed' ...). This ONLY affects the header
+//       summary line right now.
+//   • holding category filter state (CategoryPrefs.instance)
+//   • holding content type state ('all' | 'read' | 'video' | 'audio')
 //   • exposing callbacks the drawer calls for each row
 //   • handling responsive layout (bottom nav only under 768px width)
 //
 // NOTE: AppDrawer is "dumb". It just renders rows and calls the callbacks:
-//       onLanguageTap, onCategoryTap, onThemeTap,
+//       onCategoryTap, onContentTypeTap, onThemeTap,
 //       onAppLanguageTap, onSubscriptionTap, onLoginTap.
 //
 // We close the drawer first, then RootShell shows a bottom sheet.
@@ -74,7 +78,7 @@ const String _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
 
 /* ────────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS
- * Drives "What to show".
+ * Drives "Categories".
  * ────────────────────────────────────────────────────────────────────────────*/
 class CategoryPrefs extends ChangeNotifier {
   CategoryPrefs._internal();
@@ -171,12 +175,19 @@ class _RootShellState extends State<RootShell> {
   // Whether HomeScreen should show its inline search bar (Search tab behavior)
   bool _showSearchBar = false;
 
-  // 'english' | 'hindi' | 'mixed' | etc. (feed language / "Show stories in")
+  // 'english' | 'hindi' | 'mixed' | etc.
+  // This is the feed-language pref. We still surface it in the header
+  // line inside the drawer as part of feedStatusLine, but we no longer
+  // expose a row to change it in the drawer.
   String _currentLang = 'mixed';
 
   // App UI language for CinePulse chrome ("App language" setting).
   // We'll start with English and let the user pick from the 7-language sheet.
   String _appUiLanguageCode = 'english_ui';
+
+  // Content type filter code for the drawer's "Content type".
+  // 'all' | 'read' | 'video' | 'audio'
+  String _contentType = 'all';
 
   // Deep link handling (/s/<id>)
   String? _pendingDeepLinkId;
@@ -194,7 +205,7 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /// Read language preference so drawer + header text is correct (feed lang).
+  /// Read feed language preference so drawer header text is correct.
   Future<void> _loadLangPref() async {
     final sp = await SharedPreferences.getInstance();
     final stored = sp.getString(_kLangPrefKey);
@@ -206,7 +217,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /// Convert pref code → friendly string for the drawer header.
+  /// Convert feed language pref code → friendly string for the drawer header.
   /// english → "English"
   /// hindi   → "Hindi"
   /// mixed   → "Mixed language"
@@ -218,6 +229,24 @@ class _RootShellState extends State<RootShell> {
         return 'Hindi';
       default:
         return 'Mixed language';
+    }
+  }
+
+  /// Convert content type code → user-facing label for the drawer row.
+  /// 'all'   → "All"
+  /// 'read'  → "Read"
+  /// 'video' → "Video"
+  /// 'audio' → "Audio"
+  String _contentTypeLabel(String code) {
+    switch (code) {
+      case 'read':
+        return 'Read';
+      case 'video':
+        return 'Video';
+      case 'audio':
+        return 'Audio';
+      default:
+        return 'All';
     }
   }
 
@@ -372,7 +401,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  // CATEGORIES ("What to show")
+  // CATEGORIES ("Categories")
   Future<void> _openCategoryPicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
@@ -391,22 +420,20 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  // FEED LANGUAGE ("Show stories in")
-  Future<void> _openLanguagePicker(BuildContext drawerContext) async {
+  // CONTENT TYPE ("Content type")
+  Future<void> _openContentTypePicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
-      builder: (_) => _LanguagePicker(current: _currentLang),
+      builder: (_) => _ContentTypePicker(current: _contentType),
     );
 
     if (picked != null && picked.isNotEmpty) {
-      final sp = await SharedPreferences.getInstance();
-      await sp.setString(_kLangPrefKey, picked);
       if (mounted) {
         setState(() {
-          _currentLang = picked;
+          _contentType = picked;
         });
       }
     }
@@ -530,6 +557,9 @@ class _RootShellState extends State<RootShell> {
     // About row text, e.g. "Version 0.1.0 · Early access"
     final versionLabel = 'Version $_kAppVersion · Early access';
 
+    // Content type label for drawer row
+    final ctLabel = _contentTypeLabel(_contentType);
+
     return WillPopScope(
       onWillPop: () async {
         // Android back button behavior:
@@ -558,8 +588,8 @@ class _RootShellState extends State<RootShell> {
               onFiltersChanged: () => setState(() {}),
 
               // CONTENT & FILTERS
-              onLanguageTap: () => _openLanguagePicker(drawerCtx),
               onCategoryTap: () => _openCategoryPicker(drawerCtx),
+              onContentTypeTap: () => _openContentTypePicker(drawerCtx),
 
               // APPEARANCE
               onThemeTap: () => _openThemePicker(drawerCtx),
@@ -583,6 +613,9 @@ class _RootShellState extends State<RootShell> {
               // info shown in drawer header + About section
               feedStatusLine: feedStatusLine,
               versionLabel: versionLabel,
+
+              // new: content type display for the "Content type" row
+              contentTypeLabel: ctLabel,
             );
           },
         ),
@@ -690,20 +723,23 @@ class _ThemePicker extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── LANGUAGE PICKER SHEET ─────────────────────────
+/* ───────────────────────── CONTENT TYPE PICKER SHEET ─────────────────────────
  *
- * Bottom sheet for "Show stories in".
- * Returns 'english' | 'hindi' | 'mixed'.
+ * Bottom sheet for "Content type".
+ * Lets user pick one of:
+ *   All / Read / Video / Audio
+ *
+ * Returns 'all' | 'read' | 'video' | 'audio'.
  */
-class _LanguagePicker extends StatefulWidget {
-  const _LanguagePicker({required this.current});
+class _ContentTypePicker extends StatefulWidget {
+  const _ContentTypePicker({required this.current});
   final String current;
 
   @override
-  State<_LanguagePicker> createState() => _LanguagePickerState();
+  State<_ContentTypePicker> createState() => _ContentTypePickerState();
 }
 
-class _LanguagePickerState extends State<_LanguagePicker> {
+class _ContentTypePickerState extends State<_ContentTypePicker> {
   late String _local;
 
   @override
@@ -712,13 +748,13 @@ class _LanguagePickerState extends State<_LanguagePicker> {
     _local = widget.current;
   }
 
-  void _setLang(String v) {
+  void _setType(String v) {
     setState(() {
       _local = v;
     });
   }
 
-  Widget _langTile({
+  Widget _typeTile({
     required String value,
     required String label,
     required String desc,
@@ -729,7 +765,7 @@ class _LanguagePickerState extends State<_LanguagePicker> {
     return RadioListTile<String>(
       value: value,
       groupValue: _local,
-      onChanged: (val) => _setLang(val ?? value),
+      onChanged: (val) => _setType(val ?? value),
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -763,7 +799,7 @@ class _LanguagePickerState extends State<_LanguagePicker> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Show stories in',
+              'Content type',
               style: GoogleFonts.inter(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -771,27 +807,32 @@ class _LanguagePickerState extends State<_LanguagePicker> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Pick the language you want surfaced first.',
+              'Pick what format you want first.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
 
-            _langTile(
-              value: 'english',
-              label: 'English',
-              desc: 'Mostly English titles / captions',
+            _typeTile(
+              value: 'all',
+              label: 'All',
+              desc: 'Everything',
             ),
-            _langTile(
-              value: 'hindi',
-              label: 'Hindi',
-              desc: 'Mostly Hindi titles / captions',
+            _typeTile(
+              value: 'read',
+              label: 'Read',
+              desc: 'Text / captions',
             ),
-            _langTile(
-              value: 'mixed',
-              label: 'Mixed',
-              desc: 'Bit of both where it makes sense',
+            _typeTile(
+              value: 'video',
+              label: 'Video',
+              desc: 'Clips, trailers, interviews',
+            ),
+            _typeTile(
+              value: 'audio',
+              label: 'Audio',
+              desc: 'Pod bites (coming soon)',
             ),
 
             const SizedBox(height: 24),
@@ -822,8 +863,9 @@ class _LanguagePickerState extends State<_LanguagePicker> {
 
 /* ───────────────────────── CATEGORY PICKER SHEET ─────────────────────────
  *
- * Bottom sheet for "What to show".
+ * Bottom sheet for "Categories".
  * Lets user pick All / Entertainment / Sports / Travel / Fashion.
+ * Multi-select except "All" which is exclusive.
  */
 class _CategoryPicker extends StatefulWidget {
   const _CategoryPicker({required this.initial});
@@ -938,7 +980,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'What to show',
+              'Categories',
               style: GoogleFonts.inter(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -1013,7 +1055,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
 /* ───────────────────────── APP LANGUAGE SHEET ─────────────────────────
  *
  * Bottom sheet for "App language".
- * Lists CinePulse UI languages (not feed languages).
+ * Lists CinePulse UI languages (not feed/story language).
  * We show 7 options:
  *
  *  english_ui   English / English
@@ -1128,24 +1170,20 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
             const SizedBox(height: 4),
             Text(
               'Change the CinePulse UI language. Headlines and story text '
-              'still follow your "Show stories in" setting.',
+              'still follow your feed settings.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
 
-            // scrollable-ish list if it needs more height
-            Flexible(
-              fit: FlexFit.loose,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 360),
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: _langs.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 4),
-                  itemBuilder: (_, i) => _langRow(_langs[i], theme),
-                ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 360),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: _langs.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 4),
+                itemBuilder: (_, i) => _langRow(_langs[i], theme),
               ),
             ),
 
