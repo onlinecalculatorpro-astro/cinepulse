@@ -412,6 +412,10 @@ class _HomeScreenState extends State<HomeScreen>
     final isDark = theme.brightness == Brightness.dark;
     final bgColor = isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
+    // breakpoint for mobile vs wide layout
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWide = screenWidth >= 768;
+
     return Scaffold(
       backgroundColor: bgColor,
       appBar: PreferredSize(
@@ -447,18 +451,23 @@ class _HomeScreenState extends State<HomeScreen>
                 children: [
                   const _ModernBrandLogo(),
                   const Spacer(),
-                  _HeaderIconButton(
-                    tooltip: 'Saved',
-                    icon: Icons.bookmark_rounded,
-                    onTap: widget.onOpenSaved,
-                  ),
-                  const SizedBox(width: 8),
-                  _HeaderIconButton(
-                    tooltip: 'Alerts',
-                    icon: Icons.notifications_rounded,
-                    onTap: widget.onOpenAlerts,
-                  ),
-                  const SizedBox(width: 8),
+
+                  // Saved + Alerts should only appear on wide layouts.
+                  if (isWide) ...[
+                    _HeaderIconButton(
+                      tooltip: 'Saved',
+                      icon: Icons.bookmark_rounded,
+                      onTap: widget.onOpenSaved,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Alerts',
+                      icon: Icons.notifications_rounded,
+                      onTap: widget.onOpenAlerts,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+
                   _HeaderIconButton(
                     tooltip: 'Discover',
                     icon: kIsWeb
@@ -510,6 +519,7 @@ class _HomeScreenState extends State<HomeScreen>
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
+            sortMode: _sortMode,
             isDark: isDark,
             theme: theme,
             onSelect: (i) {
@@ -544,65 +554,13 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   CRASH VIEW
-   ───────────────────────────────────────────────────────────────────────── */
-class _HomeCrashedView extends StatelessWidget {
-  const _HomeCrashedView({
-    required this.error,
-    required this.stack,
-  });
-
-  final String error;
-  final String stack;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.black,
-      width: double.infinity,
-      height: double.infinity,
-      padding: const EdgeInsets.all(16),
-      child: SafeArea(
-        child: SingleChildScrollView(
-          child: DefaultTextStyle(
-            style: const TextStyle(
-              fontSize: 14,
-              color: Colors.redAccent,
-              fontFamily: 'monospace',
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'HomeScreen crashed while building.\n'
-                  'Screenshot this and send it 👇\n',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.redAccent,
-                  ),
-                ),
-                const Text('Error:'),
-                Text(error),
-                const SizedBox(height: 12),
-                const Text('Stack:'),
-                Text(stack),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/* ──────────────────────────────────────────────────────────────────────────
    Filters row (used in simple layout instead of SliverPersistentHeader)
    ───────────────────────────────────────────────────────────────────────── */
 class _FiltersRow extends StatelessWidget {
   const _FiltersRow({
     required this.activeIndex,
     required this.sortLabel,
+    required this.sortMode,
     required this.isDark,
     required this.theme,
     required this.onSelect,
@@ -611,6 +569,7 @@ class _FiltersRow extends StatelessWidget {
 
   final int activeIndex;
   final String sortLabel;
+  final _SortMode sortMode;
   final bool isDark;
   final ThemeData theme;
   final ValueChanged<int> onSelect;
@@ -714,6 +673,22 @@ class _FiltersRow extends StatelessWidget {
     }
 
     Widget sortButton() {
+      IconData sortIcon;
+      switch (sortMode) {
+        case _SortMode.latest:
+          sortIcon = Icons.access_time_rounded;
+          break;
+        case _SortMode.trending:
+          sortIcon = Icons.local_fire_department_rounded;
+          break;
+        case _SortMode.views:
+          sortIcon = Icons.visibility_rounded;
+          break;
+        case _SortMode.editorsPick:
+          sortIcon = Icons.star_rounded;
+          break;
+      }
+
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => onSortTap(context),
@@ -730,8 +705,8 @@ class _FiltersRow extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.access_time_rounded,
+              Icon(
+                sortIcon,
                 size: 16,
                 color: accent,
               ),
