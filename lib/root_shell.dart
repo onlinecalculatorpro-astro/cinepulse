@@ -638,31 +638,16 @@ class _RootShellState extends State<RootShell> {
         body: _ResponsiveWidth(
           child: IndexedStack(
             index: _pageIndex,
-            children: [
-              _DebugPageWrapper(
-                builder: (ctx) => HomeScreen(
-                  // toggles when user taps Search in bottom nav
-                  showSearchBar: _showSearchBar,
-
-                  // header actions from Home
-                  onMenuPressed: _openEndDrawer,
-                  onOpenDiscover: _openDiscover,
-                  onOpenSaved: _openSaved,
-                  onOpenAlerts: _openAlerts,
-
-                  // pull-to-refresh / manual refresh button in header
-                  onHeaderRefresh: () {},
-                ),
-              ),
-              _DebugPageWrapper(
-                builder: (ctx) => const _DiscoverPlaceholder(),
-              ),
-              _DebugPageWrapper(
-                builder: (ctx) => const SavedScreen(),
-              ),
-              _DebugPageWrapper(
-                builder: (ctx) => const AlertsScreen(),
-              ),
+            children: const [
+              // Home
+              // (We removed the _DebugPageWrapper to avoid analyzer confusion.)
+              // If you still want crash-guarding, add it back later.
+              // For now keep it simple to fix the compile error.
+              // We keep the same order of tabs.
+              _HomeTabHost(),
+              _DiscoverPlaceholder(),
+              SavedScreen(),
+              AlertsScreen(),
             ],
           ),
         ),
@@ -675,6 +660,24 @@ class _RootShellState extends State<RootShell> {
               )
             : null,
       ),
+    );
+  }
+}
+
+/* Small host widget to pass callbacks into HomeScreen without wrappers above */
+class _HomeTabHost extends StatelessWidget {
+  const _HomeTabHost();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_RootShellState>()!;
+    return HomeScreen(
+      showSearchBar: state._showSearchBar,
+      onMenuPressed: state._openEndDrawer,
+      onOpenDiscover: state._openDiscover,
+      onOpenSaved: state._openSaved,
+      onOpenAlerts: state._openAlerts,
+      onHeaderRefresh: () {},
     );
   }
 }
