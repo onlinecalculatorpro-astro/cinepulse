@@ -8,16 +8,16 @@
 //  • The bottom nav on phones only (<768px width)
 //  • Deep link handling for /s/<id> → StoryDetailsScreen
 //
-// DRAWER SPEC (LATEST):
+// Drawer spec (CURRENT):
 //
 // HEADER
 //   CinePulse brand block
 //   tagline ("Movies & OTT, in a minute.")
-//   "<CategorySummary> · <LanguageSummary>"  (feedStatusLine from RootShell)
+//   "<CategorySummary> · <LanguageSummary>"  (feedStatusLine)
 //   "x" close button
 //
 // CONTENT & FILTERS
-//   Categories          (> opens _openCategoryPicker sheet)
+//   Categories          (> opens _openCategoriesPicker sheet)
 //   Content type        (> opens _openContentTypePicker sheet)
 //
 // APPEARANCE
@@ -28,7 +28,7 @@
 //   Report an issue     (> email)
 //
 // SETTINGS
-//   App language        (> opens _openAppLanguageSettings bottom sheet
+//   App language        (> _openAppLanguageSettings() bottom sheet
 //                          with 7 Indian languages for CinePulse UI chrome)
 //   Subscription        (> _openSubscriptionSettings() bottom sheet)
 //   Sign in             (> _openAccountSettings() bottom sheet)
@@ -39,18 +39,13 @@
 //   Terms of Use
 //
 // RootShell is responsible for:
-//   • reading feed language preference from SharedPreferences
-//       ('english' | 'hindi' | 'mixed' ...). This ONLY affects the header
-//       summary line right now.
-//   • holding category filter state (CategoryPrefs.instance)
-//   • holding content type state ('all' | 'read' | 'video' | 'audio')
+//   • reading prefs from SharedPreferences
+//        - feed lang ('english' | 'hindi' | 'mixed' ...)  [for header summary]
+//        - content type ('all' | 'read' | 'video' | 'audio')
 //   • exposing callbacks the drawer calls for each row
 //   • handling responsive layout (bottom nav only under 768px width)
 //
-// NOTE: AppDrawer is "dumb". It just renders rows and calls the callbacks:
-//       onCategoryTap, onContentTypeTap, onThemeTap,
-//       onAppLanguageTap, onSubscriptionTap, onLoginTap.
-//
+// AppDrawer is "dumb": it just calls the callbacks we pass in.
 // We close the drawer first, then RootShell shows a bottom sheet.
 //
 
@@ -75,6 +70,8 @@ import 'widgets/app_drawer.dart';
 
 const String _kAppVersion = '0.1.0';
 const String _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
+const String _kContentTypePrefKey =
+    'cp.contentType'; // 'all' | 'read' | 'video' | 'audio'
 
 /* ────────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS
@@ -151,6 +148,43 @@ class CategoryPrefs extends ChangeNotifier {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
+ * CONTENT TYPE PREFS
+ * Drives "Content type".
+ * 'all' | 'read' | 'video' | 'audio'
+ * ────────────────────────────────────────────────────────────────────────────*/
+class ContentTypePrefs extends ChangeNotifier {
+  ContentTypePrefs._internal();
+  static final ContentTypePrefs instance = ContentTypePrefs._internal();
+
+  static const String typeAll = 'all';
+  static const String typeRead = 'read';
+  static const String typeVideo = 'video';
+  static const String typeAudio = 'audio';
+
+  String _selected = typeAll;
+
+  String get selected => _selected;
+
+  void setSelected(String v) {
+    _selected = v;
+    notifyListeners();
+  }
+
+  String summary() {
+    switch (_selected) {
+      case typeRead:
+        return 'Read';
+      case typeVideo:
+        return 'Video';
+      case typeAudio:
+        return 'Audio';
+      default:
+        return 'All';
+    }
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
  * ROOT SHELL
  * Main scaffold for the app.
  * ────────────────────────────────────────────────────────────────────────────*/
@@ -175,19 +209,16 @@ class _RootShellState extends State<RootShell> {
   // Whether HomeScreen should show its inline search bar (Search tab behavior)
   bool _showSearchBar = false;
 
+  // feed language / for header summary
   // 'english' | 'hindi' | 'mixed' | etc.
-  // This is the feed-language pref. We still surface it in the header
-  // line inside the drawer as part of feedStatusLine, but we no longer
-  // expose a row to change it in the drawer.
   String _currentLang = 'mixed';
 
   // App UI language for CinePulse chrome ("App language" setting).
   // We'll start with English and let the user pick from the 7-language sheet.
   String _appUiLanguageCode = 'english_ui';
 
-  // Content type filter code for the drawer's "Content type".
-  // 'all' | 'read' | 'video' | 'audio'
-  String _contentType = 'all';
+  // Content type ('all' | 'read' | 'video' | 'audio')
+  String _currentContentType = ContentTypePrefs.typeAll;
 
   // Deep link handling (/s/<id>)
   String? _pendingDeepLinkId;
@@ -198,6 +229,7 @@ class _RootShellState extends State<RootShell> {
     super.initState();
     _captureInitialDeepLink();
     _loadLangPref();
+    _loadContentTypePref();
 
     // After first frame, try to open the story deep link if any.
     WidgetsBinding.instance.addPostFrameCallback(
@@ -205,7 +237,7 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /// Read feed language preference so drawer header text is correct.
+  /// Read language preference so drawer header text is correct.
   Future<void> _loadLangPref() async {
     final sp = await SharedPreferences.getInstance();
     final stored = sp.getString(_kLangPrefKey);
@@ -217,7 +249,20 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /// Convert feed language pref code → friendly string for the drawer header.
+  /// Read content type preference so the sheet starts highlighted correctly.
+  Future<void> _loadContentTypePref() async {
+    final sp = await SharedPreferences.getInstance();
+    final stored = sp.getString(_kContentTypePrefKey);
+    if (!mounted) return;
+    if (stored != null && stored.isNotEmpty) {
+      setState(() {
+        _currentContentType = stored;
+        ContentTypePrefs.instance.setSelected(stored);
+      });
+    }
+  }
+
+  /// Convert feed lang code → friendly string for the drawer header.
   /// english → "English"
   /// hindi   → "Hindi"
   /// mixed   → "Mixed language"
@@ -229,24 +274,6 @@ class _RootShellState extends State<RootShell> {
         return 'Hindi';
       default:
         return 'Mixed language';
-    }
-  }
-
-  /// Convert content type code → user-facing label for the drawer row.
-  /// 'all'   → "All"
-  /// 'read'  → "Read"
-  /// 'video' → "Video"
-  /// 'audio' → "Audio"
-  String _contentTypeLabel(String code) {
-    switch (code) {
-      case 'read':
-        return 'Read';
-      case 'video':
-        return 'Video';
-      case 'audio':
-        return 'Audio';
-      default:
-        return 'All';
     }
   }
 
@@ -402,7 +429,7 @@ class _RootShellState extends State<RootShell> {
   }
 
   // CATEGORIES ("Categories")
-  Future<void> _openCategoryPicker(BuildContext drawerContext) async {
+  Future<void> _openCategoriesPicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<Set<String>>(
@@ -420,30 +447,36 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  // CONTENT TYPE ("Content type")
+  // CONTENT TYPE ("Content type" = All / Read / Video / Audio)
   Future<void> _openContentTypePicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
-      builder: (_) => _ContentTypePicker(current: _contentType),
+      builder: (_) => _ContentTypePicker(current: _currentContentType),
     );
 
     if (picked != null && picked.isNotEmpty) {
-      if (mounted) {
-        setState(() {
-          _contentType = picked;
-        });
-      }
+      // Save locally
+      if (!mounted) return;
+      setState(() {
+        _currentContentType = picked;
+      });
+
+      // Update global prefs singleton
+      ContentTypePrefs.instance.setSelected(picked);
+
+      // Persist for next launch
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString(_kContentTypePrefKey, picked);
     }
   }
 
   // SETTINGS → "App language"
   //
-  // We close the drawer and then open a dedicated bottom sheet that lists
-  // 7 UI languages for CinePulse chrome (English, Hindi, Bengali, Marathi,
-  // Telugu, Tamil, Gujarati). User picks one and taps Apply.
+  // We'll open a dedicated sheet that lists 7 CinePulse UI languages.
+  // User picks one and taps Apply.
   Future<void> _openAppLanguageSettings(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
@@ -475,7 +508,8 @@ class _RootShellState extends State<RootShell> {
   Future<void> _openAccountSettings() async {
     await _showComingSoonSheet(
       title: 'Sign in',
-      message: 'Log in to sync your saved stories and alerts across devices.',
+      message:
+          'Log in to sync your saved stories and alerts across devices.',
     );
   }
 
@@ -557,9 +591,6 @@ class _RootShellState extends State<RootShell> {
     // About row text, e.g. "Version 0.1.0 · Early access"
     final versionLabel = 'Version $_kAppVersion · Early access';
 
-    // Content type label for drawer row
-    final ctLabel = _contentTypeLabel(_contentType);
-
     return WillPopScope(
       onWillPop: () async {
         // Android back button behavior:
@@ -584,11 +615,11 @@ class _RootShellState extends State<RootShell> {
               // close button in header
               onClose: () => Navigator.of(drawerCtx).pop(),
 
-              // keep this to allow HomeScreen refresh if prefs change
+              // hook so HomeScreen could refresh if prefs change
               onFiltersChanged: () => setState(() {}),
 
               // CONTENT & FILTERS
-              onCategoryTap: () => _openCategoryPicker(drawerCtx),
+              onCategoriesTap: () => _openCategoriesPicker(drawerCtx),
               onContentTypeTap: () => _openContentTypePicker(drawerCtx),
 
               // APPEARANCE
@@ -613,9 +644,6 @@ class _RootShellState extends State<RootShell> {
               // info shown in drawer header + About section
               feedStatusLine: feedStatusLine,
               versionLabel: versionLabel,
-
-              // new: content type display for the "Content type" row
-              contentTypeLabel: ctLabel,
             );
           },
         ),
@@ -723,149 +751,10 @@ class _ThemePicker extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── CONTENT TYPE PICKER SHEET ─────────────────────────
- *
- * Bottom sheet for "Content type".
- * Lets user pick one of:
- *   All / Read / Video / Audio
- *
- * Returns 'all' | 'read' | 'video' | 'audio'.
- */
-class _ContentTypePicker extends StatefulWidget {
-  const _ContentTypePicker({required this.current});
-  final String current;
-
-  @override
-  State<_ContentTypePicker> createState() => _ContentTypePickerState();
-}
-
-class _ContentTypePickerState extends State<_ContentTypePicker> {
-  late String _local;
-
-  @override
-  void initState() {
-    super.initState();
-    _local = widget.current;
-  }
-
-  void _setType(String v) {
-    setState(() {
-      _local = v;
-    });
-  }
-
-  Widget _typeTile({
-    required String value,
-    required String label,
-    required String desc,
-  }) {
-    final active = (_local == value);
-    final theme = Theme.of(context);
-
-    return RadioListTile<String>(
-      value: value,
-      groupValue: _local,
-      onChanged: (val) => _setType(val ?? value),
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: theme.textTheme.bodyLarge?.copyWith(
-              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
-          Text(
-            desc,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Content type',
-              style: GoogleFonts.inter(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Pick what format you want first.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            _typeTile(
-              value: 'all',
-              label: 'All',
-              desc: 'Everything',
-            ),
-            _typeTile(
-              value: 'read',
-              label: 'Read',
-              desc: 'Text / captions',
-            ),
-            _typeTile(
-              value: 'video',
-              label: 'Video',
-              desc: 'Clips, trailers, interviews',
-            ),
-            _typeTile(
-              value: 'audio',
-              label: 'Audio',
-              desc: 'Pod bites (coming soon)',
-            ),
-
-            const SizedBox(height: 24),
-
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                icon: const Icon(Icons.check_rounded),
-                label: const Text('Apply'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFdc2626),
-                  foregroundColor: Colors.white,
-                  textStyle: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                onPressed: () {
-                  Navigator.pop(context, _local);
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /* ───────────────────────── CATEGORY PICKER SHEET ─────────────────────────
  *
  * Bottom sheet for "Categories".
  * Lets user pick All / Entertainment / Sports / Travel / Fashion.
- * Multi-select except "All" which is exclusive.
  */
 class _CategoryPicker extends StatefulWidget {
   const _CategoryPicker({required this.initial});
@@ -1052,10 +941,153 @@ class _CategoryPickerState extends State<_CategoryPicker> {
   }
 }
 
+/* ───────────────────────── CONTENT TYPE PICKER SHEET ─────────────────────────
+ *
+ * Bottom sheet for "Content type".
+ * Radio pick:
+ *   all   → "All / Everything"
+ *   read  → "Read / Text / captions"
+ *   video → "Video / Clips, trailers, interviews"
+ *   audio → "Audio / Pod bites (coming soon)"
+ *
+ * Returns the picked string on "Apply".
+ */
+class _ContentTypePicker extends StatefulWidget {
+  const _ContentTypePicker({required this.current});
+  final String current;
+
+  @override
+  State<_ContentTypePicker> createState() => _ContentTypePickerState();
+}
+
+class _ContentTypePickerState extends State<_ContentTypePicker> {
+  late String _localType;
+
+  @override
+  void initState() {
+    super.initState();
+    _localType = widget.current;
+  }
+
+  void _pick(String v) {
+    setState(() {
+      _localType = v;
+    });
+  }
+
+  Widget _typeTile({
+    required String value,
+    required String title,
+    required String desc,
+  }) {
+    final theme = Theme.of(context);
+    final active = (_localType == value);
+
+    return RadioListTile<String>(
+      value: value,
+      groupValue: _localType,
+      onChanged: (val) => _pick(val ?? value),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.bodyLarge?.copyWith(
+              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
+          Text(
+            desc,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Content type',
+              style: GoogleFonts.inter(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Pick what format you want first.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            _typeTile(
+              value: ContentTypePrefs.typeAll,
+              title: 'All',
+              desc: 'Everything',
+            ),
+            _typeTile(
+              value: ContentTypePrefs.typeRead,
+              title: 'Read',
+              desc: 'Text / captions',
+            ),
+            _typeTile(
+              value: ContentTypePrefs.typeVideo,
+              title: 'Video',
+              desc: 'Clips, trailers, interviews',
+            ),
+            _typeTile(
+              value: ContentTypePrefs.typeAudio,
+              title: 'Audio',
+              desc: 'Pod bites (coming soon)',
+            ),
+
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                icon: const Icon(Icons.check_rounded),
+                label: const Text('Apply'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFdc2626),
+                  foregroundColor: Colors.white,
+                  textStyle: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                onPressed: () {
+                  // This fixes the "Apply doesn't work" bug:
+                  // Close the sheet and return the selected type.
+                  Navigator.pop(context, _localType);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /* ───────────────────────── APP LANGUAGE SHEET ─────────────────────────
  *
  * Bottom sheet for "App language".
- * Lists CinePulse UI languages (not feed/story language).
+ * Lists CinePulse UI languages (not feed languages).
  * We show 7 options:
  *
  *  english_ui   English / English
@@ -1170,20 +1202,23 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
             const SizedBox(height: 4),
             Text(
               'Change the CinePulse UI language. Headlines and story text '
-              'still follow your feed settings.',
+              'still follow your Categories / Content type settings.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
 
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 360),
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: _langs.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 4),
-                itemBuilder: (_, i) => _langRow(_langs[i], theme),
+            Flexible(
+              fit: FlexFit.loose,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 360),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _langs.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 4),
+                  itemBuilder: (_, i) => _langRow(_langs[i], theme),
+                ),
               ),
             ),
 
