@@ -13,31 +13,32 @@
 //    - Header shows "<CategorySummary> · <LanguageSummary>"
 //      e.g. "Entertainment · English"
 //    - About row shows "Version 0.1.0 · Early access"
-//    - Rows in drawer are now:
+//    - Drawer rows are now:
 //        "Show stories in"     (> opens language picker sheet)
 //        "What to show"        (> opens category picker sheet)
 //        "Theme"               (> opens theme picker sheet)
 //        "Share" / "Report"
 //        "About CinePulse" / "Privacy Policy" / "Terms of Use"
 //
-// 2. Drawer rows are previews + chevrons. No inline chips, no toggles.
+// 2. Drawer rows are previews + chevrons. No inline chips.
 //    Tapping a row calls back into RootShell, which opens a bottom sheet:
 //       _openLanguagePicker()
 //       _openCategoryPicker()
 //       _openThemePicker()
 //
-// 3. RootShell state:
-//    • _pageIndex / _navIndex / _showSearchBar for tab + bottom nav
+// 3. RootShell state tracks:
+//    • _pageIndex / _navIndex / _showSearchBar
 //    • _currentLang from SharedPreferences ('english' | 'hindi' | 'mixed')
 //    • deep link handling for story details
 //
-// 4. Responsive:
+// 4. Responsive behavior:
 //    • <768px width -> bottom nav visible
 //    • ≥768px width -> bottom nav hidden, content width-clamped
 //
-// NOTE: AppDrawer takes onLanguageTap, onCategoryTap, onThemeTap,
-//       and just displays summary badges + chevrons.
-//       It no longer renders its own pickers.
+// AppDrawer expects onLanguageTap, onCategoryTap, onThemeTap.
+// We still persist language in SharedPreferences under 'cp.lang'.
+//
+// NOTE: The debug wrapper / error fallback has been removed per request.
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -75,7 +76,7 @@ class CategoryPrefs extends ChangeNotifier {
   static const String keyTravel = 'travel';
   static const String keyFashion = 'fashion';
 
-  // Default feed is "All" (which basically equals "Entertainment" for now)
+  // Default feed is "All" (basically means "Entertainment" for now).
   final Set<String> _selected = {keyAll};
 
   Set<String> get selected => Set.unmodifiable(_selected);
@@ -91,7 +92,7 @@ class CategoryPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Human-friendly summary for UI surfaces:
+  /// Human summary for UI use:
   ///  "All"
   ///  "Entertainment"
   ///  "Entertainment +2"
@@ -119,9 +120,9 @@ class CategoryPrefs extends ChangeNotifier {
     return '${pretty.first} +${pretty.length - 1}';
   }
 
-  /// Guardrails so state never becomes illegal.
+  /// Guardrails so selection never becomes illegal.
   void _sanitize() {
-    // If "all" and others are both set → collapse to just "all".
+    // If "all" and others are both checked → collapse to just "all".
     if (_selected.contains(keyAll) && _selected.length > 1) {
       _selected
         ..clear()
@@ -137,7 +138,6 @@ class CategoryPrefs extends ChangeNotifier {
 
 /* ────────────────────────────────────────────────────────────────────────────
  * ROOT SHELL
- * Main scaffold for the app.
  * ────────────────────────────────────────────────────────────────────────────*/
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
@@ -148,11 +148,11 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // Which tab we have visible in IndexedStack:
+  // Which tab is visible in the IndexedStack:
   // 0 = Home, 1 = Discover, 2 = Saved, 3 = Alerts
   int _pageIndex = 0;
 
-  // Which item is highlighted in bottom nav:
+  // Which item is highlighted in the bottom nav:
   // 0 = Home, 1 = Search (still Home but with inline search bar),
   // 2 = Saved, 3 = Alerts
   int _navIndex = 0;
@@ -190,7 +190,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /// Convert pref code → friendly string for the drawer header.
+  /// Pref code → header-friendly string.
   /// english → "English"
   /// hindi   → "Hindi"
   /// mixed   → "Mixed language"
@@ -205,11 +205,11 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ───────────────────── Deep link handling ───────────────────── */
+  /* ───────────────────── Deep link helpers ───────────────────── */
 
-  /// Grab /s/<id> from initial URL (web deep links).
+  /// Capture "/s/<id>" from initial URL (for web deep links).
   void _captureInitialDeepLink() {
-    final frag = Uri.base.fragment; // on web could be "#/s/abcdef"
+    final frag = Uri.base.fragment; // could be "#/s/abcdef" on web
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
     final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
     if (match != null) {
@@ -227,7 +227,7 @@ class _RootShellState extends State<RootShell> {
     const tick = Duration(milliseconds: 200);
     final started = DateTime.now();
 
-    // Poll cache first (gives feed a chance to warm up)
+    // Poll cache first (maybe feed already fetched it)
     while (mounted && DateTime.now().difference(started) < maxWait) {
       final Story? cached = FeedCache.get(_pendingDeepLinkId!);
       if (cached != null) {
@@ -237,20 +237,19 @@ class _RootShellState extends State<RootShell> {
       await Future<void>.delayed(tick);
     }
 
-    // Fallback to network
+    // If not in cache, fetch from network
     try {
       final s = await fetchStory(_pendingDeepLinkId!);
       if (!mounted) return;
       FeedCache.put(s);
       await _openDetails(s);
-      return;
     } catch (_) {
-      // ignore failures
+      // swallow network errors
     }
   }
 
   /// Push StoryDetailsScreen on top of RootShell.
-  /// Make sure Home tab is active beneath.
+  /// Make sure Home tab is active first.
   Future<void> _openDetails(Story s) async {
     _deepLinkHandled = true;
 
@@ -258,7 +257,7 @@ class _RootShellState extends State<RootShell> {
       setState(() => _pageIndex = 0);
     }
 
-    // tiny delay so Scaffold/Navigator are stable
+    // tiny delay so Scaffold / Navigator are stable
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!mounted) return;
 
@@ -269,22 +268,22 @@ class _RootShellState extends State<RootShell> {
 
   /* ───────────────────── Header actions from HomeScreen ───────────────────── */
 
-  // "Discover" icon
+  // Discover icon
   void _openDiscover() {
     setState(() {
       _pageIndex = 1;
-      // If Search was highlighted in the bottom nav, drop back to Home highlight.
+      // If Search was highlighted, drop back to Home highlight.
       _navIndex = (_navIndex == 1) ? 0 : _navIndex;
       _showSearchBar = false;
     });
   }
 
-  // "Menu" icon
+  // Menu icon
   void _openEndDrawer() {
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
-  // "Saved" icon
+  // Saved icon
   void _openSaved() {
     setState(() {
       _pageIndex = 2;
@@ -293,7 +292,7 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  // "Alerts" icon
+  // Alerts icon
   void _openAlerts() {
     setState(() {
       _pageIndex = 3;
@@ -305,14 +304,14 @@ class _RootShellState extends State<RootShell> {
   /* ───────────────────────── Bottom nav taps ─────────────────────────
    *
    * Bottom nav items:
-   *   0 = Home
-   *   1 = Search (still Home page, but showSearchBar=true)
-   *   2 = Saved
-   *   3 = Alerts
+   * 0 = Home
+   * 1 = Search (still Home page, but showSearchBar=true)
+   * 2 = Saved
+   * 3 = Alerts
    */
   void _onDestinationSelected(int i) {
     if (i == 1) {
-      // "Search": highlight Search, keep Home tab visible, show the inline search bar
+      // "Search": keep Home visible, show inline search bar
       setState(() {
         _pageIndex = 0;
         _navIndex = 1;
@@ -340,7 +339,6 @@ class _RootShellState extends State<RootShell> {
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final current = AppSettings.instance.themeMode;
 
-    // close drawer first so we don't sheet-on-top-of-drawer
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<ThemeMode>(
@@ -357,7 +355,7 @@ class _RootShellState extends State<RootShell> {
 
   /* ─────────────────────── CATEGORY PICKER SHEET ───────────────────────
    *
-   * Drawer row "What to show"
+   * Drawer row "What to show":
    *  - Close drawer
    *  - Bottom sheet with category checkboxes
    *  - Apply with CategoryPrefs.instance.applySelection(...)
@@ -382,7 +380,7 @@ class _RootShellState extends State<RootShell> {
 
   /* ─────────────────────── LANGUAGE PICKER SHEET ───────────────────────
    *
-   * Drawer row "Show stories in"
+   * Drawer row "Show stories in":
    *  - Close drawer
    *  - Bottom sheet of language radio buttons
    *  - Save to SharedPreferences
@@ -410,8 +408,8 @@ class _RootShellState extends State<RootShell> {
   /* ───────────────────────── Responsive helpers ─────────────────────────
    *
    * "compact" = phone-ish width.
-   * On compact we show bottom nav.
-   * On ≥768px we hide bottom nav (desktop vibe).
+   * On compact we show the bottom nav.
+   * On ≥768px we hide bottom nav for a desktop-y feel.
    */
   bool _isCompact(BuildContext context) =>
       MediaQuery.of(context).size.width < 768;
@@ -432,8 +430,8 @@ class _RootShellState extends State<RootShell> {
     return WillPopScope(
       onWillPop: () async {
         // Android back button behavior:
-        // If something (like StoryDetailsScreen) is pushed above RootShell,
-        // pop that first instead of closing the entire shell.
+        // If something (like StoryDetailsScreen) is pushed on top,
+        // pop that instead of closing the entire shell.
         final canPop = Navigator.of(context).canPop();
         if (canPop) Navigator.of(context).maybePop();
         return !canPop;
@@ -441,7 +439,7 @@ class _RootShellState extends State<RootShell> {
       child: Scaffold(
         key: _scaffoldKey,
 
-        // We don't use a left drawer in this design.
+        // We don't use a left drawer.
         drawer: null,
         drawerEnableOpenDragGesture: false,
 
@@ -450,13 +448,13 @@ class _RootShellState extends State<RootShell> {
         endDrawer: Builder(
           builder: (drawerCtx) {
             return AppDrawer(
-              // close button in header
+              // close button in the header
               onClose: () => Navigator.of(drawerCtx).pop(),
 
-              // we keep this to allow HomeScreen refresh if prefs change
+              // we keep this so UI updates if prefs change
               onFiltersChanged: () => setState(() {}),
 
-              // rows that open sheets
+              // drawers rows → sheets
               onLanguageTap: () => _openLanguagePicker(drawerCtx),
               onCategoryTap: () => _openCategoryPicker(drawerCtx),
               onThemeTap: () => _openThemePicker(drawerCtx),
@@ -466,42 +464,26 @@ class _RootShellState extends State<RootShell> {
               privacyUrl: 'https://example.com/privacy', // TODO real link
               termsUrl: 'https://example.com/terms',     // TODO real link
 
-              // info shown in drawer header + About section
+              // header + about section copy
               feedStatusLine: feedStatusLine,
               versionLabel: versionLabel,
             );
           },
         ),
 
-        // Main body: the active tab page, width-clamped on desktop
+        // Main body: active tab page, width-clamped on desktop.
         body: _ResponsiveWidth(
           child: IndexedStack(
             index: _pageIndex,
-            children: [
-              _DebugPageWrapper(
-                builder: (ctx) => HomeScreen(
-                  // this toggles when user taps Search in bottom nav
-                  showSearchBar: _showSearchBar,
-
-                  // header actions from Home
-                  onMenuPressed: _openEndDrawer,
-                  onOpenDiscover: _openDiscover,
-                  onOpenSaved: _openSaved,
-                  onOpenAlerts: _openAlerts,
-
-                  // pull-to-refresh / manual refresh button in header
-                  onHeaderRefresh: () {},
-                ),
-              ),
-              _DebugPageWrapper(
-                builder: (ctx) => const _DiscoverPlaceholder(),
-              ),
-              _DebugPageWrapper(
-                builder: (ctx) => const SavedScreen(),
-              ),
-              _DebugPageWrapper(
-                builder: (ctx) => const AlertsScreen(),
-              ),
+            children: const [
+              // Home
+              _HomeTabWrapper(),
+              // Discover
+              _DiscoverPlaceholder(),
+              // Saved
+              SavedScreen(),
+              // Alerts
+              AlertsScreen(),
             ],
           ),
         ),
@@ -518,10 +500,38 @@ class _RootShellState extends State<RootShell> {
   }
 }
 
+/* ───────────────────────── HOME TAB WRAPPER ─────────────────────────
+ *
+ * We broke Home out here just so we can still inject RootShell callbacks
+ * without needing the old _DebugPageWrapper.
+ */
+class _HomeTabWrapper extends StatefulWidget {
+  const _HomeTabWrapper();
+
+  @override
+  State<_HomeTabWrapper> createState() => _HomeTabWrapperState();
+}
+
+class _HomeTabWrapperState extends State<_HomeTabWrapper> {
+  @override
+  Widget build(BuildContext context) {
+    // We need access to the parent RootShell's state (for showSearchBar etc).
+    // Easiest: find the nearest _RootShellState via context.findAncestorStateOfType.
+    final shellState = context.findAncestorStateOfType<_RootShellState>()!;
+    return HomeScreen(
+      showSearchBar: shellState._showSearchBar,
+      onMenuPressed: shellState._openEndDrawer,
+      onOpenDiscover: shellState._openDiscover,
+      onOpenSaved: shellState._openSaved,
+      onOpenAlerts: shellState._openAlerts,
+      onHeaderRefresh: () {},
+    );
+  }
+}
+
 /* ───────────────────────── THEME PICKER SHEET ─────────────────────────
  *
- * Bottom sheet for Theme.
- * "System / Light / Dark"
+ * Bottom sheet for Theme ("System / Light / Dark").
  */
 class _ThemePicker extends StatelessWidget {
   const _ThemePicker({required this.current});
@@ -743,9 +753,9 @@ class _CategoryPickerState extends State<_CategoryPicker> {
       } else {
         _local.add(key);
       }
-      // as soon as you pick a specific vertical, drop "All"
+      // once you pick a specific vertical, drop "All"
       _local.remove(all);
-      // but never allow empty
+      // never allow empty
       if (_local.isEmpty) {
         _local.add(all);
       }
@@ -900,7 +910,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
 
 /* ───────────────────────── DISCOVER PLACEHOLDER ─────────────────────────
  *
- * Simple placeholder until we actually build Discover.
+ * Simple placeholder until Discover is actually built.
  */
 class _DiscoverPlaceholder extends StatelessWidget {
   const _DiscoverPlaceholder();
@@ -920,8 +930,8 @@ class _DiscoverPlaceholder extends StatelessWidget {
 
 /* ───────────────────────── RESPONSIVE WIDTH ─────────────────────────
  *
- * On desktop/tablet we clamp max width to ~1300px so the feed grid doesn't
- * stretch into silly long rows. On phones we just fill the width normally.
+ * On desktop/tablet we clamp max width to ~1300px so cards don't get too wide.
+ * On phones we just fill the width naturally.
  */
 class _ResponsiveWidth extends StatelessWidget {
   const _ResponsiveWidth({super.key, required this.child});
@@ -1065,7 +1075,7 @@ class _NavItemSpec {
   final String label;
 }
 
-/// Single button in the bottom nav ("Home", "Search", ...) with red glow when active.
+/// A single nav button ("Home", "Search", etc.) with red glow when active.
 class _NavButton extends StatelessWidget {
   const _NavButton({
     required this.icon,
@@ -1145,78 +1155,6 @@ class _NavButton extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/* ───────────────────────── DEBUG WRAPPER / ERROR FALLBACK ─────────────────────
- *
- * If a tab/widget throws during build (esp. in release mode),
- * Flutter might just give you a blank white area, which is useless.
- * _DebugPageWrapper catches that and shows a readable error view instead.
- */
-class _DebugPageWrapper extends StatelessWidget {
-  const _DebugPageWrapper({required this.builder});
-
-  final Widget Function(BuildContext) builder;
-
-  @override
-  Widget build(BuildContext context) {
-    try {
-      return builder(context);
-    } catch (err, st) {
-      return _DebugPageErrorView(error: err, stack: st);
-    }
-  }
-}
-
-class _DebugPageErrorView extends StatelessWidget {
-  const _DebugPageErrorView({
-    required this.error,
-    required this.stack,
-  });
-
-  final Object error;
-  final StackTrace stack;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF0b0f17) : Colors.white;
-    final fg = isDark ? Colors.white : Colors.black;
-
-    return Container(
-      color: bg,
-      width: double.infinity,
-      height: double.infinity,
-      padding: const EdgeInsets.all(16),
-      child: SingleChildScrollView(
-        child: DefaultTextStyle(
-          style: TextStyle(
-            color: fg,
-            fontSize: 13,
-            height: 1.4,
-            fontFamily: 'monospace',
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '💥 Build error',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(error.toString()),
-              const SizedBox(height: 12),
-              Text(stack.toString()),
-            ],
-          ),
-        ),
       ),
     );
   }
