@@ -454,6 +454,7 @@ class _RootShellState extends State<RootShell> {
     final picked = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true, // <-- make sheet behave like Categories
       builder: (_) => _ContentTypePicker(current: _currentContentType),
     );
 
