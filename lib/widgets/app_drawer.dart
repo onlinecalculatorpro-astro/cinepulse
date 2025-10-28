@@ -4,9 +4,9 @@
 //
 // This is the slide-out panel you get when you tap the Menu button in the header.
 //
-// UPDATED: same UI/UX as your approved mock + **new SETTINGS block**.
+// UPDATED TO MATCH NEW SPEC:
 //
-// ───────── LAYOUT (FINAL) ─────────
+// ───────── LAYOUT (NOW) ─────────
 //
 // HEADER
 //   [ 🎬 red gradient square ]
@@ -16,9 +16,10 @@
 //   [ ✕ ]
 //
 // CONTENT & FILTERS
-//   [square icon 🌐]  Show stories in
-//                     Hindi
-//   [square icon 📺]  What to show
+//   [square icon 🏷️]  Categories
+//                      (no subtitle)
+//   [square icon 🎞️]  Content type
+//                      All / Read / Video / Audio   (shows current selection)
 //
 // APPEARANCE
 //   [square icon 🎨]  Theme
@@ -30,7 +31,7 @@
 //   [square icon 🛠️] Report an issue
 //                     Tell us if something is broken or fake. We’ll remove it.
 //
-// SETTINGS (NEW BLOCK)
+// SETTINGS
 //   [square icon 🌍]  App language
 //                     Change the CinePulse UI language
 //   [square icon 💎]  Subscription
@@ -44,61 +45,52 @@
 //   [square icon 🔒]  Privacy Policy
 //   [square icon 📜]  Terms of Use
 //
-// ───────── STYLE RULES ─────────
-//
-// • EXACT SAME row visual as your screenshot:
-//     [ small rounded square icon button ]  [ title + subline ]
-//                                           [ chevron on far right ]
-//
-// • The square icon button:
-//     - 36x36
-//     - 8px radius
-//     - subtle red border (#dc2626 with opacity)
-//     - dark/navy bg in dark mode
-//     - emoji centered
-//     This matches the header action buttons you already ship.
-//
-// • Section headers are the same quiet caps style.
-// • Dividers: 1px line using onSurface.withOpacity(0.06).
-// • Drawer bg: #0f172a in dark mode, normal surface in light.
-//
-// ───────── DATA / CALLBACKS ─────────
+// ───────── CALLBACK API (UPDATED) ─────────
 //
 // Required from RootShell:
-//   feedStatusLine   e.g. "All · Hindi"
-//   versionLabel     e.g. "Version 0.1.0 · Early access"
+//   feedStatusLine        e.g. "All · Hindi"
+//   versionLabel          e.g. "Version 0.1.0 · Early access"
+//   contentTypeLabel      e.g. "All" / "Read" / "Video" / "Audio"
 //
-// Also from RootShell (callbacks):
-//   onLanguageTap        → open "Show stories in" picker
-//   onCategoryTap        → open "What to show" picker
-//   onThemeTap           → open Theme picker
+// Callbacks provided by RootShell:
+//   onCategoryTap         → open Categories picker sheet
+//                            (multi-select: All / Entertainment / Sports / ...)
+//   onContentTypeTap      → open Content type picker sheet
+//                            (single-select: All / Read / Video / Audio)
+//   onThemeTap            → open Theme picker
 //
-//   onAppLanguageTap     → open APP language (UI language for full app)
-//   onSubscriptionTap    → open paywall / subscription
-//   onLoginTap           → open sign-in / account
+//   onAppLanguageTap      → open App language settings (UI language drawer/sheet)
+//   onSubscriptionTap     → open Subscription paywall
+//   onLoginTap            → open Sign in / Account
 //
-// Plus:
-//   appShareUrl          → for Share CinePulse
-//   privacyUrl / termsUrl
+// Other:
+//   onClose               → close drawer
+//   onFiltersChanged      → legacy hook (kept, still optional)
 //
-// We also read SharedPreferences('cp.lang') to render the current feed language
-// under "Show stories in".
+// External links for share / policy / terms:
+//   appShareUrl, privacyUrl, termsUrl
 //
-// DEPENDENCIES: google_fonts, shared_preferences, share_plus, url_launcher
+// ───────── STYLE RULES ─────────
 //
-// NOTE: CategoryPrefs import is kept for consistency even though we don't show
-//       the category summary subtitle in this UI (row is single-line).
+// • Each row uses the same pill-style square icon container (36x36, 8px radius,
+//   subtle red border, dark translucent bg in dark mode), matching header icons.
+// • We changed the row emojis to match the new meaning:
+//     - Categories       → 🏷️
+//     - Content type     → 🎞️
+//     - Theme            → 🎨
+//     - etc.
+// • "Content type" row shows the selected value in bold as the subtitle.
+// • "Categories" row has no subtitle now.
 //
-
+// NOTE: We removed all the old "Show stories in" language picker UI from this file.
+// That logic is now replaced by "Content type".
+//
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-
-import '../root_shell.dart' show CategoryPrefs;
 
 class AppDrawer extends StatefulWidget {
   const AppDrawer({
@@ -106,16 +98,23 @@ class AppDrawer extends StatefulWidget {
     required this.onClose,
     required this.feedStatusLine,
     required this.versionLabel,
-    this.onFiltersChanged,   // legacy hook
-    this.onLanguageTap,      // feed language picker
-    this.onCategoryTap,      // category picker
-    this.onThemeTap,         // theme picker
+    required this.contentTypeLabel, // "All" / "Read" / "Video" / "Audio"
 
-    // NEW for SETTINGS section:
-    this.onAppLanguageTap,   // app-wide UI language picker
-    this.onSubscriptionTap,  // subscription / paywall
-    this.onLoginTap,         // sign in / account
+    this.onFiltersChanged, // legacy hook if we need to trigger a rebuild
 
+    // CONTENT & FILTERS callbacks
+    this.onCategoryTap, // opens Categories sheet
+    this.onContentTypeTap, // opens Content type sheet
+
+    // APPEARANCE
+    this.onThemeTap,
+
+    // SETTINGS
+    this.onAppLanguageTap,
+    this.onSubscriptionTap,
+    this.onLoginTap,
+
+    // external / share links
     this.appShareUrl,
     this.privacyUrl,
     this.termsUrl,
@@ -123,23 +122,30 @@ class AppDrawer extends StatefulWidget {
 
   final VoidCallback onClose;
 
-  // "All · Hindi"
+  // e.g. "All · Hindi"
   final String feedStatusLine;
 
-  // "Version 0.1.0 · Early access"
+  // e.g. "Version 0.1.0 · Early access"
   final String versionLabel;
 
+  // e.g. "All" / "Read" / "Video" / "Audio"
+  final String contentTypeLabel;
+
   final VoidCallback? onFiltersChanged;
-  final VoidCallback? onLanguageTap;
+
+  // CONTENT & FILTERS
   final VoidCallback? onCategoryTap;
+  final VoidCallback? onContentTypeTap;
+
+  // APPEARANCE
   final VoidCallback? onThemeTap;
 
-  // SETTINGS callbacks
+  // SETTINGS
   final VoidCallback? onAppLanguageTap;
   final VoidCallback? onSubscriptionTap;
   final VoidCallback? onLoginTap;
 
-  // external / share links
+  // external links
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -150,47 +156,6 @@ class AppDrawer extends StatefulWidget {
 
 class _AppDrawerState extends State<AppDrawer> {
   static const _accent = Color(0xFFdc2626);
-  static const _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed' | etc.
-
-  String _lang = 'mixed';
-
-  @override
-  void initState() {
-    super.initState();
-    _loadLangPref();
-  }
-
-  Future<void> _loadLangPref() async {
-    final sp = await SharedPreferences.getInstance();
-    final stored = sp.getString(_kLangPrefKey);
-    if (mounted && stored != null && stored.isNotEmpty) {
-      setState(() {
-        _lang = stored;
-      });
-    }
-  }
-
-  // Convert saved feed language code to display text.
-  String _langLabel(String code) {
-    switch (code) {
-      case 'english':
-        return 'English';
-      case 'hindi':
-        return 'Hindi';
-      case 'bengali':
-        return 'Bengali';
-      case 'telugu':
-        return 'Telugu';
-      case 'marathi':
-        return 'Marathi';
-      case 'tamil':
-        return 'Tamil';
-      case 'gujarati':
-        return 'Gujarati';
-      default:
-        return 'Mixed';
-    }
-  }
 
   // ───────────────── text styles ─────────────────
 
@@ -203,7 +168,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // helper copy / descriptive subline
+  // helper / descriptive subline
   TextStyle _rowSubStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
@@ -213,7 +178,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // selected value subline (bold-ish)
+  // selected value subline (bold-ish / primary)
   TextStyle _valueLineStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
@@ -240,7 +205,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // 36x36 rounded square icon button at the start of each row.
+  // 36x36 rounded square icon container with subtle border/glow.
   Widget _squareIconButton(String emojiChar) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final Color bgColor = isDark
@@ -272,7 +237,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Section label like "CONTENT & FILTERS"
+  // Section header like "CONTENT & FILTERS"
   Widget _sectionHeader(BuildContext context, String text) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     return Padding(
@@ -289,14 +254,14 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Generic row builder that matches your screenshot:
+  // Generic row renderer:
   //
   // [square icon]  Title
   //                Subtitle (optional)
   //                                    >
   //
-  // If isValueLine = true, subtitle is rendered bold/primary (for "Hindi", etc.)
-  // Otherwise subtitle is rendered dimmer helper text.
+  // If isValueLine = true, subtitle uses _valueLineStyle (bold / primary).
+  // Otherwise subtitle uses _rowSubStyle (dim helper text).
   Widget _drawerRow({
     required String emoji,
     required String title,
@@ -355,25 +320,29 @@ class _AppDrawerState extends State<AppDrawer> {
   // ───────── ROW COMPOSERS (PER SECTION) ─────────
 
   // CONTENT & FILTERS
-  Widget _langRow() {
-    final label = _langLabel(_lang);
-    return _drawerRow(
-      emoji: '🌐',
-      title: 'Show stories in',
-      subtitle: label,
-      isValueLine: true,
-      onTap: widget.onLanguageTap,
-    );
-  }
 
-  Widget _whatToShowRow() {
-    // Design: NO subtitle here.
+  // "Categories" row (used to be "What to show")
+  // - No subtitle, tap opens Categories picker sheet.
+  Widget _categoriesRow() {
     return _drawerRow(
-      emoji: '📺',
-      title: 'What to show',
+      emoji: '🏷️',
+      title: 'Categories',
       subtitle: null,
       isValueLine: false,
       onTap: widget.onCategoryTap,
+    );
+  }
+
+  // "Content type" row (used to be "Show stories in")
+  // - Shows current selection ("All" / "Read" / "Video" / "Audio")
+  // - Tap opens Content type picker sheet.
+  Widget _contentTypeRow() {
+    return _drawerRow(
+      emoji: '🎞️',
+      title: 'Content type',
+      subtitle: widget.contentTypeLabel,
+      isValueLine: true,
+      onTap: widget.onContentTypeTap,
     );
   }
 
@@ -410,7 +379,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // SETTINGS (NEW BLOCK)
+  // SETTINGS
   Widget _appLanguageRow() {
     return _drawerRow(
       emoji: '🌍',
@@ -472,7 +441,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────── HEADER (unchanged look) ─────────
+  // ───────── HEADER ─────────
   Widget _drawerHeader(bool isDark) {
     final cs = Theme.of(context).colorScheme;
     final dividerColor = isDark
@@ -638,8 +607,8 @@ class _AppDrawerState extends State<AppDrawer> {
 
             // CONTENT & FILTERS
             _sectionHeader(context, 'Content & filters'),
-            _langRow(),
-            _whatToShowRow(),
+            _categoriesRow(),
+            _contentTypeRow(),
 
             // APPEARANCE
             _sectionHeader(context, 'Appearance'),
@@ -650,7 +619,7 @@ class _AppDrawerState extends State<AppDrawer> {
             _shareRow(),
             _reportRow(),
 
-            // SETTINGS (NEW BLOCK)
+            // SETTINGS
             _sectionHeader(context, 'Settings'),
             _appLanguageRow(),
             _subscriptionRow(),
