@@ -2,97 +2,87 @@
 //
 // Right-side drawer (endDrawer) for CinePulse.
 //
-// This is the slide-out panel you get when you tap the menu icon in the header.
-// It now matches the new spec you showed (the right-side mock):
+// This panel slides in from the right when you tap the menu icon in the header.
+// It matches the wide-screen CinePulse UI (your screenshot):
 //
-// VISUAL / STRUCTURE (FINAL):
+// ───────────────── UI STRUCTURE ─────────────────
 //
-//  HEADER
-//    [ 🎬 red badge ]
-//    CinePulse
-//    "Movies & OTT, in a minute."
-//    "<CategorySummary> · <LanguageSummary>"   (feedStatusLine)
-//    [ ✕ ]
+// HEADER
+//   [ 🎬 red gradient square ]
+//   CinePulse
+//   "Movies & OTT, in a minute."
+//   "<CategorySummary> · <LanguageSummary>"   (feedStatusLine from RootShell)
+//   [ ✕ close ]
 //
-//  SECTION: CONTENT & FILTERS
-//    Row: "Show stories in"
-//         [Active language pill: English / Hindi / Mixed]
-//         (chevron > opens language picker sheet)
-//    Row: "What to show"
-//         [Outline pill: "All", "Entertainment", "Entertainment +2"...]
-//         (chevron > opens category picker sheet)
+// CONTENT & FILTERS
+//   Row: "Show stories in"
+//        [red badge]  English                        (> opens language picker)
+//   Row: "What to show"
+//        [outline badge]  Entertainment / All / ... (> opens category picker)
 //
-//  SECTION: APPEARANCE
-//    Row: "Theme"
-//         "System / Light / Dark · Affects Home & stories"
-//         (chevron > opens theme picker sheet)
+// APPEARANCE
+//   Row: "Theme"
+//        "System / Light / Dark · Affects Home & stories"
+//        (> opens theme picker)
 //
-//  SECTION: SHARE & SUPPORT
-//    Row:
-//         [Outline pill: "Share"]
-//         "Send the app link"
-//         (chevron > triggers Share / copy link)
-//    Row:
-//         [Outline pill: "Report"]
-//         "Tell us if something is broken or fake. We’ll remove it."
-//         (chevron > opens mailto to report)
+// SHARE & SUPPORT
+//   Row:
+//        [outline pill: "Share"]
+//        "Send the app link"
+//        (> share or copy link)
+//   Row:
+//        [outline pill: "Report"]
+//        "Tell us if something is broken or fake. We’ll remove it."
+//        (> email feedback)
 //
-//  SECTION: ABOUT & LEGAL
-//    Row: "About CinePulse"
-//         "Version 0.1.0 · Early access"        (versionLabel)
-//    Row: "Privacy Policy"
-//    Row: "Terms of Use"
+// ABOUT & LEGAL
+//   Row: "About CinePulse"
+//        "Version 0.1.0 · Early access" (versionLabel from RootShell)
+//   Row: "Privacy Policy"
+//   Row: "Terms of Use"
 //
-// IMPORTANT CHANGES VS OLD VERSION:
-//  - No "Feed rules" block here anymore.
-//  - No emojis / colorful leading icons in the rows,
-//    only clean text + chevron like the mock.
-//  - Language row is now read-only pill for the CURRENT lang,
-//    and tapping the row opens the language picker bottom sheet
-//    (RootShell wires onLanguageTap).
-//  - Category row ("What to show") now shows just ONE pill
-//    with the current summary from CategoryPrefs (e.g. "All"),
-//    and tapping opens the category picker sheet.
-//  - Share / Report rows now use the CinePulse pill style ("Share", "Report")
-//    instead of icons.
-//  - Theme row uses subtitle text instead of icons.
-//  - About / Privacy / Terms rows are plain info rows.
+// ───────────────── KEY STYLE DECISIONS ─────────────────
 //
-// STATE / DATA FLOW:
-//  - We read the current language from SharedPreferences ('cp.lang'):
-//        'english' | 'hindi' | 'mixed'
-//    That becomes the pill label in "Show stories in".
-//    We DON'T update it here anymore; tapping that row calls onLanguageTap
-//    which opens the Language bottom sheet in RootShell.
-//  - CategoryPrefs.instance.summary() gives us "All", "Entertainment", etc.,
-//    for the "What to show" pill.
-//  - RootShell passes:
-//        feedStatusLine: "All · Mixed language"
-//        versionLabel:   "Version 0.1.0 · Early access"
-//    which we show in the header + About section.
+// 1. CONTENT & FILTERS rows now match what you asked for:
+//    - NOT a full chip/pill with text inside.
+//    - Instead we show a small CinePulse "badge" shape first,
+//      and then the text label next to it.
 //
-// CALLBACKS EXPECTED FROM ROOTSHELL:
-//    onClose         -> close drawer
-//    onLanguageTap   -> open language picker sheet
-//    onCategoryTap   -> open category picker sheet
-//    onThemeTap      -> open theme picker sheet
-//    onFiltersChanged (kept for compatibility, currently not called here)
-//    appShareUrl / privacyUrl / termsUrl are external links.
+//    Example:
+//      Show stories in
+//      [red badge]  English
 //
-// STYLE TOKENS:
-//  - Drawer bg dark: #0f172a in dark mode
-//  - Accent red: #dc2626
-//  - 1px separators with low-opacity white in dark mode (0.06)
-//  - Text uses Inter
-//  - Pills:
-//      Filled pill (active): solid red bg, glow
-//      Outline pill: transparent bg, red border/text
+//      What to show
+//      [outline badge]  Entertainment
 //
-// NOTE: This file assumes google_fonts, share_plus, url_launcher,
-//       shared_preferences are in pubspec.
+//    The badge = visual dot/lozenge that uses CinePulse red.
+//    The label text sits to the right.
 //
-// NOTE: Make sure RootShell constructor call to AppDrawer matches this
-//       (it was updated in the RootShell rewrite).
+// 2. The rest of the drawer still uses:
+//    - Dark navy/black surfaces (#0f172a in dark mode).
+//    - 1px low-opacity separators (0.06 alpha).
+//    - Inter typography at 14/13px.
+//    - Accent red #dc2626.
+//
+// 3. Language preference is read from SharedPreferences ('cp.lang')
+//    and turned into a label ("English", "Hindi", "Mixed").
+//
+// 4. CategoryPrefs.instance.summary() returns "All", "Entertainment",
+//    "Entertainment +2", etc. We show that after an outline badge.
+//
+// 5. Tapping:
+//    - "Show stories in" row    → widget.onLanguageTap()
+//    - "What to show" row       → widget.onCategoryTap()
+//    - "Theme" row              → widget.onThemeTap()
+//    - "Share" row              → share/copy
+//    - "Report" row             → mailto feedback
+//
+// RootShell must pass:
+//   feedStatusLine: "Entertainment · English"
+//   versionLabel:   "Version 0.1.0 · Early access"
+//
+// NOTE: This file depends on google_fonts, share_plus, url_launcher,
+//       shared_preferences. CategoryPrefs is defined in root_shell.dart.
 //
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -111,7 +101,7 @@ class AppDrawer extends StatefulWidget {
     required this.onClose,
     required this.feedStatusLine,
     required this.versionLabel,
-    this.onFiltersChanged, // kept for compatibility; may be unused here
+    this.onFiltersChanged, // kept for compatibility
     this.onLanguageTap,    // open Language picker bottom sheet
     this.onCategoryTap,    // open Category picker bottom sheet
     this.onThemeTap,       // open Theme picker bottom sheet
@@ -122,7 +112,7 @@ class AppDrawer extends StatefulWidget {
 
   final VoidCallback onClose;
 
-  // e.g. "All · Mixed language"
+  // e.g. "Entertainment · English"
   final String feedStatusLine;
 
   // e.g. "Version 0.1.0 · Early access"
@@ -133,7 +123,6 @@ class AppDrawer extends StatefulWidget {
   final VoidCallback? onCategoryTap;
   final VoidCallback? onThemeTap;
 
-  // external links / share link
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -164,7 +153,7 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // Map code → pill label
+  // Map 'english' / 'hindi' / 'mixed' -> label text
   String _langLabel(String code) {
     switch (code) {
       case 'english':
@@ -176,7 +165,7 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // ────────────────────────────── shared styles ──────────────────────────────
+  // ────────────────────────── shared text styles ──────────────────────────
 
   TextStyle _rowTitleStyle(ColorScheme cs) {
     return GoogleFonts.inter(
@@ -196,9 +185,29 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  Widget _pillFilled(String text) {
+  TextStyle _valueTextStyle(ColorScheme cs) {
+    // the "English", "Entertainment" text after the badge
+    return GoogleFonts.inter(
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      height: 1.3,
+      color: cs.onSurface, // in dark mode this will be near-white
+    );
+  }
+
+  // ────────────────────────── badge primitives ──────────────────────────
+  //
+  // Tiny CinePulse visual dot/lozenge.
+  // We show this next to the text in Content & Filters so it reads like:
+  // [badge]  English
+  //
+  // Filled badge = solid red with glow.
+  // Outline badge = transparent bg with red border.
+
+  Widget _badgeFilled() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      height: 14,
+      width: 18,
       decoration: BoxDecoration(
         color: _accent,
         borderRadius: BorderRadius.circular(999),
@@ -211,18 +220,25 @@ class _AppDrawerState extends State<AppDrawer> {
           ),
         ],
       ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          height: 1.2,
+    );
+  }
+
+  Widget _badgeOutline() {
+    return Container(
+      height: 14,
+      width: 18,
+      decoration: BoxDecoration(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: _accent.withOpacity(0.4),
+          width: 1,
         ),
       ),
     );
   }
 
+  // We still keep pillOutline/pillFilled for Share / Report rows.
   Widget _pillOutline(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -262,13 +278,14 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────────── row builders ──────────────────────────────
+  // ────────────────────────── row builders ──────────────────────────
   //
-  // All rows follow the same surface:
-  //   padding: 14px vertical / 16px horizontal
-  //   bottom border with low-opacity divider
-  //   Expanded column on the left
-  //   chevron on the right
+  // Each row:
+  //   - 16px horizontal padding
+  //   - 14px vertical padding
+  //   - bottom 1px divider
+  //   - left side is Column(title + value line)
+  //   - right side chevron
 
   Widget _langRow() {
     final cs = Theme.of(context).colorScheme;
@@ -287,7 +304,7 @@ class _AppDrawerState extends State<AppDrawer> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left column
+            // Left side content
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -297,7 +314,14 @@ class _AppDrawerState extends State<AppDrawer> {
                     style: _rowTitleStyle(cs),
                   ),
                   const SizedBox(height: 8),
-                  _pillFilled(label),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _badgeFilled(),
+                      const SizedBox(width: 8),
+                      Text(label, style: _valueTextStyle(cs)),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -321,7 +345,7 @@ class _AppDrawerState extends State<AppDrawer> {
     return AnimatedBuilder(
       animation: CategoryPrefs.instance,
       builder: (context, _) {
-        final summary = CategoryPrefs.instance.summary(); // "All", "Entertainment", etc.
+        final summary = CategoryPrefs.instance.summary(); // e.g. "All", "Entertainment"
         return InkWell(
           onTap: widget.onCategoryTap,
           child: Container(
@@ -334,7 +358,7 @@ class _AppDrawerState extends State<AppDrawer> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Left column
+                // Left side content
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -344,7 +368,14 @@ class _AppDrawerState extends State<AppDrawer> {
                         style: _rowTitleStyle(cs),
                       ),
                       const SizedBox(height: 8),
-                      _pillOutline(summary),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _badgeOutline(),
+                          const SizedBox(width: 8),
+                          Text(summary, style: _valueTextStyle(cs)),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -379,7 +410,6 @@ class _AppDrawerState extends State<AppDrawer> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left column
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -397,7 +427,6 @@ class _AppDrawerState extends State<AppDrawer> {
               ),
             ),
             const SizedBox(width: 12),
-            // Chevron
             Icon(
               Icons.chevron_right_rounded,
               size: 20,
@@ -429,7 +458,6 @@ class _AppDrawerState extends State<AppDrawer> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left column
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -444,7 +472,6 @@ class _AppDrawerState extends State<AppDrawer> {
               ),
             ),
             const SizedBox(width: 12),
-            // Chevron
             Icon(
               Icons.chevron_right_rounded,
               size: 20,
@@ -476,7 +503,6 @@ class _AppDrawerState extends State<AppDrawer> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left column
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -496,7 +522,6 @@ class _AppDrawerState extends State<AppDrawer> {
               ),
             ),
             const SizedBox(width: 12),
-            // Chevron
             Icon(
               Icons.chevron_right_rounded,
               size: 20,
@@ -508,14 +533,13 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────────── header block ──────────────────────────────
+  // ────────────────────────── header block ──────────────────────────
   //
-  // Top branding region:
-  //  🎬 red badge
+  //  🎬 badge
   //  CinePulse (red gradient text)
   //  Movies & OTT, in a minute.
-  //  feedStatusLine ("All · Mixed language")
-  //  [Close X]
+  //  feedStatusLine (ex: "Entertainment · English")
+  //  [✕]
   Widget _drawerHeader(bool isDark) {
     final cs = Theme.of(context).colorScheme;
     final dividerColor =
@@ -534,7 +558,7 @@ class _AppDrawerState extends State<AppDrawer> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // red gradient badge with 🎬
+          // Branded red square with 🎬
           Container(
             width: 40,
             height: 40,
@@ -566,7 +590,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
           const SizedBox(width: 12),
 
-          // Title + tagline + feed status
+          // Brand block
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -625,7 +649,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────────── actions ──────────────────────────────
+  // ────────────────────────── actions ──────────────────────────
 
   Future<void> _shareApp(BuildContext context) async {
     final link = widget.appShareUrl ?? 'https://cinepulse.netlify.app';
@@ -660,7 +684,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────────── build ──────────────────────────────
+  // ────────────────────────── build ──────────────────────────
 
   @override
   Widget build(BuildContext context) {
