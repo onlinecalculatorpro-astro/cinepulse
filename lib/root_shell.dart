@@ -4,7 +4,9 @@
 //
 // It owns:
 //  • Tab pages (Home / Discover / Saved / Alerts) via an IndexedStack
-//  • The global right-side drawer (AppDrawer)
+//  • The global right-side drawer(s)
+//      - Main settings drawer (AppDrawer)
+//      - App language drawer (separate sub-drawer for choosing UI language)
 //  • The bottom nav on phones only (<768px width)
 //  • Deep link handling for /s/<id> → StoryDetailsScreen
 //
@@ -28,7 +30,7 @@
 //   Report an issue     (> email)
 //
 // SETTINGS
-//   App language        (> _openAppLanguageSettings())
+//   App language        (> opens dedicated App Language Drawer, not a bottom sheet)
 //   Subscription        (> _openSubscriptionSettings())
 //   Sign in             (> _openAccountSettings())
 //
@@ -46,7 +48,9 @@
 //       onLanguageTap, onCategoryTap, onThemeTap,
 //       onAppLanguageTap, onSubscriptionTap, onLoginTap.
 //
-// We close the drawer first, then RootShell shows the appropriate bottom sheet.
+// We close the drawer first, then RootShell shows either:
+//   • a bottom sheet (for most rows) OR
+//   • the App Language sub-drawer (for "App language").
 //
 
 import 'dart:async';
@@ -70,6 +74,12 @@ import 'widgets/app_drawer.dart';
 
 const String _kAppVersion = '0.1.0';
 const String _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
+
+/* Drawer mode: which drawer are we showing on the right side right now? */
+enum _DrawerMode {
+  main,        // main settings drawer (AppDrawer)
+  appLanguage, // dedicated "App language" drawer
+}
 
 /* ────────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS
@@ -170,8 +180,15 @@ class _RootShellState extends State<RootShell> {
   // Whether HomeScreen should show its inline search bar (Search tab behavior)
   bool _showSearchBar = false;
 
-  // 'english' | 'hindi' | 'mixed' | etc.
+  // 'english' | 'hindi' | 'mixed' | etc. (feed language / "Show stories in")
   String _currentLang = 'mixed';
+
+  // App UI language for CinePulse chrome ("App language" setting).
+  // We'll start with English and let the user pick from the 7-language drawer.
+  String _appUiLanguageCode = 'english_ui';
+
+  // Which drawer we are currently showing on the right.
+  _DrawerMode _drawerMode = _DrawerMode.main;
 
   // Deep link handling (/s/<id>)
   String? _pendingDeepLinkId;
@@ -189,7 +206,7 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /// Read language preference so drawer + header text is correct.
+  /// Read language preference so drawer + header text is correct (feed lang).
   Future<void> _loadLangPref() async {
     final sp = await SharedPreferences.getInstance();
     final stored = sp.getString(_kLangPrefKey);
@@ -292,6 +309,9 @@ class _RootShellState extends State<RootShell> {
 
   // "Menu" icon
   void _openEndDrawer() {
+    setState(() {
+      _drawerMode = _DrawerMode.main;
+    });
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
@@ -341,18 +361,18 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  /* ───────────────────────── PICKER SHEETS ─────────────────────────
+  /* ───────────────────────── PICKER SHEETS / DRAWERS ─────────────────────────
    *
    * Each of these is triggered from the drawer rows.
    * We close the drawer first (Navigator.pop(drawerContext)) so
-   * the sheet isn't stacked on top of an open Drawer.
+   * new UI isn't stacked on top of an open Drawer.
    */
 
   // THEME
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final current = AppSettings.instance.themeMode;
 
-    // close drawer first so we don't sheet-on-top-of-drawer
+    // close drawer first
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<ThemeMode>(
@@ -408,13 +428,22 @@ class _RootShellState extends State<RootShell> {
   }
 
   // SETTINGS → "App language"
-  Future<void> _openAppLanguageSettings() async {
-    // Placeholder bottom sheet for now (coming soon)
-    await _showComingSoonSheet(
-      title: 'App language',
-      message:
-          'Change the CinePulse UI language (headlines stay the same language rules you set in "Show stories in").',
-    );
+  //
+  // Instead of opening a bottom sheet, we want to open a dedicated
+  // App Language drawer with 7 Indian languages. We do this by:
+  //  1. Closing the main drawer
+  //  2. Switching _drawerMode to _DrawerMode.appLanguage
+  //  3. Re-opening the endDrawer, which now renders _AppLanguageDrawer
+  Future<void> _openAppLanguageSettings(BuildContext drawerContext) async {
+    Navigator.pop(drawerContext);
+
+    // wait a moment for close animation, then open sub-drawer
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
+    setState(() {
+      _drawerMode = _DrawerMode.appLanguage;
+    });
+    _scaffoldKey.currentState?.openEndDrawer();
   }
 
   // SETTINGS → "Subscription"
@@ -435,7 +464,7 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  // Generic "coming soon" bottom sheet used by the 3 Settings rows.
+  // Generic "coming soon" bottom sheet used by Subscription / Sign in.
   Future<void> _showComingSoonSheet({
     required String title,
     required String message,
@@ -533,6 +562,41 @@ class _RootShellState extends State<RootShell> {
         endDrawerEnableOpenDragGesture: false,
         endDrawer: Builder(
           builder: (drawerCtx) {
+            if (_drawerMode == _DrawerMode.appLanguage) {
+              // App Language sub-drawer with 7 language options
+              return _AppLanguageDrawer(
+                currentCode: _appUiLanguageCode,
+                onClose: () {
+                  // just close this drawer
+                  Navigator.of(drawerCtx).pop();
+                },
+                onBack: () {
+                  // close sub-drawer, then reopen main drawer
+                  Navigator.of(drawerCtx).pop();
+                  Future.microtask(() {
+                    if (!mounted) return;
+                    setState(() {
+                      _drawerMode = _DrawerMode.main;
+                    });
+                    _scaffoldKey.currentState?.openEndDrawer();
+                  });
+                },
+                onSelect: (code) {
+                  // user picked a UI language
+                  Navigator.of(drawerCtx).pop();
+                  Future.microtask(() {
+                    if (!mounted) return;
+                    setState(() {
+                      _appUiLanguageCode = code;
+                      _drawerMode = _DrawerMode.main;
+                    });
+                    _scaffoldKey.currentState?.openEndDrawer();
+                  });
+                },
+              );
+            }
+
+            // Main settings drawer
             return AppDrawer(
               // close button in header
               onClose: () => Navigator.of(drawerCtx).pop(),
@@ -548,10 +612,7 @@ class _RootShellState extends State<RootShell> {
               onThemeTap: () => _openThemePicker(drawerCtx),
 
               // SETTINGS
-              onAppLanguageTap: () {
-                Navigator.of(drawerCtx).pop();
-                _openAppLanguageSettings();
-              },
+              onAppLanguageTap: () => _openAppLanguageSettings(drawerCtx),
               onSubscriptionTap: () {
                 Navigator.of(drawerCtx).pop();
                 _openSubscriptionSettings();
@@ -998,6 +1059,152 @@ class _CategoryPickerState extends State<_CategoryPicker> {
   }
 }
 
+/* ───────────────────────── APP LANGUAGE SUB-DRAWER ─────────────────────────
+ *
+ * This drawer lists the CinePulse UI languages (not feed languages).
+ * We show 7 options:
+ *
+ *  English
+ *  हिन्दी  (Hindi)
+ *  বাংলা   (Bengali)
+ *  मराठी   (Marathi)
+ *  తెలుగు  (Telugu)
+ *  தமிழ்   (Tamil)
+ *  ગુજરાતી (Gujarati)
+ *
+ * The user taps one. We update _appUiLanguageCode and then return
+ * to the main drawer.
+ */
+class _AppLanguageDrawer extends StatelessWidget {
+  const _AppLanguageDrawer({
+    required this.currentCode,
+    required this.onClose,
+    required this.onBack,
+    required this.onSelect,
+  });
+
+  final String currentCode;
+  final VoidCallback onClose;
+  final VoidCallback onBack;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    // The 7 UI language options. `code` is just internal.
+    final langs = <({String code, String primary, String secondary})>[
+      (code: 'english_ui', primary: 'English', secondary: 'English'),
+      (code: 'hindi_ui', primary: 'हिन्दी', secondary: 'Hindi'),
+      (code: 'bengali_ui', primary: 'বাংলা', secondary: 'Bengali'),
+      (code: 'marathi_ui', primary: 'मराठी', secondary: 'Marathi'),
+      (code: 'telugu_ui', primary: 'తెలుగు', secondary: 'Telugu'),
+      (code: 'tamil_ui', primary: 'தமிழ்', secondary: 'Tamil'),
+      (code: 'gujarati_ui', primary: 'ગુજરાતી', secondary: 'Gujarati'),
+    ];
+
+    Widget row(({String code, String primary, String secondary}) lang) {
+      final selected = (lang.code == currentCode);
+      return InkWell(
+        onTap: () => onSelect(lang.code),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lang.primary,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                    ),
+                    if (lang.secondary != lang.primary)
+                      Text(
+                        lang.secondary,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (selected)
+                const Icon(
+                  Icons.check_rounded,
+                  color: Color(0xFFdc2626),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: [
+            // Header with Back / Title / Close
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    onPressed: onBack,
+                    tooltip: 'Back',
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      'App language',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    tooltip: 'Close',
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+            ),
+
+            // Explainer
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text(
+                'Change the CinePulse UI language. Headlines and story text '
+                'still follow your "Show stories in" setting.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+
+            const Divider(height: 1),
+
+            // Scrollable list of languages
+            Expanded(
+              child: ListView.builder(
+                itemCount: langs.length,
+                itemBuilder: (_, i) => row(langs[i]),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /* ───────────────────────── DISCOVER PLACEHOLDER ─────────────────────────
  *
  * Simple placeholder until we actually build Discover.
@@ -1245,78 +1452,6 @@ class _NavButton extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/* ───────────────────────── DEBUG WRAPPER / ERROR FALLBACK ─────────────────────
- *
- * If a tab/widget throws during build (esp. in release mode),
- * Flutter might just give you a blank white area, which is useless.
- * _DebugPageWrapper catches that and shows a readable error view instead.
- */
-class _DebugPageWrapper extends StatelessWidget {
-  const _DebugPageWrapper({required this.builder});
-
-  final Widget Function(BuildContext) builder;
-
-  @override
-  Widget build(BuildContext context) {
-    try {
-      return builder(context);
-    } catch (err, st) {
-      return _DebugPageErrorView(error: err, stack: st);
-    }
-  }
-}
-
-class _DebugPageErrorView extends StatelessWidget {
-  const _DebugPageErrorView({
-    required this.error,
-    required this.stack,
-  });
-
-  final Object error;
-  final StackTrace stack;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final bg = isDark ? const Color(0xFF0b0f17) : Colors.white;
-    final fg = isDark ? Colors.white : Colors.black;
-
-    return Container(
-      color: bg,
-      width: double.infinity,
-      height: double.infinity,
-      padding: const EdgeInsets.all(16),
-      child: SingleChildScrollView(
-        child: DefaultTextStyle(
-          style: TextStyle(
-            color: fg,
-            fontSize: 13,
-            height: 1.4,
-            fontFamily: 'monospace',
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '💥 Build error',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(error.toString()),
-              const SizedBox(height: 12),
-              Text(stack.toString()),
-            ],
-          ),
-        ),
       ),
     );
   }
