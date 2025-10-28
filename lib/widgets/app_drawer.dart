@@ -4,9 +4,9 @@
 //
 // This is the slide-out panel you get when you tap the Menu button in the header.
 //
-// UPDATED TO MATCH THE FINAL APPROVED MOCK:
+// UPDATED: same UI/UX as your approved mock + **new SETTINGS block**.
 //
-// ───────────────── LAYOUT ─────────────────
+// ───────── LAYOUT (FINAL) ─────────
 //
 // HEADER
 //   [ 🎬 red gradient square ]
@@ -15,103 +15,79 @@
 //   "<CategorySummary> · <LanguageSummary>"   (feedStatusLine)
 //   [ ✕ ]
 //
-// SECTION: CONTENT & FILTERS
-//   ROW 1:
-//     [square icon button 🌐]   Show stories in
-//                               English
-//                               (> opens language picker)
-//   ROW 2:
-//     [square icon button 📺]   What to show
-//                               (no second line)
-//                               (> opens category picker)
+// CONTENT & FILTERS
+//   [square icon 🌐]  Show stories in
+//                     Hindi
+//   [square icon 📺]  What to show
 //
-// SECTION: APPEARANCE
-//   ROW:
-//     [square icon button 🎨]   Theme
-//                               System / Light / Dark · Affects Home & stories
-//                               (> opens theme picker)
+// APPEARANCE
+//   [square icon 🎨]  Theme
+//                     System / Light / Dark · Affects Home & stories
 //
-// SECTION: SHARE & SUPPORT
-//   ROW:
-//     [square icon button 📣]   Share CinePulse
-//                               Send the app link
-//                               (> share / copy link)
-//   ROW:
-//     [square icon button 🛠️]  Report an issue
-//                               Tell us if something is broken or fake. We’ll remove it.
-//                               (> email feedback)
+// SHARE & SUPPORT
+//   [square icon 📣]  Share CinePulse
+//                     Send the app link
+//   [square icon 🛠️] Report an issue
+//                     Tell us if something is broken or fake. We’ll remove it.
 //
-// SECTION: ABOUT & LEGAL
-//   ROW:
-//     [square icon button ℹ️]   About CinePulse
-//                               Version 0.1.0 · Early access   (versionLabel)
-//                               (> close drawer or open About later)
-//   ROW:
-//     [square icon button 🔒]   Privacy Policy
-//                               (> opens privacyUrl)
-//   ROW:
-//     [square icon button 📜]   Terms of Use
-//                               (> opens termsUrl)
+// SETTINGS (NEW BLOCK)
+//   [square icon 🌍]  App language
+//                     Change the CinePulse UI language
+//   [square icon 💎]  Subscription
+//                     Remove ads & unlock extras
+//   [square icon 👤]  Sign in
+//                     Sync saved stories across devices
 //
-// ───────────────── VISUAL RULES ─────────────────
+// ABOUT & LEGAL
+//   [square icon ℹ️]  About CinePulse
+//                     Version 0.1.0 · Early access
+//   [square icon 🔒]  Privacy Policy
+//   [square icon 📜]  Terms of Use
 //
-// • Row format EXACTLY matches your approved mock:
-//     [ small rounded square icon button ]  [ title + optional subline ]
+// ───────── STYLE RULES ─────────
+//
+// • EXACT SAME row visual as your screenshot:
+//     [ small rounded square icon button ]  [ title + subline ]
 //                                           [ chevron on far right ]
 //
-// • The square button style matches the header action buttons from Home:
-//     - dark/navy background block
-//     - subtle red border (#dc2626)
-//     - 8px radius
+// • The square icon button:
 //     - 36x36
-//     - emoji/icon centered
+//     - 8px radius
+//     - subtle red border (#dc2626 with opacity)
+//     - dark/navy bg in dark mode
+//     - emoji centered
+//     This matches the header action buttons you already ship.
 //
-// • Title ("Show stories in") is bold-ish 14px Inter.
-// • The second line, when it's showing a SELECTION (like "English"), is 13px,
-//   semibold, near-primary text.
-// • The second line, when it's just helper copy ("Send the app link"), is
-//   13px normal weight, slightly dimmed (onSurface.withOpacity(0.7)).
+// • Section headers are the same quiet caps style.
+// • Dividers: 1px line using onSurface.withOpacity(0.06).
+// • Drawer bg: #0f172a in dark mode, normal surface in light.
 //
-// • Chevron on the right.
+// ───────── DATA / CALLBACKS ─────────
 //
-// • Section headers are quiet, all-caps-ish labels at 12px,
-//   color onSurface.withOpacity(0.6).
+// Required from RootShell:
+//   feedStatusLine   e.g. "All · Hindi"
+//   versionLabel     e.g. "Version 0.1.0 · Early access"
 //
-// • Drawer bg is dark navy (#0f172a) in dark mode, and surface in light.
-// • 1px separators use onSurface.withOpacity(0.06).
+// Also from RootShell (callbacks):
+//   onLanguageTap        → open "Show stories in" picker
+//   onCategoryTap        → open "What to show" picker
+//   onThemeTap           → open Theme picker
 //
-// ───────────────── STATE / DATA FLOW ─────────────────
+//   onAppLanguageTap     → open APP language (UI language for full app)
+//   onSubscriptionTap    → open paywall / subscription
+//   onLoginTap           → open sign-in / account
 //
-// • We read current language from SharedPreferences('cp.lang').
-//   Values: 'english' | 'hindi' | 'mixed' | (later: 'bengali','telugu','marathi','tamil', etc.)
-//   That is shown as the second line in "Show stories in".
+// Plus:
+//   appShareUrl          → for Share CinePulse
+//   privacyUrl / termsUrl
 //
-// • We do NOT show the category summary text under "What to show"
-//   (you asked for no subline there — only the title).
+// We also read SharedPreferences('cp.lang') to render the current feed language
+// under "Show stories in".
 //
-// • feedStatusLine (e.g. "Entertainment · English") and versionLabel
-//   (e.g. "Version 0.1.0 · Early access") both come from RootShell.
+// DEPENDENCIES: google_fonts, shared_preferences, share_plus, url_launcher
 //
-// • onLanguageTap / onCategoryTap / onThemeTap are callbacks to RootShell,
-//   which closes the drawer and opens the correct bottom sheet.
-//
-// • Share / Report / Privacy / Terms rows call native actions / launch URLs.
-//
-// DEPENDENCIES:
-//
-// - google_fonts for Inter
-// - shared_preferences for language persistence
-// - share_plus for Share.share
-// - url_launcher for mailto / external links
-// - CategoryPrefs lives in root_shell.dart
-//
-// Make sure RootShell is passing:
-//   feedStatusLine: "..."
-//   versionLabel:   "..."
-//   onLanguageTap: _openLanguagePicker()
-//   onCategoryTap: _openCategoryPicker()
-//   onThemeTap:    _openThemePicker()
-//   etc.
+// NOTE: CategoryPrefs import is kept for consistency even though we don't show
+//       the category summary subtitle in this UI (row is single-line).
 //
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -130,10 +106,16 @@ class AppDrawer extends StatefulWidget {
     required this.onClose,
     required this.feedStatusLine,
     required this.versionLabel,
-    this.onFiltersChanged, // still here for compatibility
-    this.onLanguageTap,    // opens Language picker sheet
-    this.onCategoryTap,    // opens Category picker sheet
-    this.onThemeTap,       // opens Theme picker sheet
+    this.onFiltersChanged,   // legacy hook
+    this.onLanguageTap,      // feed language picker
+    this.onCategoryTap,      // category picker
+    this.onThemeTap,         // theme picker
+
+    // NEW for SETTINGS section:
+    this.onAppLanguageTap,   // app-wide UI language picker
+    this.onSubscriptionTap,  // subscription / paywall
+    this.onLoginTap,         // sign in / account
+
     this.appShareUrl,
     this.privacyUrl,
     this.termsUrl,
@@ -141,10 +123,10 @@ class AppDrawer extends StatefulWidget {
 
   final VoidCallback onClose;
 
-  // e.g. "Entertainment · English"
+  // "All · Hindi"
   final String feedStatusLine;
 
-  // e.g. "Version 0.1.0 · Early access"
+  // "Version 0.1.0 · Early access"
   final String versionLabel;
 
   final VoidCallback? onFiltersChanged;
@@ -152,6 +134,12 @@ class AppDrawer extends StatefulWidget {
   final VoidCallback? onCategoryTap;
   final VoidCallback? onThemeTap;
 
+  // SETTINGS callbacks
+  final VoidCallback? onAppLanguageTap;
+  final VoidCallback? onSubscriptionTap;
+  final VoidCallback? onLoginTap;
+
+  // external / share links
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -182,8 +170,7 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // Turn stored language code into display label.
-  // We'll expand this list as we add more languages.
+  // Convert saved feed language code to display text.
   String _langLabel(String code) {
     switch (code) {
       case 'english':
@@ -205,7 +192,7 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // ───────────────────── text style helpers ─────────────────────
+  // ───────────────── text styles ─────────────────
 
   TextStyle _rowTitleStyle(ColorScheme cs) {
     return GoogleFonts.inter(
@@ -216,7 +203,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Subtitle for helper copy ("Send the app link", "Affects Home & stories").
+  // helper copy / descriptive subline
   TextStyle _rowSubStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
@@ -226,7 +213,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Subtitle for selected value ("English").
+  // selected value subline (bold-ish)
   TextStyle _valueLineStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
@@ -236,7 +223,6 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Small "🌐" etc with emoji fallback.
   Widget _emoji(String e, {double size = 18}) {
     return Text(
       e,
@@ -254,12 +240,9 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // The small square action button on the left of each row.
-  // Matches the header action buttons feel:
-  // dark/navy bg block, red border, 8px radius, subtle glow.
+  // 36x36 rounded square icon button at the start of each row.
   Widget _squareIconButton(String emojiChar) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     final Color bgColor = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : Colors.black.withOpacity(0.06);
@@ -289,7 +272,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Section header label ("CONTENT & FILTERS", etc.).
+  // Section label like "CONTENT & FILTERS"
   Widget _sectionHeader(BuildContext context, String text) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     return Padding(
@@ -306,17 +289,14 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────────────────── reusable row builder ─────────────────────
-  //
-  // This builds a single row of the drawer sections in the new style:
+  // Generic row builder that matches your screenshot:
   //
   // [square icon]  Title
-  //                Subtitle (optional, either "English" or helper text)
-  //                                           >
+  //                Subtitle (optional)
+  //                                    >
   //
-  // isValueLine:
-  //   true  -> subtitle styled bold/primary (ex: "English")
-  //   false -> subtitle styled as helper/dimmed
+  // If isValueLine = true, subtitle is rendered bold/primary (for "Hindi", etc.)
+  // Otherwise subtitle is rendered dimmer helper text.
   Widget _drawerRow({
     required String emoji,
     required String title,
@@ -332,8 +312,7 @@ class _AppDrawerState extends State<AppDrawer> {
             padding: const EdgeInsets.only(top: 2),
             child: Text(
               subtitle,
-              style:
-                  isValueLine ? _valueLineStyle(cs) : _rowSubStyle(cs),
+              style: isValueLine ? _valueLineStyle(cs) : _rowSubStyle(cs),
             ),
           )
         : const SizedBox.shrink();
@@ -352,7 +331,6 @@ class _AppDrawerState extends State<AppDrawer> {
           children: [
             _squareIconButton(emoji),
             const SizedBox(width: 16),
-            // Text block
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -363,7 +341,6 @@ class _AppDrawerState extends State<AppDrawer> {
               ),
             ),
             const SizedBox(width: 12),
-            // Chevron
             Icon(
               Icons.chevron_right_rounded,
               size: 20,
@@ -375,32 +352,32 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────────────────── specific rows using _drawerRow ─────────────────────
+  // ───────── ROW COMPOSERS (PER SECTION) ─────────
 
+  // CONTENT & FILTERS
   Widget _langRow() {
     final label = _langLabel(_lang);
     return _drawerRow(
       emoji: '🌐',
       title: 'Show stories in',
-      subtitle: label,        // just "English", etc.
-      isValueLine: true,      // bold/primary subtitle
+      subtitle: label,
+      isValueLine: true,
       onTap: widget.onLanguageTap,
     );
   }
 
   Widget _whatToShowRow() {
-    // Per your request:
-    // "What to show" row has NO second line.
-    // We do NOT display CategoryPrefs.instance.summary() here anymore.
+    // Design: NO subtitle here.
     return _drawerRow(
       emoji: '📺',
       title: 'What to show',
-      subtitle: null,         // no subline
+      subtitle: null,
       isValueLine: false,
       onTap: widget.onCategoryTap,
     );
   }
 
+  // APPEARANCE
   Widget _themeRow() {
     return _drawerRow(
       emoji: '🎨',
@@ -411,6 +388,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
+  // SHARE & SUPPORT
   Widget _shareRow() {
     return _drawerRow(
       emoji: '📣',
@@ -432,6 +410,38 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
+  // SETTINGS (NEW BLOCK)
+  Widget _appLanguageRow() {
+    return _drawerRow(
+      emoji: '🌍',
+      title: 'App language',
+      subtitle: 'Change the CinePulse UI language',
+      isValueLine: false,
+      onTap: widget.onAppLanguageTap,
+    );
+  }
+
+  Widget _subscriptionRow() {
+    return _drawerRow(
+      emoji: '💎',
+      title: 'Subscription',
+      subtitle: 'Remove ads & unlock extras',
+      isValueLine: false,
+      onTap: widget.onSubscriptionTap,
+    );
+  }
+
+  Widget _loginRow() {
+    return _drawerRow(
+      emoji: '👤',
+      title: 'Sign in',
+      subtitle: 'Sync saved stories across devices',
+      isValueLine: false,
+      onTap: widget.onLoginTap,
+    );
+  }
+
+  // ABOUT & LEGAL
   Widget _aboutRow() {
     return _drawerRow(
       emoji: 'ℹ️',
@@ -462,19 +472,12 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────────────────── header block ─────────────────────
-  //
-  // Top branding section exactly like before:
-  //   🎬 red square
-  //   CinePulse (red gradient text)
-  //   tagline
-  //   feedStatusLine ("Entertainment · English")
-  //   Close button
+  // ───────── HEADER (unchanged look) ─────────
   Widget _drawerHeader(bool isDark) {
     final cs = Theme.of(context).colorScheme;
-    final dividerColor =
-        isDark ? Colors.white.withOpacity(0.06)
-               : cs.onSurface.withOpacity(0.06);
+    final dividerColor = isDark
+        ? Colors.white.withOpacity(0.06)
+        : cs.onSurface.withOpacity(0.06);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
@@ -520,7 +523,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
           const SizedBox(width: 12),
 
-          // Brand + tagline + feed status
+          // CinePulse + tagline + feed status
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -579,9 +582,8 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────────────────── actions ─────────────────────
+  // ───────── actions for share/report/external links ─────────
 
-  // Share CinePulse link.
   Future<void> _shareApp(BuildContext context) async {
     final link = widget.appShareUrl ?? 'https://cinepulse.netlify.app';
     if (!kIsWeb) {
@@ -597,7 +599,6 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // "Report an issue"
   Future<void> _reportIssue() async {
     final uri = Uri.parse(
       'mailto:feedback@cinepulse.app?subject=CinePulse%20Feedback',
@@ -608,7 +609,6 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Open privacy / terms external URLs.
   Future<void> _openExternal(String? url) async {
     if (url == null || url.isEmpty) return;
     await launchUrl(
@@ -617,7 +617,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────────────────── build ─────────────────────
+  // ───────── build ─────────
 
   @override
   Widget build(BuildContext context) {
@@ -649,6 +649,12 @@ class _AppDrawerState extends State<AppDrawer> {
             _sectionHeader(context, 'Share & support'),
             _shareRow(),
             _reportRow(),
+
+            // SETTINGS (NEW BLOCK)
+            _sectionHeader(context, 'Settings'),
+            _appLanguageRow(),
+            _subscriptionRow(),
+            _loginRow(),
 
             // ABOUT & LEGAL
             _sectionHeader(context, 'About & legal'),
