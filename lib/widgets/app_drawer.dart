@@ -1,88 +1,117 @@
 // lib/widgets/app_drawer.dart
 //
-// Right-side drawer (endDrawer) for CinePulse.
+// CinePulse right-side drawer (endDrawer).
 //
-// This panel slides in from the right when you tap the menu icon in the header.
-// It matches the wide-screen CinePulse UI (your screenshot):
+// This is the slide-out panel you get when you tap the Menu button in the header.
 //
-// ───────────────── UI STRUCTURE ─────────────────
+// UPDATED TO MATCH THE FINAL APPROVED MOCK:
+//
+// ───────────────── LAYOUT ─────────────────
 //
 // HEADER
 //   [ 🎬 red gradient square ]
 //   CinePulse
 //   "Movies & OTT, in a minute."
-//   "<CategorySummary> · <LanguageSummary>"   (feedStatusLine from RootShell)
-//   [ ✕ close ]
+//   "<CategorySummary> · <LanguageSummary>"   (feedStatusLine)
+//   [ ✕ ]
 //
-// CONTENT & FILTERS
-//   Row: "Show stories in"
-//        [red badge]  English                        (> opens language picker)
-//   Row: "What to show"
-//        [outline badge]  Entertainment / All / ... (> opens category picker)
+// SECTION: CONTENT & FILTERS
+//   ROW 1:
+//     [square icon button 🌐]   Show stories in
+//                               English
+//                               (> opens language picker)
+//   ROW 2:
+//     [square icon button 📺]   What to show
+//                               (no second line)
+//                               (> opens category picker)
 //
-// APPEARANCE
-//   Row: "Theme"
-//        "System / Light / Dark · Affects Home & stories"
-//        (> opens theme picker)
+// SECTION: APPEARANCE
+//   ROW:
+//     [square icon button 🎨]   Theme
+//                               System / Light / Dark · Affects Home & stories
+//                               (> opens theme picker)
 //
-// SHARE & SUPPORT
-//   Row:
-//        [outline pill: "Share"]
-//        "Send the app link"
-//        (> share or copy link)
-//   Row:
-//        [outline pill: "Report"]
-//        "Tell us if something is broken or fake. We’ll remove it."
-//        (> email feedback)
+// SECTION: SHARE & SUPPORT
+//   ROW:
+//     [square icon button 📣]   Share CinePulse
+//                               Send the app link
+//                               (> share / copy link)
+//   ROW:
+//     [square icon button 🛠️]  Report an issue
+//                               Tell us if something is broken or fake. We’ll remove it.
+//                               (> email feedback)
 //
-// ABOUT & LEGAL
-//   Row: "About CinePulse"
-//        "Version 0.1.0 · Early access" (versionLabel from RootShell)
-//   Row: "Privacy Policy"
-//   Row: "Terms of Use"
+// SECTION: ABOUT & LEGAL
+//   ROW:
+//     [square icon button ℹ️]   About CinePulse
+//                               Version 0.1.0 · Early access   (versionLabel)
+//                               (> close drawer or open About later)
+//   ROW:
+//     [square icon button 🔒]   Privacy Policy
+//                               (> opens privacyUrl)
+//   ROW:
+//     [square icon button 📜]   Terms of Use
+//                               (> opens termsUrl)
 //
-// ───────────────── KEY STYLE DECISIONS ─────────────────
+// ───────────────── VISUAL RULES ─────────────────
 //
-// 1. CONTENT & FILTERS rows now match what you asked for:
-//    - NOT a full chip/pill with text inside.
-//    - Instead we show a small CinePulse "badge" shape first,
-//      and then the text label next to it.
+// • Row format EXACTLY matches your approved mock:
+//     [ small rounded square icon button ]  [ title + optional subline ]
+//                                           [ chevron on far right ]
 //
-//    Example:
-//      Show stories in
-//      [red badge]  English
+// • The square button style matches the header action buttons from Home:
+//     - dark/navy background block
+//     - subtle red border (#dc2626)
+//     - 8px radius
+//     - 36x36
+//     - emoji/icon centered
 //
-//      What to show
-//      [outline badge]  Entertainment
+// • Title ("Show stories in") is bold-ish 14px Inter.
+// • The second line, when it's showing a SELECTION (like "English"), is 13px,
+//   semibold, near-primary text.
+// • The second line, when it's just helper copy ("Send the app link"), is
+//   13px normal weight, slightly dimmed (onSurface.withOpacity(0.7)).
 //
-//    The badge = visual dot/lozenge that uses CinePulse red.
-//    The label text sits to the right.
+// • Chevron on the right.
 //
-// 2. The rest of the drawer still uses:
-//    - Dark navy/black surfaces (#0f172a in dark mode).
-//    - 1px low-opacity separators (0.06 alpha).
-//    - Inter typography at 14/13px.
-//    - Accent red #dc2626.
+// • Section headers are quiet, all-caps-ish labels at 12px,
+//   color onSurface.withOpacity(0.6).
 //
-// 3. Language preference is read from SharedPreferences ('cp.lang')
-//    and turned into a label ("English", "Hindi", "Mixed").
+// • Drawer bg is dark navy (#0f172a) in dark mode, and surface in light.
+// • 1px separators use onSurface.withOpacity(0.06).
 //
-// 4. CategoryPrefs.instance.summary() returns "All", "Entertainment",
-//    "Entertainment +2", etc. We show that after an outline badge.
+// ───────────────── STATE / DATA FLOW ─────────────────
 //
-// 5. Tapping:
-//    - "Show stories in" row    → widget.onLanguageTap()
-//    - "What to show" row       → widget.onCategoryTap()
-//    - "Theme" row              → widget.onThemeTap()
-//    - "Share" row              → share/copy
-//    - "Report" row             → mailto feedback
+// • We read current language from SharedPreferences('cp.lang').
+//   Values: 'english' | 'hindi' | 'mixed' | (later: 'bengali','telugu','marathi','tamil', etc.)
+//   That is shown as the second line in "Show stories in".
 //
-// RootShell must pass:
-//   feedStatusLine: "Entertainment · English"
-//   versionLabel:   "Version 0.1.0 · Early access"
+// • We do NOT show the category summary text under "What to show"
+//   (you asked for no subline there — only the title).
 //
-// NOTE: This file depends on google_fonts, share_plus, url_launcher,
-//       shared_preferences. CategoryPrefs is defined in root_shell.dart.
+// • feedStatusLine (e.g. "Entertainment · English") and versionLabel
+//   (e.g. "Version 0.1.0 · Early access") both come from RootShell.
+//
+// • onLanguageTap / onCategoryTap / onThemeTap are callbacks to RootShell,
+//   which closes the drawer and opens the correct bottom sheet.
+//
+// • Share / Report / Privacy / Terms rows call native actions / launch URLs.
+//
+// DEPENDENCIES:
+//
+// - google_fonts for Inter
+// - shared_preferences for language persistence
+// - share_plus for Share.share
+// - url_launcher for mailto / external links
+// - CategoryPrefs lives in root_shell.dart
+//
+// Make sure RootShell is passing:
+//   feedStatusLine: "..."
+//   versionLabel:   "..."
+//   onLanguageTap: _openLanguagePicker()
+//   onCategoryTap: _openCategoryPicker()
+//   onThemeTap:    _openThemePicker()
+//   etc.
 //
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -101,10 +130,10 @@ class AppDrawer extends StatefulWidget {
     required this.onClose,
     required this.feedStatusLine,
     required this.versionLabel,
-    this.onFiltersChanged, // kept for compatibility
-    this.onLanguageTap,    // open Language picker bottom sheet
-    this.onCategoryTap,    // open Category picker bottom sheet
-    this.onThemeTap,       // open Theme picker bottom sheet
+    this.onFiltersChanged, // still here for compatibility
+    this.onLanguageTap,    // opens Language picker sheet
+    this.onCategoryTap,    // opens Category picker sheet
+    this.onThemeTap,       // opens Theme picker sheet
     this.appShareUrl,
     this.privacyUrl,
     this.termsUrl,
@@ -133,7 +162,7 @@ class AppDrawer extends StatefulWidget {
 
 class _AppDrawerState extends State<AppDrawer> {
   static const _accent = Color(0xFFdc2626);
-  static const _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
+  static const _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed' | etc.
 
   String _lang = 'mixed';
 
@@ -153,19 +182,30 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // Map 'english' / 'hindi' / 'mixed' -> label text
+  // Turn stored language code into display label.
+  // We'll expand this list as we add more languages.
   String _langLabel(String code) {
     switch (code) {
       case 'english':
         return 'English';
       case 'hindi':
         return 'Hindi';
+      case 'bengali':
+        return 'Bengali';
+      case 'telugu':
+        return 'Telugu';
+      case 'marathi':
+        return 'Marathi';
+      case 'tamil':
+        return 'Tamil';
+      case 'gujarati':
+        return 'Gujarati';
       default:
         return 'Mixed';
     }
   }
 
-  // ────────────────────────── shared text styles ──────────────────────────
+  // ───────────────────── text style helpers ─────────────────────
 
   TextStyle _rowTitleStyle(ColorScheme cs) {
     return GoogleFonts.inter(
@@ -176,6 +216,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
+  // Subtitle for helper copy ("Send the app link", "Affects Home & stories").
   TextStyle _rowSubStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
@@ -185,33 +226,56 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  TextStyle _valueTextStyle(ColorScheme cs) {
-    // the "English", "Entertainment" text after the badge
+  // Subtitle for selected value ("English").
+  TextStyle _valueLineStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
       fontWeight: FontWeight.w600,
       height: 1.3,
-      color: cs.onSurface, // in dark mode this will be near-white
+      color: cs.onSurface,
     );
   }
 
-  // ────────────────────────── badge primitives ──────────────────────────
-  //
-  // Tiny CinePulse visual dot/lozenge.
-  // We show this next to the text in Content & Filters so it reads like:
-  // [badge]  English
-  //
-  // Filled badge = solid red with glow.
-  // Outline badge = transparent bg with red border.
+  // Small "🌐" etc with emoji fallback.
+  Widget _emoji(String e, {double size = 18}) {
+    return Text(
+      e,
+      style: TextStyle(
+        fontSize: size,
+        height: 1,
+        fontFamily: null,
+        fontFamilyFallback: const [
+          'Apple Color Emoji',
+          'Segoe UI Emoji',
+          'Noto Color Emoji',
+          'EmojiOne Color',
+        ],
+      ),
+    );
+  }
 
-  Widget _badgeFilled() {
+  // The small square action button on the left of each row.
+  // Matches the header action buttons feel:
+  // dark/navy bg block, red border, 8px radius, subtle glow.
+  Widget _squareIconButton(String emojiChar) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final Color bgColor = isDark
+        ? const Color(0xFF0f172a).withOpacity(0.7)
+        : Colors.black.withOpacity(0.06);
+
+    final Color borderColor = _accent.withOpacity(0.4);
+
     return Container(
-      height: 14,
-      width: 18,
+      width: 36,
+      height: 36,
       decoration: BoxDecoration(
-        color: _accent,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: _accent, width: 1),
+        color: bgColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: borderColor,
+          width: 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: _accent.withOpacity(0.4),
@@ -220,48 +284,12 @@ class _AppDrawerState extends State<AppDrawer> {
           ),
         ],
       ),
+      alignment: Alignment.center,
+      child: _emoji(emojiChar),
     );
   }
 
-  Widget _badgeOutline() {
-    return Container(
-      height: 14,
-      width: 18,
-      decoration: BoxDecoration(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: _accent.withOpacity(0.4),
-          width: 1,
-        ),
-      ),
-    );
-  }
-
-  // We still keep pillOutline/pillFilled for Share / Report rows.
-  Widget _pillOutline(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: _accent.withOpacity(0.4),
-          width: 1,
-        ),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: _accent,
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-          height: 1.2,
-        ),
-      ),
-    );
-  }
-
+  // Section header label ("CONTENT & FILTERS", etc.).
   Widget _sectionHeader(BuildContext context, String text) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     return Padding(
@@ -278,22 +306,40 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── row builders ──────────────────────────
+  // ───────────────────── reusable row builder ─────────────────────
   //
-  // Each row:
-  //   - 16px horizontal padding
-  //   - 14px vertical padding
-  //   - bottom 1px divider
-  //   - left side is Column(title + value line)
-  //   - right side chevron
-
-  Widget _langRow() {
+  // This builds a single row of the drawer sections in the new style:
+  //
+  // [square icon]  Title
+  //                Subtitle (optional, either "English" or helper text)
+  //                                           >
+  //
+  // isValueLine:
+  //   true  -> subtitle styled bold/primary (ex: "English")
+  //   false -> subtitle styled as helper/dimmed
+  Widget _drawerRow({
+    required String emoji,
+    required String title,
+    String? subtitle,
+    required bool isValueLine,
+    required VoidCallback? onTap,
+  }) {
     final cs = Theme.of(context).colorScheme;
     final dividerColor = cs.onSurface.withOpacity(0.06);
-    final label = _langLabel(_lang);
+
+    final subtitleWidget = (subtitle != null && subtitle.isNotEmpty)
+        ? Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              subtitle,
+              style:
+                  isValueLine ? _valueLineStyle(cs) : _rowSubStyle(cs),
+            ),
+          )
+        : const SizedBox.shrink();
 
     return InkWell(
-      onTap: widget.onLanguageTap,
+      onTap: onTap,
       child: Container(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         decoration: BoxDecoration(
@@ -304,24 +350,15 @@ class _AppDrawerState extends State<AppDrawer> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left side content
+            _squareIconButton(emoji),
+            const SizedBox(width: 16),
+            // Text block
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Show stories in',
-                    style: _rowTitleStyle(cs),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _badgeFilled(),
-                      const SizedBox(width: 8),
-                      Text(label, style: _valueTextStyle(cs)),
-                    ],
-                  ),
+                  Text(title, style: _rowTitleStyle(cs)),
+                  subtitleWidget,
                 ],
               ),
             ),
@@ -338,212 +375,106 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  Widget _whatToShowRow() {
-    final cs = Theme.of(context).colorScheme;
-    final dividerColor = cs.onSurface.withOpacity(0.06);
+  // ───────────────────── specific rows using _drawerRow ─────────────────────
 
-    return AnimatedBuilder(
-      animation: CategoryPrefs.instance,
-      builder: (context, _) {
-        final summary = CategoryPrefs.instance.summary(); // e.g. "All", "Entertainment"
-        return InkWell(
-          onTap: widget.onCategoryTap,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(width: 1, color: dividerColor),
-              ),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Left side content
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'What to show',
-                        style: _rowTitleStyle(cs),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _badgeOutline(),
-                          const SizedBox(width: 8),
-                          Text(summary, style: _valueTextStyle(cs)),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // Chevron
-                Icon(
-                  Icons.chevron_right_rounded,
-                  size: 20,
-                  color: cs.onSurface.withOpacity(0.6),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+  Widget _langRow() {
+    final label = _langLabel(_lang);
+    return _drawerRow(
+      emoji: '🌐',
+      title: 'Show stories in',
+      subtitle: label,        // just "English", etc.
+      isValueLine: true,      // bold/primary subtitle
+      onTap: widget.onLanguageTap,
+    );
+  }
+
+  Widget _whatToShowRow() {
+    // Per your request:
+    // "What to show" row has NO second line.
+    // We do NOT display CategoryPrefs.instance.summary() here anymore.
+    return _drawerRow(
+      emoji: '📺',
+      title: 'What to show',
+      subtitle: null,         // no subline
+      isValueLine: false,
+      onTap: widget.onCategoryTap,
     );
   }
 
   Widget _themeRow() {
-    final cs = Theme.of(context).colorScheme;
-    final dividerColor = cs.onSurface.withOpacity(0.06);
-
-    return InkWell(
+    return _drawerRow(
+      emoji: '🎨',
+      title: 'Theme',
+      subtitle: 'System / Light / Dark · Affects Home & stories',
+      isValueLine: false,
       onTap: widget.onThemeTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(width: 1, color: dividerColor),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Theme',
-                    style: _rowTitleStyle(cs),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'System / Light / Dark · Affects Home & stories',
-                    style: _rowSubStyle(cs),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 20,
-              color: cs.onSurface.withOpacity(0.6),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
-  Widget _shareSupportRow({
-    required String pillText,
-    required String subtitle,
-    required VoidCallback onTap,
-  }) {
-    final cs = Theme.of(context).colorScheme;
-    final dividerColor = cs.onSurface.withOpacity(0.06);
-
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(width: 1, color: dividerColor),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _pillOutline(pillText),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: _rowSubStyle(cs),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 20,
-              color: cs.onSurface.withOpacity(0.6),
-            ),
-          ],
-        ),
-      ),
+  Widget _shareRow() {
+    return _drawerRow(
+      emoji: '📣',
+      title: 'Share CinePulse',
+      subtitle: 'Send the app link',
+      isValueLine: false,
+      onTap: () => _shareApp(context),
     );
   }
 
-  Widget _infoRow({
-    required String title,
-    String? subtitle,
-    required VoidCallback? onTap,
-  }) {
-    final cs = Theme.of(context).colorScheme;
-    final dividerColor = cs.onSurface.withOpacity(0.06);
-
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(width: 1, color: dividerColor),
-          ),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: _rowTitleStyle(cs),
-                  ),
-                  if (subtitle != null && subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: _rowSubStyle(cs),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 20,
-              color: cs.onSurface.withOpacity(0.6),
-            ),
-          ],
-        ),
-      ),
+  Widget _reportRow() {
+    return _drawerRow(
+      emoji: '🛠️',
+      title: 'Report an issue',
+      subtitle:
+          'Tell us if something is broken or fake. We’ll remove it.',
+      isValueLine: false,
+      onTap: _reportIssue,
     );
   }
 
-  // ────────────────────────── header block ──────────────────────────
+  Widget _aboutRow() {
+    return _drawerRow(
+      emoji: 'ℹ️',
+      title: 'About CinePulse',
+      subtitle: widget.versionLabel,
+      isValueLine: false,
+      onTap: widget.onClose,
+    );
+  }
+
+  Widget _privacyRow() {
+    return _drawerRow(
+      emoji: '🔒',
+      title: 'Privacy Policy',
+      subtitle: null,
+      isValueLine: false,
+      onTap: () => _openExternal(widget.privacyUrl),
+    );
+  }
+
+  Widget _termsRow() {
+    return _drawerRow(
+      emoji: '📜',
+      title: 'Terms of Use',
+      subtitle: null,
+      isValueLine: false,
+      onTap: () => _openExternal(widget.termsUrl),
+    );
+  }
+
+  // ───────────────────── header block ─────────────────────
   //
-  //  🎬 badge
-  //  CinePulse (red gradient text)
-  //  Movies & OTT, in a minute.
-  //  feedStatusLine (ex: "Entertainment · English")
-  //  [✕]
+  // Top branding section exactly like before:
+  //   🎬 red square
+  //   CinePulse (red gradient text)
+  //   tagline
+  //   feedStatusLine ("Entertainment · English")
+  //   Close button
   Widget _drawerHeader(bool isDark) {
     final cs = Theme.of(context).colorScheme;
     final dividerColor =
-        isDark ? Colors.white.withOpacity(0.06) : cs.onSurface.withOpacity(0.06);
+        isDark ? Colors.white.withOpacity(0.06)
+               : cs.onSurface.withOpacity(0.06);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
@@ -558,7 +489,7 @@ class _AppDrawerState extends State<AppDrawer> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Branded red square with 🎬
+          // red gradient square with 🎬
           Container(
             width: 40,
             height: 40,
@@ -580,17 +511,16 @@ class _AppDrawerState extends State<AppDrawer> {
                 ),
               ],
             ),
-            child: const Center(
-              child: Text(
-                '🎬',
-                style: TextStyle(fontSize: 20, height: 1),
-              ),
+            alignment: Alignment.center,
+            child: const Text(
+              '🎬',
+              style: TextStyle(fontSize: 20, height: 1),
             ),
           ),
 
           const SizedBox(width: 12),
 
-          // Brand block
+          // Brand + tagline + feed status
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -649,8 +579,9 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── actions ──────────────────────────
+  // ───────────────────── actions ─────────────────────
 
+  // Share CinePulse link.
   Future<void> _shareApp(BuildContext context) async {
     final link = widget.appShareUrl ?? 'https://cinepulse.netlify.app';
     if (!kIsWeb) {
@@ -666,6 +597,7 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
+  // "Report an issue"
   Future<void> _reportIssue() async {
     final uri = Uri.parse(
       'mailto:feedback@cinepulse.app?subject=CinePulse%20Feedback',
@@ -676,6 +608,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
+  // Open privacy / terms external URLs.
   Future<void> _openExternal(String? url) async {
     if (url == null || url.isEmpty) return;
     await launchUrl(
@@ -684,7 +617,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── build ──────────────────────────
+  // ───────────────────── build ─────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -714,35 +647,14 @@ class _AppDrawerState extends State<AppDrawer> {
 
             // SHARE & SUPPORT
             _sectionHeader(context, 'Share & support'),
-            _shareSupportRow(
-              pillText: 'Share',
-              subtitle: 'Send the app link',
-              onTap: () => _shareApp(context),
-            ),
-            _shareSupportRow(
-              pillText: 'Report',
-              subtitle:
-                  'Tell us if something is broken or fake. We’ll remove it.',
-              onTap: _reportIssue,
-            ),
+            _shareRow(),
+            _reportRow(),
 
             // ABOUT & LEGAL
             _sectionHeader(context, 'About & legal'),
-            _infoRow(
-              title: 'About CinePulse',
-              subtitle: widget.versionLabel,
-              onTap: widget.onClose,
-            ),
-            _infoRow(
-              title: 'Privacy Policy',
-              subtitle: null,
-              onTap: () => _openExternal(widget.privacyUrl),
-            ),
-            _infoRow(
-              title: 'Terms of Use',
-              subtitle: null,
-              onTap: () => _openExternal(widget.termsUrl),
-            ),
+            _aboutRow(),
+            _privacyRow(),
+            _termsRow(),
 
             const SizedBox(height: 24),
           ],
