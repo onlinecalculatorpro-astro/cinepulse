@@ -1,43 +1,53 @@
 // lib/root_shell.dart
 //
 // RootShell = main scaffold / shell for the whole app.
+//
 // It owns:
 //  • Tab pages (Home / Discover / Saved / Alerts) via an IndexedStack
 //  • The global right-side drawer (AppDrawer)
 //  • The bottom nav on phones only (<768px width)
 //  • Deep link handling for /s/<id> → StoryDetailsScreen
 //
-// This version matches the new drawer / header experience:
+// Drawer spec (matches the UI you signed off on):
 //
-// 1. Drawer speaks in CinePulse voice.
-//    - Header shows "<CategorySummary> · <LanguageSummary>"
-//      e.g. "Entertainment · English"
-//    - About row shows "Version 0.1.0 · Early access"
-//    - Rows in drawer are now:
-//        "Show stories in"     (> opens language picker sheet)
-//        "What to show"        (> opens category picker sheet)
-//        "Theme"               (> opens theme picker sheet)
-//        "Share" / "Report"
-//        "About CinePulse" / "Privacy Policy" / "Terms of Use"
+// HEADER
+//   CinePulse brand block
+//   tagline ("Movies & OTT, in a minute.")
+//   "<CategorySummary> · <LanguageSummary>"  (feedStatusLine)
+//   "x" close button
 //
-// 2. Drawer rows are previews + chevrons. No inline chips, no toggles.
-//    Tapping a row calls back into RootShell, which opens a bottom sheet:
-//       _openLanguagePicker()
-//       _openCategoryPicker()
-//       _openThemePicker()
+// CONTENT & FILTERS
+//   Show stories in     (> opens _openLanguagePicker sheet)
+//   What to show        (> opens _openCategoryPicker sheet)
 //
-// 3. RootShell state:
-//    • _pageIndex / _navIndex / _showSearchBar for tab + bottom nav
-//    • _currentLang from SharedPreferences ('english' | 'hindi' | 'mixed')
-//    • deep link handling for story details
+// APPEARANCE
+//   Theme               (> opens _openThemePicker sheet)
 //
-// 4. Responsive:
-//    • <768px width -> bottom nav visible
-//    • ≥768px width -> bottom nav hidden, content width-clamped
+// SHARE & SUPPORT
+//   Share CinePulse     (> share / copy link)
+//   Report an issue     (> email)
 //
-// NOTE: AppDrawer takes onLanguageTap, onCategoryTap, onThemeTap,
-//       and just displays summary badges + chevrons.
-//       It no longer renders its own pickers.
+// SETTINGS
+//   App language        (> _openAppLanguageSettings())
+//   Subscription        (> _openSubscriptionSettings())
+//   Sign in             (> _openAccountSettings())
+//
+// ABOUT & LEGAL
+//   About CinePulse     (uses versionLabel, ex: "Version 0.1.0 · Early access")
+//   Privacy Policy
+//   Terms of Use
+//
+// RootShell is responsible for:
+//   • reading language preference from SharedPreferences ('english' | 'hindi' | 'mixed' ...)
+//   • exposing callbacks the drawer calls for each row
+//   • handling responsive layout (bottom nav only under 768px width)
+//
+// NOTE: AppDrawer is "dumb". It just renders rows and calls the callbacks:
+//       onLanguageTap, onCategoryTap, onThemeTap,
+//       onAppLanguageTap, onSubscriptionTap, onLoginTap.
+//
+// We close the drawer first, then RootShell shows the appropriate bottom sheet.
+//
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -148,19 +158,19 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // Which tab we have visible in IndexedStack:
+  // Which tab is visible in the IndexedStack:
   // 0 = Home, 1 = Discover, 2 = Saved, 3 = Alerts
   int _pageIndex = 0;
 
-  // Which item is highlighted in bottom nav:
-  // 0 = Home, 1 = Search (still Home but with inline search bar),
+  // Which item is highlighted in the bottom nav:
+  // 0 = Home, 1 = Search (Home with inline search bar),
   // 2 = Saved, 3 = Alerts
   int _navIndex = 0;
 
   // Whether HomeScreen should show its inline search bar (Search tab behavior)
   bool _showSearchBar = false;
 
-  // 'english' | 'hindi' | 'mixed'
+  // 'english' | 'hindi' | 'mixed' | etc.
   String _currentLang = 'mixed';
 
   // Deep link handling (/s/<id>)
@@ -172,6 +182,7 @@ class _RootShellState extends State<RootShell> {
     super.initState();
     _captureInitialDeepLink();
     _loadLangPref();
+
     // After first frame, try to open the story deep link if any.
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _tryOpenPendingDeepLink(),
@@ -273,7 +284,7 @@ class _RootShellState extends State<RootShell> {
   void _openDiscover() {
     setState(() {
       _pageIndex = 1;
-      // If Search was highlighted in the bottom nav, drop back to Home highlight.
+      // If Search was highlighted in bottom nav, drop back to Home highlight.
       _navIndex = (_navIndex == 1) ? 0 : _navIndex;
       _showSearchBar = false;
     });
@@ -312,7 +323,7 @@ class _RootShellState extends State<RootShell> {
    */
   void _onDestinationSelected(int i) {
     if (i == 1) {
-      // "Search": highlight Search, keep Home tab visible, show the inline search bar
+      // "Search": highlight Search, keep Home tab visible, show inline search bar
       setState(() {
         _pageIndex = 0;
         _navIndex = 1;
@@ -330,13 +341,14 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  /* ───────────────────────── THEME PICKER SHEET ─────────────────────────
+  /* ───────────────────────── PICKER SHEETS ─────────────────────────
    *
-   * Drawer row "Theme":
-   *  - Close drawer
-   *  - Show bottom sheet with System / Light / Dark
-   *  - Save via AppSettings.instance.setThemeMode(...)
+   * Each of these is triggered from the drawer rows.
+   * We close the drawer first (Navigator.pop(drawerContext)) so
+   * the sheet isn't stacked on top of an open Drawer.
    */
+
+  // THEME
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final current = AppSettings.instance.themeMode;
 
@@ -355,13 +367,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ─────────────────────── CATEGORY PICKER SHEET ───────────────────────
-   *
-   * Drawer row "What to show"
-   *  - Close drawer
-   *  - Bottom sheet with category checkboxes
-   *  - Apply with CategoryPrefs.instance.applySelection(...)
-   */
+  // CATEGORIES ("What to show")
   Future<void> _openCategoryPicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
@@ -380,13 +386,7 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ─────────────────────── LANGUAGE PICKER SHEET ───────────────────────
-   *
-   * Drawer row "Show stories in"
-   *  - Close drawer
-   *  - Bottom sheet of language radio buttons
-   *  - Save to SharedPreferences
-   */
+  // FEED LANGUAGE ("Show stories in")
   Future<void> _openLanguagePicker(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
@@ -405,6 +405,90 @@ class _RootShellState extends State<RootShell> {
         });
       }
     }
+  }
+
+  // SETTINGS → "App language"
+  Future<void> _openAppLanguageSettings() async {
+    // Placeholder bottom sheet for now (coming soon)
+    await _showComingSoonSheet(
+      title: 'App language',
+      message:
+          'Change the CinePulse UI language (headlines stay the same language rules you set in "Show stories in").',
+    );
+  }
+
+  // SETTINGS → "Subscription"
+  Future<void> _openSubscriptionSettings() async {
+    await _showComingSoonSheet(
+      title: 'Subscription',
+      message:
+          'Remove ads & unlock extras. This will show our paywall / plans.',
+    );
+  }
+
+  // SETTINGS → "Sign in"
+  Future<void> _openAccountSettings() async {
+    await _showComingSoonSheet(
+      title: 'Sign in',
+      message:
+          'Log in to sync your saved stories and alerts across devices.',
+    );
+  }
+
+  // Generic "coming soon" bottom sheet used by the 3 Settings rows.
+  Future<void> _showComingSoonSheet({
+    required String title,
+    required String message,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.inter(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('OK'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFdc2626),
+                      foregroundColor: Colors.white,
+                      textStyle: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   /* ───────────────────────── Responsive helpers ─────────────────────────
@@ -453,15 +537,31 @@ class _RootShellState extends State<RootShell> {
               // close button in header
               onClose: () => Navigator.of(drawerCtx).pop(),
 
-              // we keep this to allow HomeScreen refresh if prefs change
+              // keep this to allow HomeScreen refresh if prefs change
               onFiltersChanged: () => setState(() {}),
 
-              // rows that open sheets
+              // CONTENT & FILTERS
               onLanguageTap: () => _openLanguagePicker(drawerCtx),
               onCategoryTap: () => _openCategoryPicker(drawerCtx),
+
+              // APPEARANCE
               onThemeTap: () => _openThemePicker(drawerCtx),
 
-              // links for share / legal
+              // SETTINGS
+              onAppLanguageTap: () {
+                Navigator.of(drawerCtx).pop();
+                _openAppLanguageSettings();
+              },
+              onSubscriptionTap: () {
+                Navigator.of(drawerCtx).pop();
+                _openSubscriptionSettings();
+              },
+              onLoginTap: () {
+                Navigator.of(drawerCtx).pop();
+                _openAccountSettings();
+              },
+
+              // SHARE / LEGAL links
               appShareUrl: 'https://cinepulse.netlify.app',
               privacyUrl: 'https://example.com/privacy', // TODO real link
               termsUrl: 'https://example.com/terms',     // TODO real link
@@ -473,14 +573,14 @@ class _RootShellState extends State<RootShell> {
           },
         ),
 
-        // Main body: the active tab page, width-clamped on desktop
+        // Main body: active tab page, width-clamped on desktop
         body: _ResponsiveWidth(
           child: IndexedStack(
             index: _pageIndex,
             children: [
               _DebugPageWrapper(
                 builder: (ctx) => HomeScreen(
-                  // this toggles when user taps Search in bottom nav
+                  // toggles when user taps Search in bottom nav
                   showSearchBar: _showSearchBar,
 
                   // header actions from Home
