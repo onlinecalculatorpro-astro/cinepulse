@@ -1,30 +1,55 @@
 // lib/widgets/app_drawer.dart
 //
-// Right-side settings / preferences drawer (endDrawer).
+// Right-side drawer (endDrawer) for CinePulse.
+// This is the slide-out menu opened from the header "menu" icon.
 //
-// UPDATED TO MATCH THE APPROVED CINEPULSE POLISH:
+// GOALS (aligned with app tone and Story screen style):
+// - Strong CinePulse identity at the top (logo + tagline).
+// - Show what the user is currently seeing: e.g. "Entertainment · Mixed language".
+//   → passed in via feedStatusLine
+// - Mark build status: "Version 0.1.0 · Early access".
+//   → passed in via versionLabel
+// - Plain-language sections:
+//     CONTENT & FILTERS
+//        - "Show stories in" (language pills English / Hindi / Mixed)
+//        - "What to show" (tappable row that opens category picker sheet)
+//     FEED RULES
+//        - bullet list explaining "No gossip, no fake outrage" etc.
+//     APPEARANCE
+//        - Theme picker row
+//     SHARE & SUPPORT
+//        - Share CinePulse
+//        - Report an issue (we remove broken / fake / old links)
+//     ABOUT & LEGAL
+//        - About CinePulse (uses versionLabel)
+//        - Privacy Policy
+//        - Terms of Use
 //
-// - Dark, glassy / nav-style surface (0xFF0f172a) with subtle 1px separators.
-// - Strong CinePulse branding header with red badge, gradient text, and Close.
-// - Section headers are quiet, all-caps-ish labels at 12px, semi-transparent.
-// - Language chips now match our pill system:
-//     • Selected  = red fill (#dc2626), white text
-//     • Unselected = transparent bg, red border/text
-//   This keeps visual consistency with the header chips in HomeScreen.
-// - Categories row: shows a tappable row with a read-only summary pill
-//   (outline pill using accent border) instead of inline FilterChips.
-//   Tapping it triggers widget.onCategoryTap(), which pops a bottom sheet.
-// - Theme row: triggers widget.onThemeTap() -> Theme bottom sheet.
-// - Share / Report issue / About & legal rows styled like interactive rows.
+// VISUAL LANGUAGE:
+// - Dark drawer background (#0f172a in dark mode).
+// - Accent red (#dc2626).
+// - Pills: active = red fill w/ glow; inactive = transparent w/ red border.
+// - Rows have 1px low-opacity separators, same as bottom nav styling.
+// - All icons are white/gray-ish to match the Story page header, no random colors.
 //
-// Behavior:
-// - We persist language preference (cp.lang) to SharedPreferences.
-// - We read CategoryPrefs.instance.summary() to render the pill that says
-//   "All", "Entertainment", or "Entertainment +2".
-// - We don't expose category chips here anymore. Category selection lives
-//   in the bottom sheet (_CategoryPicker) owned by RootShell.
+// STATE:
+// - Language preference is persisted in SharedPreferences under 'cp.lang'.
+//   Values: 'english' | 'hindi' | 'mixed'
+// - CategoryPrefs (from root_shell.dart) drives the summary chip in "What to show".
+//   The actual picker sheet is opened by widget.onCategoryTap().
 //
-// NOTE: CategoryPrefs currently lives in root_shell.dart.
+// DEPENDENCIES:
+// - share_plus for Share.share on device
+// - url_launcher for email / external links
+// - google_fonts for Inter
+// - shared_preferences for local persistence
+// - root_shell.dart for CategoryPrefs
+//
+// This file must stay in sync with RootShell: RootShell passes
+//   feedStatusLine: "Entertainment · Mixed language"
+//   versionLabel:   "Version 0.1.0 · Early access"
+//
+// If you change params here, update RootShell accordingly.
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -40,9 +65,11 @@ class AppDrawer extends StatefulWidget {
   const AppDrawer({
     super.key,
     required this.onClose,
-    this.onFiltersChanged, // let HomeScreen refresh if prefs change
-    this.onThemeTap,       // open Theme picker sheet
-    this.onCategoryTap,    // open Category picker sheet
+    required this.feedStatusLine,
+    required this.versionLabel,
+    this.onFiltersChanged, // tell shell/HomeScreen to refresh after changes
+    this.onThemeTap,       // open Theme picker bottom sheet
+    this.onCategoryTap,    // open Category picker bottom sheet
     this.appShareUrl,
     this.privacyUrl,
     this.termsUrl,
@@ -52,6 +79,14 @@ class AppDrawer extends StatefulWidget {
   final VoidCallback? onFiltersChanged;
   final VoidCallback? onThemeTap;
   final VoidCallback? onCategoryTap;
+
+  // e.g. "Entertainment · Mixed language"
+  final String feedStatusLine;
+
+  // e.g. "Version 0.1.0 · Early access"
+  final String versionLabel;
+
+  // links
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -61,13 +96,12 @@ class AppDrawer extends StatefulWidget {
 }
 
 class _AppDrawerState extends State<AppDrawer> {
-  // SharedPreferences key for language.
+  // SharedPreferences key for user-chosen language.
   static const _kLang = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
+  static const _accent = Color(0xFFdc2626);
 
   String _lang = 'mixed';
   late Future<void> _loader;
-
-  static const _accent = Color(0xFFdc2626);
 
   @override
   void initState() {
@@ -87,7 +121,7 @@ class _AppDrawerState extends State<AppDrawer> {
     widget.onFiltersChanged?.call();
   }
 
-  // ───────────────────── Small helpers ─────────────────────
+  // ────────────────────── tiny helpers ──────────────────────
 
   Widget _emoji(String e, {double size = 16}) {
     return Text(
@@ -122,11 +156,13 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
+  // Pills for language preference: English / Hindi / Mixed.
+  // Active = red fill + glow like active chips on Home.
+  // Inactive = transparent bg, red border, red text.
   Widget _langChip(String label, String value) {
     final bool active = (_lang == value);
 
     if (active) {
-      // FILLED red pill (matches active category chip in header)
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () {
@@ -160,7 +196,6 @@ class _AppDrawerState extends State<AppDrawer> {
       );
     }
 
-    // OUTLINE pill
     return InkWell(
       borderRadius: BorderRadius.circular(999),
       onTap: () {
@@ -190,7 +225,10 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // A generic tappable row with leading widget, title/subtitle and trailing chevron.
+  // Generic clickable row:
+  // [leading icon]  Title
+  //                 Subtitle
+  //                                   >
   Widget _settingsRow({
     required Widget leading,
     required String title,
@@ -255,7 +293,8 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Row for Categories specifically because we show the summary pill.
+  // Special row for "What to show" (categories).
+  // Shows a summary pill instead of subtitle, to mirror our chips.
   Widget _categoryRow() {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
@@ -264,7 +303,7 @@ class _AppDrawerState extends State<AppDrawer> {
     return AnimatedBuilder(
       animation: CategoryPrefs.instance,
       builder: (context, _) {
-        final summary = CategoryPrefs.instance.summary();
+        final summary = CategoryPrefs.instance.summary(); // e.g. "All" / "Entertainment"
         return InkWell(
           onTap: widget.onCategoryTap,
           child: Container(
@@ -284,7 +323,7 @@ class _AppDrawerState extends State<AppDrawer> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Categories',
+                        'What to show',
                         style: GoogleFonts.inter(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -293,7 +332,7 @@ class _AppDrawerState extends State<AppDrawer> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      // read-only pill mirroring inactive chip style
+                      // read-only summary pill
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 10,
@@ -334,7 +373,12 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // The header at the very top of the drawer.
+  // The header at the very top of the drawer:
+  //  - CinePulse badge
+  //  - Title "CinePulse"
+  //  - Tagline
+  //  - feedStatusLine (e.g. "Entertainment · Mixed language")
+  //  - Close button
   Widget _drawerHeader(bool isDark) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
@@ -354,7 +398,7 @@ class _AppDrawerState extends State<AppDrawer> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // red badge with 🎬
+          // Branded red badge
           Container(
             width: 40,
             height: 40,
@@ -386,7 +430,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
           const SizedBox(width: 12),
 
-          // CinePulse + tagline
+          // Brand block (CinePulse / tagline / status line)
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -418,6 +462,16 @@ class _AppDrawerState extends State<AppDrawer> {
                     color: cs.onSurface.withOpacity(0.72),
                   ),
                 ),
+                const SizedBox(height: 6),
+                Text(
+                  widget.feedStatusLine,
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    height: 1.3,
+                    fontWeight: FontWeight.w500,
+                    color: cs.onSurface.withOpacity(0.72),
+                  ),
+                ),
               ],
             ),
           ),
@@ -430,6 +484,77 @@ class _AppDrawerState extends State<AppDrawer> {
             ),
             onPressed: widget.onClose,
           ),
+        ],
+      ),
+    );
+  }
+
+  // FEED RULES section:
+  // This clearly states what we DON'T show.
+  // Helps build trust and matches CinePulse positioning.
+  Widget _feedRulesSection() {
+    final cs = Theme.of(context).colorScheme;
+    final dividerColor = cs.onSurface.withOpacity(0.06);
+
+    Widget bullet(String emoji, String text) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              emoji,
+              style: const TextStyle(fontSize: 14, height: 1.3),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                text,
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: cs.onSurface.withOpacity(0.8),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            width: 1,
+            color: dividerColor,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _emoji('🛡️'),
+              const SizedBox(width: 16),
+              Text(
+                'Feed rules',
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          bullet('❌', 'No gossip or off-camera drama'),
+          bullet('🚫', 'No “fans troll” outrage spam'),
+          bullet('🎯', 'We keep box office, OTT drops, on-air moments'),
         ],
       ),
     );
@@ -463,7 +588,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Launch simple external URL
+  // Generic external link opener.
   Future<void> _openExternal(String? url) async {
     if (url == null || url.isEmpty) return;
     await launchUrl(
@@ -478,9 +603,7 @@ class _AppDrawerState extends State<AppDrawer> {
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final drawerBg = isDark
-        ? const Color(0xFF0f172a)
-        : cs.surface;
+    final drawerBg = isDark ? const Color(0xFF0f172a) : cs.surface;
 
     return Drawer(
       backgroundColor: drawerBg,
@@ -491,13 +614,13 @@ class _AppDrawerState extends State<AppDrawer> {
             return ListView(
               padding: EdgeInsets.zero,
               children: [
-                // HEADER
+                // HEADER (brand + tagline + feed status)
                 _drawerHeader(isDark),
 
                 // CONTENT & FILTERS
                 _sectionHeader(context, 'Content & filters'),
 
-                // Language preference
+                // Language preference ("Show stories in")
                 Container(
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                   decoration: BoxDecoration(
@@ -516,7 +639,7 @@ class _AppDrawerState extends State<AppDrawer> {
                           _emoji('🗣️'),
                           const SizedBox(width: 16),
                           Text(
-                            'Language preference',
+                            'Show stories in',
                             style: GoogleFonts.inter(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
@@ -540,15 +663,19 @@ class _AppDrawerState extends State<AppDrawer> {
                   ),
                 ),
 
-                // Categories row (opens bottom sheet picker)
+                // "What to show" (categories, opens bottom sheet)
                 _categoryRow(),
+
+                // FEED RULES
+                _sectionHeader(context, 'Feed rules');
+                _feedRulesSection(),
 
                 // APPEARANCE
                 _sectionHeader(context, 'Appearance'),
                 _settingsRow(
                   leading: const Icon(Icons.palette_outlined, size: 20),
                   title: 'Theme',
-                  subtitle: 'System / Light / Dark',
+                  subtitle: 'System / Light / Dark · Affects Home & stories',
                   onTap: widget.onThemeTap,
                 ),
 
@@ -563,7 +690,8 @@ class _AppDrawerState extends State<AppDrawer> {
                 _settingsRow(
                   leading: _emoji('🛠️'),
                   title: 'Report an issue',
-                  subtitle: 'Send us feedback',
+                  subtitle:
+                      'Tell us if something is broken or fake. We’ll remove it.',
                   onTap: _reportIssue,
                 ),
 
@@ -572,7 +700,7 @@ class _AppDrawerState extends State<AppDrawer> {
                 _settingsRow(
                   leading: const Icon(Icons.info_outline_rounded, size: 20),
                   title: 'About CinePulse',
-                  subtitle: 'Version 0.1.0',
+                  subtitle: widget.versionLabel,
                   onTap: widget.onClose,
                 ),
                 _settingsRow(
