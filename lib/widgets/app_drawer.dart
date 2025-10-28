@@ -1,90 +1,77 @@
 // lib/widgets/app_drawer.dart
 //
 // CinePulse right-side drawer (endDrawer).
+// This is the slide-out panel when you tap the Menu button.
 //
-// This is the slide-out panel you get when you tap the Menu button in the header.
-//
-// UPDATED TO MATCH NEW SPEC:
-//
-// ───────── LAYOUT (NOW) ─────────
+// FINAL SPEC (current):
 //
 // HEADER
-//   [ 🎬 red gradient square ]
-//   CinePulse
+//   [🎬 gradient box] CinePulse
 //   "Movies & OTT, in a minute."
-//   "<CategorySummary> · <LanguageSummary>"   (feedStatusLine)
-//   [ ✕ ]
+//   "<CategorySummary> · <ContentTypeSummary>"  (feedStatusLine from RootShell)
+//   [✕ Close]
 //
 // CONTENT & FILTERS
-//   [square icon 🏷️]  Categories
-//                      (no subtitle)
-//   [square icon 🎞️]  Content type
-//                      All / Read / Video / Audio   (shows current selection)
+//   [🏷️] Categories
+//        (no subtitle)
+//   [🎞️] Content type
+//        <contentTypeLabel>  (All / Read / Video / Audio)
 //
 // APPEARANCE
-//   [square icon 🎨]  Theme
-//                     System / Light / Dark · Affects Home & stories
+//   [🎨] Theme
+//        "System / Light / Dark · Affects Home & stories"
 //
 // SHARE & SUPPORT
-//   [square icon 📣]  Share CinePulse
-//                     Send the app link
-//   [square icon 🛠️] Report an issue
-//                     Tell us if something is broken or fake. We’ll remove it.
+//   [📣] Share CinePulse
+//        "Send the app link"
+//   [🛠️] Report an issue
+//        "Tell us if something is broken or fake. We’ll remove it."
 //
 // SETTINGS
-//   [square icon 🌍]  App language
-//                     Change the CinePulse UI language
-//   [square icon 💎]  Subscription
-//                     Remove ads & unlock extras
-//   [square icon 👤]  Sign in
-//                     Sync saved stories across devices
+//   [🌍] App language
+//        "Change the CinePulse UI language"
+//   [💎] Subscription
+//        "Remove ads & unlock extras"
+//   [👤] Sign in
+//        "Sync saved stories across devices"
 //
 // ABOUT & LEGAL
-//   [square icon ℹ️]  About CinePulse
-//                     Version 0.1.0 · Early access
-//   [square icon 🔒]  Privacy Policy
-//   [square icon 📜]  Terms of Use
+//   [ℹ️] About CinePulse
+//        versionLabel (e.g. "Version 0.1.0 · Early access")
+//   [🔒] Privacy Policy
+//   [📜] Terms of Use
 //
-// ───────── CALLBACK API (UPDATED) ─────────
+// PROPS from RootShell:
 //
-// Required from RootShell:
-//   feedStatusLine        e.g. "All · Hindi"
-//   versionLabel          e.g. "Version 0.1.0 · Early access"
-//   contentTypeLabel      e.g. "All" / "Read" / "Video" / "Audio"
+//   required String feedStatusLine
+//   required String versionLabel
+//   required String contentTypeLabel
 //
-// Callbacks provided by RootShell:
-//   onCategoryTap         → open Categories picker sheet
-//                            (multi-select: All / Entertainment / Sports / ...)
-//   onContentTypeTap      → open Content type picker sheet
-//                            (single-select: All / Read / Video / Audio)
-//   onThemeTap            → open Theme picker
+//   required VoidCallback onClose
 //
-//   onAppLanguageTap      → open App language settings (UI language drawer/sheet)
-//   onSubscriptionTap     → open Subscription paywall
-//   onLoginTap            → open Sign in / Account
+//   VoidCallback? onFiltersChanged        // legacy hook, safe to ignore
 //
-// Other:
-//   onClose               → close drawer
-//   onFiltersChanged      → legacy hook (kept, still optional)
+//   VoidCallback? onCategoriesTap         // opens Categories sheet
+//   VoidCallback? onContentTypeTap        // opens Content type sheet
+//   VoidCallback? onThemeTap              // opens Theme sheet
 //
-// External links for share / policy / terms:
-//   appShareUrl, privacyUrl, termsUrl
+//   VoidCallback? onAppLanguageTap        // opens App language picker
+//   VoidCallback? onSubscriptionTap       // opens Subscription paywall
+//   VoidCallback? onLoginTap              // opens Sign in sheet
 //
-// ───────── STYLE RULES ─────────
+//   String? appShareUrl                   // link to share
+//   String? privacyUrl
+//   String? termsUrl
 //
-// • Each row uses the same pill-style square icon container (36x36, 8px radius,
-//   subtle red border, dark translucent bg in dark mode), matching header icons.
-// • We changed the row emojis to match the new meaning:
-//     - Categories       → 🏷️
-//     - Content type     → 🎞️
-//     - Theme            → 🎨
-//     - etc.
-// • "Content type" row shows the selected value in bold as the subtitle.
-// • "Categories" row has no subtitle now.
+// STYLE NOTES:
+// • Each row is: [36x36 rounded square emoji badge] + text + chevron.
+// • Badge: 8px radius, subtle red border/glow, dark translucent bg in dark mode.
+// • Section headers = small all-caps with low opacity.
+// • Divider under every row = 1px using onSurface 6% opacity.
 //
-// NOTE: We removed all the old "Show stories in" language picker UI from this file.
-// That logic is now replaced by "Content type".
+// No SharedPreferences reads here. RootShell already gives us summaries.
 //
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -95,16 +82,18 @@ import 'package:url_launcher/url_launcher.dart';
 class AppDrawer extends StatefulWidget {
   const AppDrawer({
     super.key,
+    // header + about
     required this.onClose,
     required this.feedStatusLine,
     required this.versionLabel,
     required this.contentTypeLabel, // "All" / "Read" / "Video" / "Audio"
 
-    this.onFiltersChanged, // legacy hook if we need to trigger a rebuild
+    // optional legacy hook, can trigger setState in RootShell after sheets
+    this.onFiltersChanged,
 
-    // CONTENT & FILTERS callbacks
-    this.onCategoryTap, // opens Categories sheet
-    this.onContentTypeTap, // opens Content type sheet
+    // CONTENT & FILTERS
+    this.onCategoriesTap,    // opens Categories picker sheet
+    this.onContentTypeTap,   // opens Content type picker sheet
 
     // APPEARANCE
     this.onThemeTap,
@@ -114,7 +103,7 @@ class AppDrawer extends StatefulWidget {
     this.onSubscriptionTap,
     this.onLoginTap,
 
-    // external / share links
+    // external links
     this.appShareUrl,
     this.privacyUrl,
     this.termsUrl,
@@ -122,7 +111,7 @@ class AppDrawer extends StatefulWidget {
 
   final VoidCallback onClose;
 
-  // e.g. "All · Hindi"
+  // e.g. "Entertainment +2 · Read"
   final String feedStatusLine;
 
   // e.g. "Version 0.1.0 · Early access"
@@ -133,8 +122,8 @@ class AppDrawer extends StatefulWidget {
 
   final VoidCallback? onFiltersChanged;
 
-  // CONTENT & FILTERS
-  final VoidCallback? onCategoryTap;
+  // CONTENT & FILTERS callbacks
+  final VoidCallback? onCategoriesTap;
   final VoidCallback? onContentTypeTap;
 
   // APPEARANCE
@@ -145,7 +134,7 @@ class AppDrawer extends StatefulWidget {
   final VoidCallback? onSubscriptionTap;
   final VoidCallback? onLoginTap;
 
-  // external links
+  // external / share links
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -178,7 +167,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // selected value subline (bold-ish / primary)
+  // bold-ish / primary subline (for the selected "Content type" value)
   TextStyle _valueLineStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
@@ -205,8 +194,8 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // 36x36 rounded square icon container with subtle border/glow.
-  Widget _squareIconButton(String emojiChar) {
+  // 36x36 rounded square icon badge at start of each row.
+  Widget _squareIconBadge(String emojiChar) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final Color bgColor = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
@@ -256,9 +245,9 @@ class _AppDrawerState extends State<AppDrawer> {
 
   // Generic row renderer:
   //
-  // [square icon]  Title
-  //                Subtitle (optional)
-  //                                    >
+  // [badge]  Title
+  //          Subtitle (optional)
+  //                              >
   //
   // If isValueLine = true, subtitle uses _valueLineStyle (bold / primary).
   // Otherwise subtitle uses _rowSubStyle (dim helper text).
@@ -294,7 +283,7 @@ class _AppDrawerState extends State<AppDrawer> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _squareIconButton(emoji),
+            _squareIconBadge(emoji),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
@@ -317,25 +306,24 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────── ROW COMPOSERS (PER SECTION) ─────────
+  // ───────── ROW BUILDERS PER SECTION ─────────
 
   // CONTENT & FILTERS
 
-  // "Categories" row (used to be "What to show")
-  // - No subtitle, tap opens Categories picker sheet.
+  // "Categories" row
+  // No subtitle.
   Widget _categoriesRow() {
     return _drawerRow(
       emoji: '🏷️',
       title: 'Categories',
       subtitle: null,
       isValueLine: false,
-      onTap: widget.onCategoryTap,
+      onTap: widget.onCategoriesTap,
     );
   }
 
-  // "Content type" row (used to be "Show stories in")
-  // - Shows current selection ("All" / "Read" / "Video" / "Audio")
-  // - Tap opens Content type picker sheet.
+  // "Content type" row
+  // Shows selected format ("All", "Read", "Video", "Audio").
   Widget _contentTypeRow() {
     return _drawerRow(
       emoji: '🎞️',
@@ -417,7 +405,7 @@ class _AppDrawerState extends State<AppDrawer> {
       title: 'About CinePulse',
       subtitle: widget.versionLabel,
       isValueLine: false,
-      onTap: widget.onClose,
+      onTap: widget.onClose, // could later open a dedicated About screen
     );
   }
 
@@ -441,7 +429,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────── HEADER ─────────
+  // ───────── HEADER BLOCK ─────────
   Widget _drawerHeader(bool isDark) {
     final cs = Theme.of(context).colorScheme;
     final dividerColor = isDark
@@ -558,6 +546,7 @@ class _AppDrawerState extends State<AppDrawer> {
     if (!kIsWeb) {
       await Share.share(link);
     } else {
+      // Web fallback: copy to clipboard + toast.
       await Clipboard.setData(ClipboardData(text: link));
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
