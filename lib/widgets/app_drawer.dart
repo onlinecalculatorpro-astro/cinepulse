@@ -303,7 +303,7 @@ class _AppDrawerState extends State<AppDrawer> {
     return AnimatedBuilder(
       animation: CategoryPrefs.instance,
       builder: (context, _) {
-        final summary = CategoryPrefs.instance.summary(); // e.g. "All" / "Entertainment"
+        final summary = CategoryPrefs.instance.summary(); // "All" / "Entertainment" / etc.
         return InkWell(
           onTap: widget.onCategoryTap,
           child: Container(
@@ -667,7 +667,7 @@ class _AppDrawerState extends State<AppDrawer> {
                 _categoryRow(),
 
                 // FEED RULES
-                _sectionHeader(context, 'Feed rules');
+                _sectionHeader(context, 'Feed rules'),
                 _feedRulesSection(),
 
                 // APPEARANCE
