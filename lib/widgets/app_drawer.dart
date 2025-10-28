@@ -12,8 +12,8 @@
 //   • SHARE & SUPPORT
 //        - Share
 //        - Report
-//   • SETTINGS         <-- NEW BLOCK
-//        - App language             (UI language for the whole app, 7 langs etc.)
+//   • SETTINGS
+//        - App language             (UI language for the whole app)
 //        - Subscription             (paywall / remove ads etc.)
 //        - Sign in / Account        (login / sync saved stories)
 //   • ABOUT & LEGAL
@@ -21,20 +21,24 @@
 //        - Privacy Policy
 //        - Terms of Use
 //
-// This file expects RootShell to pass new handlers:
-//   onAppLanguageTap()
+// RootShell should pass:
+//   onLanguageTap()       ← feed language picker sheet
+//   onCategoryTap()
+//   onThemeTap()
+//   onAppLanguageTap()    ← app UI language picker screen/sheet
 //   onSubscriptionTap()
 //   onLoginTap()
 //
-// Styling logic is unchanged from last rev: dark navy background,
-// section headers are grey caps, rows have a 1px divider,
-// chevron on the right.
+// Visual rules:
+// - Dark navy background (#0f172a in dark mode)
+// - Section headers are all-caps faded gray
+// - Each row is 16px horiz padding, 14px vertical, 1px divider bottom
+// - Rows end with chevron
+// - "Content & filters" rows use badge+[text]
+// - Everything else uses title + subtitle
 //
-// We still render the little "badge + text" rows for CONTENT & FILTERS,
-// and simple title/subtitle rows elsewhere.
-//
-// NOTE: CategoryPrefs is imported from root_shell.dart.
-// NOTE: This assumes google_fonts, share_plus, url_launcher, shared_preferences.
+// Depends on: google_fonts, share_plus, url_launcher,
+// shared_preferences, CategoryPrefs (from root_shell.dart)
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -52,40 +56,55 @@ class AppDrawer extends StatefulWidget {
     required this.onClose,
     required this.feedStatusLine,
     required this.versionLabel,
-    this.onFiltersChanged,   // kept for compatibility
-    this.onLanguageTap,      // opens FEED language picker bottom sheet
-    this.onCategoryTap,      // opens category picker bottom sheet
-    this.onThemeTap,         // opens theme picker bottom sheet
 
-    // NEW: "Settings" section callbacks
-    this.onAppLanguageTap,   // opens APP language config (UI language)
-    this.onSubscriptionTap,  // opens subscription/paywall
-    this.onLoginTap,         // opens sign-in / account
+    // legacy / existing
+    this.onFiltersChanged,
+    this.onLanguageTap,
+    this.onCategoryTap,
+    this.onThemeTap,
+
+    // NEW settings block
+    this.onAppLanguageTap,
+    this.onSubscriptionTap,
+    this.onLoginTap,
 
     this.appShareUrl,
     this.privacyUrl,
     this.termsUrl,
   });
 
+  /// Called when user taps the ❌ in header (should Navigator.pop(endDrawer))
   final VoidCallback onClose;
 
-  // e.g. "Entertainment · English"
+  /// e.g. "Entertainment · English"
   final String feedStatusLine;
 
-  // e.g. "Version 0.1.0 · Early access"
+  /// e.g. "Version 0.1.0 · Early access"
   final String versionLabel;
 
+  /// Used to force parent refresh after filters change (optional)
   final VoidCallback? onFiltersChanged;
+
+  /// Opens FEED language picker sheet ("Show stories in")
   final VoidCallback? onLanguageTap;
+
+  /// Opens category picker sheet ("What to show")
   final VoidCallback? onCategoryTap;
+
+  /// Opens theme picker sheet ("Theme")
   final VoidCallback? onThemeTap;
 
-  // NEW: Settings rows
+  /// SETTINGS rows:
+  /// Opens App UI language / localization screen
   final VoidCallback? onAppLanguageTap;
+
+  /// Opens Subscription / upgrade / paywall
   final VoidCallback? onSubscriptionTap;
+
+  /// Opens Sign in / Account page
   final VoidCallback? onLoginTap;
 
-  // external links / share link
+  /// External links / share target
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -116,7 +135,7 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // Map 'english' | 'hindi' | 'mixed' -> UI label
+  /// Map stored language code → nice label
   String _langLabel(String code) {
     switch (code) {
       case 'english':
@@ -128,7 +147,7 @@ class _AppDrawerState extends State<AppDrawer> {
     }
   }
 
-  // ────────────────────────── shared text styles ──────────────────────────
+  // ───────────────────────── text styles ─────────────────────────
 
   TextStyle _rowTitleStyle(ColorScheme cs) {
     return GoogleFonts.inter(
@@ -149,7 +168,7 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   TextStyle _valueTextStyle(ColorScheme cs) {
-    // the "English", "Entertainment" text after the badge
+    // "English" / "All" next to the little badge
     return GoogleFonts.inter(
       fontSize: 13,
       fontWeight: FontWeight.w600,
@@ -158,14 +177,14 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── badge primitives ──────────────────────────
+  // ───────────────────────── badge primitives ─────────────────────────
   //
-  // Tiny CinePulse badge. We show [badge] Title, like:
-  //   [●] English
-  //   [○] Entertainment
+  // We show a tiny lozenge then text:
+  //   [red pill] English
+  //   [outline pill] Entertainment
   //
-  // Filled badge = solid red with glow.
-  // Outline badge = transparent bg with red border.
+  // Filled badge = solid CinePulse red + glow.
+  // Outline badge = transparent w/ red stroke.
 
   Widget _badgeFilled() {
     return Container(
@@ -201,7 +220,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Used for Share / Report pills
+  // pill used in "Share" / "Report"
   Widget _pillOutline(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -241,9 +260,14 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── row builders ──────────────────────────
+  // ───────────────────────── row builders ─────────────────────────
   //
-  // Common row shell: 16px horiz / 14px vert, bottom divider, text left, chevron right.
+  // All rows have:
+  // - InkWell
+  // - padding: 16 horiz / 14 vert
+  // - bottom 1px divider
+  // - left column     (title + badge/summary or subtitle)
+  // - right chevron   (>)
 
   Widget _langRow() {
     final cs = Theme.of(context).colorScheme;
@@ -262,7 +286,7 @@ class _AppDrawerState extends State<AppDrawer> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left side
+            // left
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -300,6 +324,7 @@ class _AppDrawerState extends State<AppDrawer> {
       animation: CategoryPrefs.instance,
       builder: (context, _) {
         final summary = CategoryPrefs.instance.summary(); // "All", "Entertainment", etc.
+
         return InkWell(
           onTap: widget.onCategoryTap,
           child: Container(
@@ -312,7 +337,7 @@ class _AppDrawerState extends State<AppDrawer> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Left side
+                // left
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -411,7 +436,10 @@ class _AppDrawerState extends State<AppDrawer> {
                 children: [
                   _pillOutline(pillText),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: _rowSubStyle(cs)),
+                  Text(
+                    subtitle,
+                    style: _rowSubStyle(cs),
+                  ),
                 ],
               ),
             ),
@@ -427,7 +455,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // NEW: reusable "settings-style" row (title + subtitle, chevron)
+  // Settings style row: title, subtitle, chevron
   Widget _settingsRow({
     required String title,
     required String subtitle,
@@ -454,7 +482,10 @@ class _AppDrawerState extends State<AppDrawer> {
                 children: [
                   Text(title, style: _rowTitleStyle(cs)),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: _rowSubStyle(cs)),
+                  Text(
+                    subtitle,
+                    style: _rowSubStyle(cs),
+                  ),
                 ],
               ),
             ),
@@ -497,7 +528,10 @@ class _AppDrawerState extends State<AppDrawer> {
                   Text(title, style: _rowTitleStyle(cs)),
                   if (subtitle != null && subtitle.isNotEmpty) ...[
                     const SizedBox(height: 2),
-                    Text(subtitle, style: _rowSubStyle(cs)),
+                    Text(
+                      subtitle,
+                      style: _rowSubStyle(cs),
+                    ),
                   ],
                 ],
               ),
@@ -514,7 +548,14 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── header block ──────────────────────────
+  // ───────────────────────── header block ─────────────────────────
+  //
+  // Branded square with 🎬
+  // App name gradient
+  // Tagline
+  // feedStatusLine ("All · English")
+  // Close button
+
   Widget _drawerHeader(bool isDark) {
     final cs = Theme.of(context).colorScheme;
     final dividerColor =
@@ -533,7 +574,7 @@ class _AppDrawerState extends State<AppDrawer> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // red gradient square with 🎬
+          // red gradient block w/ 🎬
           Container(
             width: 40,
             height: 40,
@@ -565,7 +606,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
           const SizedBox(width: 12),
 
-          // CinePulse + tagline + feed status
+          // Brand + tagline + feed status
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -624,7 +665,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── actions ──────────────────────────
+  // ───────────────────────── actions ─────────────────────────
 
   Future<void> _shareApp(BuildContext context) async {
     final link = widget.appShareUrl ?? 'https://cinepulse.netlify.app';
@@ -659,7 +700,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ────────────────────────── build ──────────────────────────
+  // ───────────────────────── build ─────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -701,7 +742,7 @@ class _AppDrawerState extends State<AppDrawer> {
               onTap: _reportIssue,
             ),
 
-            // SETTINGS (NEW BLOCK)
+            // SETTINGS
             _sectionHeader(context, 'Settings'),
             _settingsRow(
               title: 'App language',
