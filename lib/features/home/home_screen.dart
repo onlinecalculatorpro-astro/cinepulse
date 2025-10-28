@@ -1219,3 +1219,57 @@ class _ModernBrandLogo extends StatelessWidget {
     );
   }
 }
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CRASH VIEW
+   ───────────────────────────────────────────────────────────────────────── */
+class _HomeCrashedView extends StatelessWidget {
+  const _HomeCrashedView({
+    required this.error,
+    required this.stack,
+  });
+
+  final String error;
+  final String stack;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      width: double.infinity,
+      height: double.infinity,
+      padding: const EdgeInsets.all(16),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          child: DefaultTextStyle(
+            style: const TextStyle(
+              fontSize: 14,
+              color: Colors.redAccent,
+              fontFamily: 'monospace',
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'HomeScreen crashed while building.\n'
+                  'Screenshot this and send it 👇\n',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.redAccent,
+                  ),
+                ),
+                const Text('Error:'),
+                Text(error),
+                const SizedBox(height: 12),
+                const Text('Stack:'),
+                Text(stack),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
