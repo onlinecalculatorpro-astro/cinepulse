@@ -625,7 +625,7 @@ class _RootShellState extends State<RootShell> {
               onFiltersChanged: () => setState(() {}),
 
               // CONTENT & FILTERS
-              onCategoryTap: () => _openCategoriesPicker(drawerCtx),
+              onCategoriesTap: () => _openCategoriesPicker(drawerCtx),
               onContentTypeTap: () => _openContentTypePicker(drawerCtx),
 
               // APPEARANCE
