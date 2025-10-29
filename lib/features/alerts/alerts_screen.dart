@@ -1,49 +1,44 @@
 // lib/features/alerts/alerts_screen.dart
 //
-// ALERTS TAB (restyled to match HomeScreen & SavedScreen)
+// ALERTS TAB (final spec)
 //
-// High-level:
-// ----------
-// • Frosted CinePulse header bar identical to SavedScreen/HomeScreen
-//   - Left: CinePulse brand
-//   - Right: nav icon pills (Home / Discover / Saved) on wide layouts
-//   - Far right: Menu pill (always)
-//   - All pills use the same square capsule style as SavedScreen
+// ROW 1: Frosted header
+//   - CinePulse brand on the left
+//   - On wide screens (>=768px): Home • Discover • Saved • Refresh • Menu
+//   - On compact screens: Refresh • Menu
+//   - All icons are the same square pill style used in Home/Saved
+//   - Refresh here triggers _load()
 //
-// • Row under header matches the dark "toolbar strip" used in Home (_FiltersRow)
-//   and Saved (_SavedToolbarRow):
-//   - Left: red-accent pill "Mark all read"
-//          * disabled if there are no unread alerts
-//   - Right: refresh pill (square icon button like in header)
-//   - Same background color band and 1px divider as in other tabs
+// ROW 2: Toolbar strip (dark band with 1px divider, like Home/Saved)
+//   - LEFT  : red chips "All / Entertainment / Sports", identical style
+//            to Home. We keep local selection highlight.
+//   - RIGHT : "Mark all read" pill. Disabled if there are no alerts.
+//             (Refresh button is NOT here anymore.)
 //
-// • Next line: subtle "X new alerts" text in onSurfaceVariant
+// ROW 3: Status line (ex: "3 new alerts")
+//   - Always visible under the toolbar strip.
+//   - This is *not* the conditional search row. Alerts does not have a
+//     search CTA, so we never show a search bar row here.
 //
-// • Body: EXACT SAME GRID GEOMETRY AS HOME/SAVED
-//   (SliverGridDelegateWithMaxCrossAxisExtent with the same breakpoints,
-//    same aspect ratio math)
+// BODY:
+//   - Pull-to-refresh
+//   - Same StoryCard grid sizing math as Home/Saved
+//   - Loading  → SkeletonCard grid
+//   - Error    → scrollable list with error text (still pull-to-refresh)
+//   - Empty    → friendly "You're all caught up"
 //
-// • Pull-to-refresh: still supported via RefreshIndicator
+// DATA MODEL:
+//   _lastSeenUtc stored in SharedPreferences('alerts_last_seen')
+//   _alerts = feed items newer than _lastSeenUtc
+//   "Mark all read" sets _lastSeenUtc = now() and clears _alerts
 //
-// • Loading state: uses SkeletonCard grid (unified with Home)
-// • Empty state: friendly bell message in a scrollable ListView (so you
-//   can still pull-to-refresh)
-// • Error state: scrollable ListView with error text (refresh still works)
+// NAV CALLBACKS (provided by RootShell):
+//   onOpenHome
+//   onOpenDiscover
+//   onOpenSaved
+//   onOpenMenu
 //
-// Data model:
-// -----------
-// We persist `_lastSeenUtc` in SharedPreferences under `alerts_last_seen`.
-// `_alerts` holds "stories published after lastSeenUtc".
-// `_markAllRead()` sets lastSeenUtc = now() and clears `_alerts`.
-//
-// Navigation callbacks supplied by RootShell:
-// ------------------------------------------
-// onOpenHome     → switch to Home tab
-// onOpenDiscover → switch to Discover tab
-// onOpenSaved    → switch to Saved tab
-// onOpenMenu     → open drawer
-//
-// RootShell should now build AlertsScreen like:
+// RootShell should construct AlertsScreen like:
 //
 // AlertsScreen(
 //   onOpenHome: _openHome,
@@ -74,16 +69,9 @@ class AlertsScreen extends StatefulWidget {
     this.onOpenMenu,
   });
 
-  /// Switch to Home tab.
   final VoidCallback? onOpenHome;
-
-  /// Switch to Discover tab.
   final VoidCallback? onOpenDiscover;
-
-  /// Switch to Saved tab.
   final VoidCallback? onOpenSaved;
-
-  /// Open right-side drawer / menu.
   final VoidCallback? onOpenMenu;
 
   @override
@@ -94,15 +82,19 @@ class _AlertsScreenState extends State<AlertsScreen> {
   static const _kPrefKey = 'alerts_last_seen';
   static const _accent = Color(0xFFdc2626);
 
-  // When user last "marked all read" (UTC).
+  // When user last pressed "Mark all read" (UTC).
   DateTime _lastSeenUtc =
       DateTime.fromMillisecondsSinceEpoch(0, isUtc: true); // first run
 
-  // Stories that are new since _lastSeenUtc.
+  // Stories that are newer than _lastSeenUtc.
   List<Story> _alerts = [];
 
   bool _loading = true;
   String? _error;
+
+  // For the category chips row ("All / Entertainment / Sports").
+  // Just visual right now; doesn't filter backend.
+  int _activeCategoryIndex = 0; // 0=All,1=Entertainment,2=Sports
 
   bool get _hasAlerts => _alerts.isNotEmpty;
 
@@ -133,7 +125,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     await sp.setString(_kPrefKey, t.toUtc().toIso8601String());
   }
 
-  /// Fetch latest feed, filter anything newer than _lastSeenUtc.
+  /// Fetch latest feed window from "all", take items newer than _lastSeenUtc.
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -141,7 +133,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
 
     try {
-      // Grab newest window from "all" feed (server returns newest-first-ish).
       final list = await fetchFeed(tab: 'all', since: null, limit: 80);
 
       final fresh = list.where((s) {
@@ -184,11 +175,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
   }
 
-  /* ───────────────────────── Grid geometry helper ─────────────────────────
-   *
-   * EXACT SAME sizing logic we use on Home (_FeedListState._gridDelegateFor)
-   * and the Saved tab, so StoryCard tiles look 100% consistent across screens.
-   */
+  /* ---------------- Grid geometry helper (match Home / Saved) ------------- */
+
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
     if (width < 520) {
@@ -224,7 +212,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     );
   }
 
-  /* ───────────────────────── Count line helper ───────────────────────── */
+  /* ----------------- "3 new alerts" status label ----------------- */
 
   String _countLabel() {
     if (_loading) return 'Checking…';
@@ -235,7 +223,17 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return '$total new alerts';
   }
 
-  /* ───────────────────────── UI build ───────────────────────── */
+  /* ----------------- category chip tap ----------------- */
+
+  void _onCategoryTap(int i) {
+    setState(() {
+      _activeCategoryIndex = i;
+    });
+    // (Optional: if we later want to filter _alerts by category,
+    //  we’d do it here before building the grid.)
+  }
+
+  /* ----------------- BUILD ----------------- */
 
   @override
   Widget build(BuildContext context) {
@@ -244,15 +242,14 @@ class _AlertsScreenState extends State<AlertsScreen> {
     final bgColor =
         isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
-    // same breakpoint we use in Home/Saved to decide whether to show
-    // the row of nav icons in the header:
+    // breakpoint for showing the full nav group in header
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
 
     return Scaffold(
       backgroundColor: bgColor,
 
-      /* ───────── Frosted CinePulse header bar (same as Home/Saved) ───────── */
+      /* ----------------------- ROW 1: Frosted header ----------------------- */
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(64),
         child: ClipRRect(
@@ -287,7 +284,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   const _ModernBrandLogo(),
                   const Spacer(),
 
-                  // On wide / desktop, show quick nav to other tabs.
+                  // On wide/desktop, show Home • Discover • Saved • Refresh • Menu
                   if (isWide) ...[
                     _HeaderIconButton(
                       tooltip: 'Home',
@@ -309,13 +306,33 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       onTap: widget.onOpenSaved,
                     ),
                     const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Refresh',
+                      icon: Icons.refresh_rounded,
+                      onTap: _load,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Menu',
+                      icon: Icons.menu_rounded,
+                      onTap: widget.onOpenMenu,
+                    ),
                   ],
 
-                  _HeaderIconButton(
-                    tooltip: 'Menu',
-                    icon: Icons.menu_rounded,
-                    onTap: widget.onOpenMenu,
-                  ),
+                  // On compact screens, just Refresh • Menu (to keep it tidy)
+                  if (!isWide) ...[
+                    _HeaderIconButton(
+                      tooltip: 'Refresh',
+                      icon: Icons.refresh_rounded,
+                      onTap: _load,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Menu',
+                      icon: Icons.menu_rounded,
+                      onTap: widget.onOpenMenu,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -323,19 +340,21 @@ class _AlertsScreenState extends State<AlertsScreen> {
         ),
       ),
 
-      /* ───────── Body column (toolbar strip + count + grid w/ pull-to-refresh) ───────── */
+      /* ------------------ BODY: row2 toolbar, status line, grid ------------- */
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // toolbar strip under header
+          // ROW 2: toolbar strip
           _AlertsToolbarRow(
+            isDark: isDark,
+            activeIndex: _activeCategoryIndex,
             hasAlerts: _hasAlerts,
             loading: _loading,
+            onCategoryTap: _onCategoryTap,
             onMarkAllRead: _markAllRead,
-            onRefresh: _load,
           ),
 
-          // "3 new alerts" line
+          // Status line ("3 new alerts", etc.)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
@@ -348,7 +367,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
           const SizedBox(height: 4),
 
-          // main grid / states wrapped in pull-to-refresh
+          // MAIN GRID / STATES (pull-to-refresh)
           Expanded(
             child: RefreshIndicator.adaptive(
               onRefresh: _load,
@@ -364,7 +383,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   final bottomSafe = MediaQuery.viewPaddingOf(ctx).bottom;
                   final bottomPad = 28.0 + bottomSafe;
 
-                  // 1) Loading → SkeletonCard grid
+                  // 1) Loading → skeleton grid
                   if (_loading) {
                     return GridView.builder(
                       padding: EdgeInsets.fromLTRB(
@@ -381,7 +400,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     );
                   }
 
-                  // 2) Error → scrollable list with error text (pull to retry still works)
+                  // 2) Error → scrollable text (still pull to refresh)
                   if (_error != null) {
                     return ListView(
                       padding: EdgeInsets.fromLTRB(
@@ -405,7 +424,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     );
                   }
 
-                  // 3) Empty / caught up → friendly bell message
+                  // 3) Empty / caught up
                   if (!_hasAlerts) {
                     return ListView(
                       padding: EdgeInsets.fromLTRB(
@@ -421,7 +440,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     );
                   }
 
-                  // 4) Normal grid of unread alerts
+                  // 4) Normal unread alerts grid
                   return GridView.builder(
                     padding: EdgeInsets.fromLTRB(
                       horizontalPad,
@@ -452,91 +471,208 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 }
 
-/* ───────────────────────── Toolbar row (under header) ─────────────────────────
+/* ---------------------- ROW 2 TOOLBAR STRIP ----------------------
  *
- * Matches style of HomeScreen._FiltersRow / SavedScreen._SavedToolbarRow.
+ * Matches the dark strip style from Home/Saved:
+ * - same background band
+ * - same 1px divider on the bottom
  *
- * Layout:
- * [ Mark all read ]           [refresh-icon]
+ * LEFT  : category chips "All / Entertainment / Sports"
+ * RIGHT : "Mark all read" pill
  *
- * The left side is a red-accent pill ("Mark all read"), disabled if
- * there are no alerts. The right side is a square icon pill that calls refresh.
+ * NOTE:
+ *  - Refresh button was moved to the header row.
+ *  - "Mark all read" is disabled (faded) if there are no alerts.
  */
-
 class _AlertsToolbarRow extends StatelessWidget {
   const _AlertsToolbarRow({
+    required this.isDark,
+    required this.activeIndex,
     required this.hasAlerts,
     required this.loading,
+    required this.onCategoryTap,
     required this.onMarkAllRead,
-    required this.onRefresh,
   });
 
+  final bool isDark;
+  final int activeIndex;
   final bool hasAlerts;
   final bool loading;
+  final ValueChanged<int> onCategoryTap;
   final VoidCallback onMarkAllRead;
-  final VoidCallback onRefresh;
 
   static const _accent = Color(0xFFdc2626);
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    Widget markAllReadPill() {
-      final enabled = hasAlerts && !loading;
-
-      final borderColor = enabled
-          ? _accent.withOpacity(0.4)
-          : _accent.withOpacity(0.15);
-      final textColor =
-          enabled ? _accent : _accent.withOpacity(0.4);
-
+  Widget _categoryChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    if (selected) {
+      // filled red chip (active)
       return InkWell(
         borderRadius: BorderRadius.circular(999),
-        onTap: enabled ? onMarkAllRead : null,
+        onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: Colors.transparent,
+            color: _accent,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              width: 1,
-              color: borderColor,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.done_all_rounded,
-                size: 16,
-                color: textColor,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                'Mark all read',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  height: 1.2,
-                  color: textColor,
-                ),
+            border: Border.all(color: _accent, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: _accent.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
               ),
             ],
+          ),
+          child: const Text(
+            'TEMP', // replaced below with actual label using a Builder
           ),
         ),
       );
     }
 
-    Widget refreshButton() {
-      return _HeaderIconButton(
-        tooltip: 'Refresh',
-        icon: Icons.refresh_rounded,
-        onTap: onRefresh,
+    // outline red chip (inactive)
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: _accent.withOpacity(0.4),
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            height: 1.2,
+            color: _accent,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _activeChip(String label, VoidCallback onTap) {
+    // helper to avoid duplicating text style logic in the Builder
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _accent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: _accent, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: _accent.withOpacity(0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: const Text(
+          'TEMP', // replaced below
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChip(String label, bool selected, VoidCallback onTap) {
+    if (!selected) {
+      return _categoryChip(
+        label: label,
+        selected: false,
+        onTap: onTap,
       );
     }
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _accent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: _accent, width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: _accent.withOpacity(0.4),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            height: 1.2,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _markAllReadPill() {
+    final enabled = hasAlerts && !loading;
+
+    final borderColor =
+        enabled ? _accent.withOpacity(0.4) : _accent.withOpacity(0.15);
+    final textColor = enabled ? _accent : _accent.withOpacity(0.4);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: enabled ? onMarkAllRead : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            width: 1,
+            color: borderColor,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.done_all_rounded,
+              size: 16,
+              color: textColor,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Mark all read',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                height: 1.2,
+                color: textColor,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
 
     return Container(
       decoration: BoxDecoration(
@@ -554,28 +690,46 @@ class _AlertsToolbarRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // left side "Mark all read" pill
+          // LEFT: scrollable chips row
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  markAllReadPill(),
+                  _buildChip(
+                    'All',
+                    activeIndex == 0,
+                    () => onCategoryTap(0),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildChip(
+                    'Entertainment',
+                    activeIndex == 1,
+                    () => onCategoryTap(1),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildChip(
+                    'Sports',
+                    activeIndex == 2,
+                    () => onCategoryTap(2),
+                  ),
                 ],
               ),
             ),
           ),
+
           const SizedBox(width: 12),
-          // right side refresh button
-          refreshButton(),
+
+          // RIGHT: Mark all read pill
+          _markAllReadPill(),
         ],
       ),
     );
   }
 }
 
-/* ───────────────────────── Empty state ───────────────────────── */
+/* ---------------------- EMPTY STATE ---------------------- */
 
 class _EmptyAlerts extends StatelessWidget {
   const _EmptyAlerts();
@@ -616,10 +770,11 @@ class _EmptyAlerts extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── Shared header widgets ─────────────────────────
+/* ---------------------- SHARED HEADER WIDGETS ----------------------
  *
- * These are copied from SavedScreen (which mirrors HomeScreen),
- * so Alerts header matches the same visual language everywhere.
+ * Same look/feel as Home & Saved:
+ * - _HeaderIconButton = square pill icon with subtle red border accent
+ * - _ModernBrandLogo  = red CinePulse block with 🎬
  */
 
 class _HeaderIconButton extends StatelessWidget {
