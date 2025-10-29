@@ -550,7 +550,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: OfflineBanner(),
             ),
 
-          // category + sort row (NOT sticky for now)
+          // category + sort row
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
@@ -781,7 +781,14 @@ class _FiltersRow extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Feed list (unchanged logic)
+   Feed list
+   - Responsive Grid of StoryCard tiles.
+   - Applies search + sort.
+   - Shows skeleton / error / empty states.
+   - NEW:
+     • Also listens to SavedStore.instance so we re-build when bookmarks
+       change (so the user sees which cards are already saved).
+     • Each card gets a red "saved" badge overlay if it's bookmarked.
    ───────────────────────────────────────────────────────────────────────── */
 class _FeedList extends StatefulWidget {
   const _FeedList({
@@ -803,6 +810,8 @@ class _FeedList extends StatefulWidget {
 
 class _FeedListState extends State<_FeedList>
     with AutomaticKeepAliveClientMixin<_FeedList> {
+  static const _accent = Color(0xFFdc2626);
+
   @override
   bool get wantKeepAlive => true;
 
@@ -894,122 +903,181 @@ class _FeedListState extends State<_FeedList>
     }
   }
 
+  // Wraps each StoryCard with a corner badge if it's already saved.
+  Widget _savedBadgeWrapper({
+    required Story story,
+    required List<Story> allStories,
+    required int index,
+  }) {
+    final isSaved = SavedStore.instance.isSaved(story.id);
+    final card = StoryCard(
+      story: story,
+      allStories: allStories,
+      index: index,
+    );
+
+    if (!isSaved) return card;
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        card,
+        Positioned(
+          top: 8,
+          right: 8,
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: _accent,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: _accent, width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: _accent.withOpacity(0.4),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.bookmark_rounded,
+              size: 14,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
 
     final feed = widget.feed;
 
+    // We listen to BOTH:
+    //  • feed   → for new/updated stories
+    //  • SavedStore.instance → for save/unsave changes
+    //
+    // Any change in either will rebuild the grid so the red badge stays in sync.
     return AnimatedBuilder(
       animation: feed,
       builder: (context, _) {
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final w = constraints.maxWidth;
-            final textScale = MediaQuery.textScaleFactorOf(context);
-            final gridDelegate = _gridDelegateFor(w, textScale);
+        return AnimatedBuilder(
+          animation: SavedStore.instance,
+          builder: (context, __) {
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final w = constraints.maxWidth;
+                final textScale = MediaQuery.textScaleFactorOf(context);
+                final gridDelegate = _gridDelegateFor(w, textScale);
 
-            const horizontalPad = 12.0;
-            const topPad = 8.0;
-            final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
-            final bottomPad = 28.0 + bottomSafe;
+                const horizontalPad = 12.0;
+                const topPad = 8.0;
+                final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
+                final bottomPad = 28.0 + bottomSafe;
 
-            if (feed.isInitialLoading) {
-              return GridView.builder(
-                padding: EdgeInsets.fromLTRB(
-                  horizontalPad,
-                  topPad,
-                  horizontalPad,
-                  bottomPad,
-                ),
-                physics: const AlwaysScrollableScrollPhysics(),
-                cacheExtent: 1800,
-                gridDelegate: gridDelegate,
-                itemCount: 9,
-                itemBuilder: (_, __) => const SkeletonCard(),
-              );
-            }
-
-            if (feed.hasError && feed.items.isEmpty) {
-              return ListView(
-                padding: EdgeInsets.fromLTRB(
-                  horizontalPad,
-                  24,
-                  horizontalPad,
-                  bottomPad,
-                ),
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  ErrorView(
-                    message: feed.errorMessage ?? 'Something went wrong.',
-                    onRetry: () => feed.load(reset: true),
-                  ),
-                ],
-              );
-            }
-
-            final q = widget.searchText.text.trim().toLowerCase();
-            final baseList = (q.isEmpty)
-                ? feed.items
-                : feed.items
-                    .where((s) =>
-                        s.title.toLowerCase().contains(q) ||
-                        (s.summary ?? '').toLowerCase().contains(q))
-                    .toList();
-
-            final displayList = _applySortMode(baseList);
-
-            if (displayList.isEmpty) {
-              final msg = widget.offline
-                  ? "You're offline and no results match your search."
-                  : "No matching items.";
-              return ListView(
-                padding: EdgeInsets.fromLTRB(
-                  horizontalPad,
-                  24,
-                  horizontalPad,
-                  bottomPad,
-                ),
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  Center(child: Text(msg)),
-                ],
-              );
-            }
-
-            const showLoadMore = false;
-
-            return GridView.builder(
-              padding: EdgeInsets.fromLTRB(
-                horizontalPad,
-                topPad,
-                horizontalPad,
-                bottomPad,
-              ),
-              physics: const AlwaysScrollableScrollPhysics(),
-              cacheExtent: 2000,
-              gridDelegate: gridDelegate,
-              itemCount: displayList.length + (showLoadMore ? 1 : 0),
-              itemBuilder: (_, i) {
-                if (showLoadMore && i == displayList.length) {
-                  return Center(
-                    child: feed.isLoadingMore
-                        ? const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 16),
-                            child: CircularProgressIndicator(),
-                          )
-                        : OutlinedButton.icon(
-                            onPressed: feed.loadMore,
-                            icon: const Icon(Icons.expand_more_rounded),
-                            label: const Text('Load more'),
-                          ),
+                if (feed.isInitialLoading) {
+                  return GridView.builder(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPad,
+                      topPad,
+                      horizontalPad,
+                      bottomPad,
+                    ),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    cacheExtent: 1800,
+                    gridDelegate: gridDelegate,
+                    itemCount: 9,
+                    itemBuilder: (_, __) => const SkeletonCard(),
                   );
                 }
 
-                return StoryCard(
-                  story: displayList[i],
-                  allStories: displayList,
-                  index: i,
+                if (feed.hasError && feed.items.isEmpty) {
+                  return ListView(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPad,
+                      24,
+                      horizontalPad,
+                      bottomPad,
+                    ),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      ErrorView(
+                        message:
+                            feed.errorMessage ?? 'Something went wrong.',
+                        onRetry: () => feed.load(reset: true),
+                      ),
+                    ],
+                  );
+                }
+
+                final q = widget.searchText.text.trim().toLowerCase();
+                final baseList = (q.isEmpty)
+                    ? feed.items
+                    : feed.items
+                        .where((s) =>
+                            s.title.toLowerCase().contains(q) ||
+                            (s.summary ?? '').toLowerCase().contains(q))
+                        .toList();
+
+                final displayList = _applySortMode(baseList);
+
+                if (displayList.isEmpty) {
+                  final msg = widget.offline
+                      ? "You're offline and no results match your search."
+                      : "No matching items.";
+                  return ListView(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPad,
+                      24,
+                      horizontalPad,
+                      bottomPad,
+                    ),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      Center(child: Text(msg)),
+                    ],
+                  );
+                }
+
+                const showLoadMore = false;
+
+                return GridView.builder(
+                  padding: EdgeInsets.fromLTRB(
+                    horizontalPad,
+                    topPad,
+                    horizontalPad,
+                    bottomPad,
+                  ),
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  cacheExtent: 2000,
+                  gridDelegate: gridDelegate,
+                  itemCount: displayList.length + (showLoadMore ? 1 : 0),
+                  itemBuilder: (_, i) {
+                    if (showLoadMore && i == displayList.length) {
+                      return Center(
+                        child: feed.isLoadingMore
+                            ? const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 16),
+                                child: CircularProgressIndicator(),
+                              )
+                            : OutlinedButton.icon(
+                                onPressed: feed.loadMore,
+                                icon: const Icon(Icons.expand_more_rounded),
+                                label: const Text('Load more'),
+                              ),
+                      );
+                    }
+
+                    final story = displayList[i];
+                    return _savedBadgeWrapper(
+                      story: story,
+                      allStories: displayList,
+                      index: i,
+                    );
+                  },
                 );
               },
             );
@@ -1217,15 +1285,13 @@ class _ModernBrandLogo extends StatelessWidget {
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: Colors.white, // note: white on light bg = low contrast,
-                                 // but we’ll keep for now, same as design
+            color: Colors.white,
           ),
         ),
       ],
     );
   }
 }
-
 
 /* ──────────────────────────────────────────────────────────────────────────
    CRASH VIEW
