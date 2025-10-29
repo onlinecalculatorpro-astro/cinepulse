@@ -24,9 +24,10 @@
 //   Row 2 (SavedToolbarRow): category chips on left and actions on right
 //       Chips: [ All ] [ Entertainment ] [ Sports ]
 //       Right side: [ Recent ▼ ] [ Export ] [ Clear ]
-//       (Recent ▼ is sort popup; Export copies/shares all saved links;
-//        Clear wipes all saved items on this device.)
-//   Row 2.5: "3 items" count line (always shown, under Row 2)
+//         - Recent ▼ is sort popup
+//         - Export copies/shares all saved links
+//         - Clear wipes all saved items on this device
+//   Row 2.5: "3 items" count line (total saved items, not filtered count)
 //   Row 3 (conditional): the inline search bar shown when header Search is active
 //   Body: grid of StoryCard for filtered saved stories
 //
@@ -34,7 +35,6 @@
 // - Category chips don't actually filter yet (visual only).
 // - "Refresh" here just rebuilds local state (no network).
 // - Local search filters only within saved items, not the main feed.
-//
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -69,13 +69,13 @@ class SavedScreen extends StatefulWidget {
 }
 
 class _SavedScreenState extends State<SavedScreen> {
-  // sort mode for saved list (SavedSort is defined in core/cache.dart)
+  // The sort mode used in Saved (SavedSort is defined in core/cache.dart).
   SavedSort _sort = SavedSort.recent;
 
-  // which category chip is "active" visually (0=All,1=Entertainment,2=Sports)
+  // Which category chip is highlighted (0=All,1=Entertainment,2=Sports).
   int _activeCatIndex = 0;
 
-  // header search toggle + controller
+  // Controls the inline search row (Row 3).
   bool _showSearchRow = false;
   final _query = TextEditingController();
   Timer? _debounce;
@@ -114,7 +114,7 @@ class _SavedScreenState extends State<SavedScreen> {
     setState(() {
       _activeCatIndex = i;
     });
-    // (future: actually filter by category here)
+    // (future: implement category filtering)
   }
 
   void _refreshSaved() {
@@ -141,7 +141,7 @@ class _SavedScreenState extends State<SavedScreen> {
         ),
       );
     } catch (_) {
-      // Fallback: just copy to clipboard.
+      // fallback: copy
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -177,8 +177,8 @@ class _SavedScreenState extends State<SavedScreen> {
   }
 
   /* ───────────────────────── Grid sizing helper ─────────────────────────
-   * SAME math as HomeScreen's _FeedListState._gridDelegateFor,
-   * so StoryCard tiles match visually.
+   * Matches HomeScreen _FeedListState._gridDelegateFor so StoryCard tiles
+   * line up visually across tabs.
    */
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
@@ -224,7 +224,7 @@ class _SavedScreenState extends State<SavedScreen> {
     final bgColor =
         isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
-    // same breakpoint as HomeScreen
+    // same breakpoint as HomeScreen to decide which header CTAs to show
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
 
@@ -235,12 +235,12 @@ class _SavedScreenState extends State<SavedScreen> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // All saved story IDs, sorted by _sort (recent or title)
+        // Pull saved stories from cache in selected sort order.
         final ids = SavedStore.instance.orderedIds(_sort);
         final stories =
             ids.map(FeedCache.get).whereType<Story>().toList(growable: false);
 
-        // local search filter
+        // Local search filter.
         final q = _query.text.trim().toLowerCase();
         final filtered = q.isEmpty
             ? stories
@@ -250,7 +250,7 @@ class _SavedScreenState extends State<SavedScreen> {
                 return title.contains(q) || summ.contains(q);
               }).toList();
 
-        // "3 items" etc (total saved, not filtered count)
+        // "3 items", "1 item", etc., based on TOTAL saved (not filtered).
         final total = stories.length;
         final countText = switch (total) {
           0 => 'No items',
@@ -261,7 +261,7 @@ class _SavedScreenState extends State<SavedScreen> {
         return Scaffold(
           backgroundColor: bgColor,
 
-          /* ───────── Row 1: Frosted header bar ───────── */
+          /* ───────── Row 1: Frosted CinePulse header ───────── */
           appBar: PreferredSize(
             preferredSize: const Size.fromHeight(64),
             child: ClipRRect(
@@ -296,8 +296,9 @@ class _SavedScreenState extends State<SavedScreen> {
                       const _ModernBrandLogo(),
                       const Spacer(),
 
-                      // WIDE DESKTOP / TABLET (≥768px):
+                      // WIDE (≥768px):
                       // [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
+                      // (No "Saved" because we're already here.)
                       if (isWide) ...[
                         _HeaderIconButton(
                           tooltip: 'Home',
@@ -382,14 +383,12 @@ class _SavedScreenState extends State<SavedScreen> {
                 activeIndex: _activeCatIndex,
                 onCategoryTap: _setCategory,
                 currentSort: _sort,
-                onSortPicked: (v) {
-                  setState(() => _sort = v);
-                },
+                onSortPicked: (v) => setState(() => _sort = v),
                 onExportTap: () => _export(context),
                 onClearAllTap: () => _clearAll(context),
               ),
 
-              // Row 2.5: count line ("3 items")
+              // Row 2.5: "3 items"
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -401,7 +400,7 @@ class _SavedScreenState extends State<SavedScreen> {
                 ),
               ),
 
-              // Row 3: search bar (only visible when header Search is toggled)
+              // Row 3: inline search bar (if toggled)
               if (_showSearchRow)
                 Padding(
                   padding:
@@ -418,7 +417,7 @@ class _SavedScreenState extends State<SavedScreen> {
                   ),
                 ),
 
-              // Grid / Empty state
+              // Grid / empty state
               Expanded(
                 child: LayoutBuilder(
                   builder: (ctx, constraints) {
@@ -429,11 +428,11 @@ class _SavedScreenState extends State<SavedScreen> {
                     const horizontalPad = 12.0;
                     const topPad = 8.0;
                     final bottomSafe =
-                        MediaQuery.viewPaddingOf(ctx).bottom; // for iOS home bar
+                        MediaQuery.viewPaddingOf(ctx).bottom;
                     final bottomPad = 28.0 + bottomSafe;
 
                     if (filtered.isEmpty) {
-                      // empty or no matches
+                      // empty / no matches
                       return ListView(
                         padding: EdgeInsets.fromLTRB(
                           horizontalPad,
@@ -481,13 +480,10 @@ class _SavedScreenState extends State<SavedScreen> {
 
 /* ───────────────────────── Toolbar row under header (Row 2) ─────────────────
  *
- * Left side: pill chips like Home:
- *    [ All ] [ Entertainment ] [ Sports ]
+ * Left side: pill chips [ All ] [ Entertainment ] [ Sports ]
+ * Right side: [ Recent ▼ ] [ Export ] [ Clear ]
  *
- * Right side: actions
- *    [ Recent ▼ ] [ Export ] [ Clear ]
- *
- * "Recent ▼" is actually a popup sort menu (recent vs title).
+ * "Recent ▼" is a popup sort menu (recent vs title).
  */
 class _SavedToolbarRow extends StatelessWidget {
   const _SavedToolbarRow({
@@ -576,10 +572,12 @@ class _SavedToolbarRow extends StatelessWidget {
 
     Widget chip(int index, String label) {
       final sel = (activeIndex == index);
-      return sel ? activeChip(label, index) : inactiveChip(label, () => onCategoryTap(index));
+      return sel
+          ? activeChip(label, index)
+          : inactiveChip(label, () => onCategoryTap(index));
     }
 
-    // Sort pill ("Recent" / "Title") showing popup on tap
+    // "Recent ▼" / "Title ▼" sort pill with popup
     Widget sortPill() {
       final isRecent = (currentSort == SavedSort.recent);
       final iconData = isRecent ? Icons.history : Icons.sort_by_alpha;
@@ -651,7 +649,7 @@ class _SavedToolbarRow extends StatelessWidget {
       );
     }
 
-    // Square pill actions on the right ("Export", "Clear")
+    // Square icon outline buttons on the right
     Widget actionSquare({
       required IconData icon,
       required String tooltip,
@@ -680,7 +678,7 @@ class _SavedToolbarRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // category chips (scrollable horizontally if needed)
+          // left: category chips (horizontal scroll on overflow)
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -699,7 +697,7 @@ class _SavedToolbarRow extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // Right-side controls
+          // right: sort / export / clear
           Wrap(
             spacing: 8,
             runSpacing: 8,
