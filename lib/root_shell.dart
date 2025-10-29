@@ -339,7 +339,16 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /* ───────────────────── Header actions from HomeScreen ───────────────────── */
+  /* ───────────────────── Header actions from HomeScreen / SavedScreen ───── */
+
+  // "Home" / main feed
+  void _openHome() {
+    setState(() {
+      _pageIndex = 0;
+      _navIndex = 0;
+      _showSearchBar = false;
+    });
+  }
 
   // "Discover" icon
   void _openDiscover() {
@@ -454,7 +463,7 @@ class _RootShellState extends State<RootShell> {
     final picked = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
-      isScrollControlled: true, // <-- make sheet behave like Categories
+      isScrollControlled: true, // match Categories bottom sheet behavior
       builder: (_) => _ContentTypePicker(current: _currentContentType),
     );
 
@@ -653,21 +662,24 @@ class _RootShellState extends State<RootShell> {
 
         // Main body: active tab page, width-clamped on desktop
         //
-        // CHANGE MADE HERE:
         // We wrap the IndexedStack host in a SafeArea with top:true and bottom:false
-        // so our custom header on HomeScreen does NOT sit under the system
-        // status bar on phones.
+        // so our custom headers do not sit under the system status bar on phones.
         body: SafeArea(
           top: true,
           bottom: false,
           child: _ResponsiveWidth(
             child: IndexedStack(
               index: _pageIndex,
-              children: const [
-                _HomeTabHost(),
-                _DiscoverPlaceholder(),
-                SavedScreen(),
-                AlertsScreen(),
+              children: [
+                const _HomeTabHost(),
+                const _DiscoverPlaceholder(),
+                SavedScreen(
+                  onOpenHome: _openHome,
+                  onOpenAlerts: _openAlerts,
+                  onOpenDiscover: _openDiscover,
+                  onOpenMenu: _openEndDrawer,
+                ),
+                const AlertsScreen(),
               ],
             ),
           ),
