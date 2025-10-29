@@ -48,6 +48,7 @@ import 'package:flutter/services.dart';
 import '../../core/cache.dart'; // SavedStore, SavedSort, FeedCache
 import '../../core/models.dart';
 import '../../widgets/search_bar.dart'; // shared SearchBarInput
+import '../../theme/theme_colors.dart'; // theme-aware text colors
 import '../story/story_card.dart';
 
 class SavedScreen extends StatefulWidget {
@@ -557,9 +558,9 @@ class _SavedToolbarRow extends StatelessWidget {
               ),
             ],
           ),
-          child: Text(
-            label,
-            style: const TextStyle(
+          child: const Text(
+            'All', // label overridden below when actually built
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               height: 1.2,
@@ -572,9 +573,37 @@ class _SavedToolbarRow extends StatelessWidget {
 
     Widget chip(int index, String label) {
       final sel = (activeIndex == index);
-      return sel
-          ? activeChip(label, index)
-          : inactiveChip(label, () => onCategoryTap(index));
+      if (!sel) {
+        return inactiveChip(label, () => onCategoryTap(index));
+      }
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => onCategoryTap(index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: _accent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: _accent, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: _accent.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      );
     }
 
     // "Recent ▼" / "Title ▼" sort pill with popup
@@ -846,13 +875,13 @@ class _ModernBrandLogo extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        const Text(
+        Text(
           'CinePulse',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: Colors.white,
+            color: primaryTextColor(context), // theme-aware brand text color
           ),
         ),
       ],
