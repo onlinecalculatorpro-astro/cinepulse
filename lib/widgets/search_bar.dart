@@ -1,22 +1,34 @@
 import 'package:flutter/material.dart';
 
-/// Reusable CinePulse search bar.
-/// Used on Home (Search mode), and can be reused anywhere else that wants
-/// the same "inline search field" look.
+/// CinePulse inline search field.
 ///
-/// Behavior:
-/// - Leading magnifying glass icon.
-/// - Text field that updates the provided [controller].
-/// - Trailing "X" button:
-///    • If [onExitSearch] is provided, tapping the X calls that callback
-///      (Home uses this to exit Search mode + clear text + unfocus).
-///    • Otherwise, tapping the X just clears the text.
-/// - Border goes red when focused to match the app accent.
+/// Used in Home / Discover / Saved / Alerts as the "Row 3" inline search bar.
 ///
-/// Styling:
-/// - Dark translucent background in dark mode, light translucent bg in light.
-/// - 8px radius to match the rest of the UI (header pills, nav buttons).
+/// Behavior
+/// --------
+/// - Leading 🔍 icon (static).
+/// - Editable text bound to [controller].
+/// - Trailing ✕ button:
+///     • If [onExitSearch] is provided, tapping ✕ calls that callback
+///       (tabs use this to hide the search row, clear input, and unfocus).
+///     • Otherwise we just clear the text and unfocus.
+/// - Border glows red when focused to match the global accent.
 ///
+/// Visual
+/// ------
+/// - Frosted-ish pill look shared across the app:
+///     • 8px radius
+///     • subtle translucent background
+///     • 1px outline (accent when focused)
+/// - Height = 40px
+///
+/// Lifecycle
+/// ---------
+/// - We own a FocusNode so we can:
+///     • update the border color on focus
+///     • close the keyboard on exit
+/// - We listen to [controller] and rebuild so we can react to text changes
+///   if you ever want to hide ✕ when empty. (Right now ✕ always shows.)
 class SearchBarInput extends StatefulWidget {
   const SearchBarInput({
     super.key,
@@ -25,15 +37,16 @@ class SearchBarInput extends StatefulWidget {
     this.hintText = 'Search…',
   });
 
-  /// The text editing controller owned by the parent.
+  /// Parent-owned text controller.
   final TextEditingController controller;
 
   /// Optional "close search mode" handler.
-  /// If this is non-null, the trailing X will call this instead of just
-  /// clearing the field.
+  ///
+  /// If non-null, tapping ✕ will call this instead of just clearing [controller].
+  /// Each tab uses this to both hide the row and clear the text.
   final VoidCallback? onExitSearch;
 
-  /// Placeholder / hint.
+  /// Placeholder string.
   final String hintText;
 
   @override
@@ -41,37 +54,39 @@ class SearchBarInput extends StatefulWidget {
 }
 
 class _SearchBarInputState extends State<SearchBarInput> {
-  // Accent color we consistently use across the app.
   static const _accent = Color(0xFFdc2626);
 
-  late final FocusNode _focus;
+  late final FocusNode _focusNode;
 
   @override
   void initState() {
     super.initState();
-    _focus = FocusNode();
-    _focus.addListener(_handleInternalChange);
-    widget.controller.addListener(_handleInternalChange);
+    _focusNode = FocusNode();
+    _focusNode.addListener(_syncUI);
+    widget.controller.addListener(_syncUI);
   }
 
   @override
   void didUpdateWidget(covariant SearchBarInput oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    // If the parent swapped controllers, detach from the old one and attach to the new one.
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_handleInternalChange);
-      widget.controller.addListener(_handleInternalChange);
+      oldWidget.controller.removeListener(_syncUI);
+      widget.controller.addListener(_syncUI);
     }
   }
 
   @override
   void dispose() {
-    _focus.removeListener(_handleInternalChange);
-    _focus.dispose();
-    widget.controller.removeListener(_handleInternalChange);
+    _focusNode.removeListener(_syncUI);
+    _focusNode.dispose();
+
+    widget.controller.removeListener(_syncUI);
     super.dispose();
   }
 
-  void _handleInternalChange() {
+  void _syncUI() {
     if (mounted) {
       setState(() {});
     }
@@ -79,13 +94,14 @@ class _SearchBarInputState extends State<SearchBarInput> {
 
   void _handleClearOrExit() {
     if (widget.onExitSearch != null) {
-      // Parent (ex: Home) decides how to exit search mode.
+      // Tab-level handler: hide search row and reset state.
       widget.onExitSearch!.call();
     } else {
-      // Default fallback: just clear the text.
+      // Default fallback: just clear.
       widget.controller.clear();
     }
-    // Also hide keyboard.
+
+    // Always drop keyboard focus.
     FocusScope.of(context).unfocus();
   }
 
@@ -94,35 +110,31 @@ class _SearchBarInputState extends State<SearchBarInput> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    // When focused, border turns accent red.
-    // Otherwise it's a subtle hairline.
-    final Color borderColor = _focus.hasFocus
+    // Outline color = accent when focused, subtle hairline otherwise.
+    final Color outlineColor = _focusNode.hasFocus
         ? _accent
         : (isDark
             ? Colors.white.withOpacity(0.15)
             : Colors.black.withOpacity(0.2));
 
-    // Slight translucent bg, similar vibe to header pills / bottom nav bg.
+    // Background matches the pill buttons in headers / bottom nav.
     final Color bgColor = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : theme.colorScheme.surface.withOpacity(0.6);
 
-    final textColor = isDark ? Colors.white : Colors.black87;
-    final hintColor = isDark
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+    final Color hintColor = isDark
         ? Colors.white.withOpacity(0.6)
         : Colors.black.withOpacity(0.5);
 
     return Container(
       height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: borderColor,
-          width: 1,
-        ),
+        border: Border.all(color: outlineColor, width: 1),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
           Icon(
@@ -132,19 +144,19 @@ class _SearchBarInputState extends State<SearchBarInput> {
           ),
           const SizedBox(width: 8),
 
-          // Text field grows
+          // Editable text
           Expanded(
             child: TextField(
               controller: widget.controller,
-              focusNode: _focus,
+              focusNode: _focusNode,
               textInputAction: TextInputAction.search,
+              cursorColor: _accent,
               style: TextStyle(
                 fontSize: 14,
                 height: 1.3,
                 color: textColor,
                 fontWeight: FontWeight.w500,
               ),
-              cursorColor: _accent,
               decoration: InputDecoration(
                 isCollapsed: true,
                 border: InputBorder.none,
@@ -161,10 +173,8 @@ class _SearchBarInputState extends State<SearchBarInput> {
 
           const SizedBox(width: 8),
 
-          // Trailing "X" button. We ALWAYS show it in this design
-          // (so user can quickly back out of Search mode on Home),
-          // but we could hide it if you want:
-          // if (!widget.controller.text.isNotEmpty && !_focus.hasFocus) -> SizedBox.shrink()
+          // ✕ button.
+          // We always render it so you can instantly bail out of search mode.
           InkWell(
             borderRadius: BorderRadius.circular(6),
             onTap: _handleClearOrExit,
