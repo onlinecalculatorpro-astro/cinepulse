@@ -10,10 +10,14 @@
 // • The grid uses the SAME sizing logic as Home feed (_FeedListState._gridDelegateFor)
 //   so StoryCard tiles are identical size everywhere in the app.
 //
-// Navigation:
-// - We accept callbacks from RootShell: onOpenHome, onOpenAlerts, onOpenMenu.
-//   These are used by the header icons on desktop/wide screens.
-//   (On phone, bottom nav still handles nav.)
+// Navigation callbacks:
+// - onOpenHome       → go to Home tab
+// - onOpenDiscover   → go to Discover tab
+// - onOpenAlerts     → go to Alerts tab
+// - onOpenMenu       → open drawer
+//
+// RootShell passes these so SavedScreen can show the same style header actions
+// you get on HomeScreen, just with slightly different icons.
 //
 // Live updates:
 // - We listen to SavedStore.instance so the list updates when bookmarks change.
@@ -36,17 +40,21 @@ class SavedScreen extends StatefulWidget {
   const SavedScreen({
     super.key,
     this.onOpenHome,
+    this.onOpenDiscover,
     this.onOpenAlerts,
     this.onOpenMenu,
   });
 
-  /// Go to Home tab (RootShell will implement this).
+  /// Go to Home tab (RootShell implements this).
   final VoidCallback? onOpenHome;
 
-  /// Go to Alerts tab (RootShell will implement this).
+  /// Go to Discover tab.
+  final VoidCallback? onOpenDiscover;
+
+  /// Go to Alerts tab.
   final VoidCallback? onOpenAlerts;
 
-  /// Open the drawer / menu (RootShell will implement this).
+  /// Open the drawer / menu.
   final VoidCallback? onOpenMenu;
 
   @override
@@ -54,7 +62,7 @@ class SavedScreen extends StatefulWidget {
 }
 
 class _SavedScreenState extends State<SavedScreen> {
-  // sort mode for saved list (SavedSort comes from core/cache.dart)
+  // sort mode for saved list (SavedSort is defined in core/cache.dart)
   SavedSort _sort = SavedSort.recent;
 
   final _query = TextEditingController();
@@ -134,11 +142,6 @@ class _SavedScreenState extends State<SavedScreen> {
   }
 
   /* ───────────────────────── Helpers ───────────────────────── */
-
-  // label for the sort pill
-  String _sortLabel(SavedSort s) {
-    return s == SavedSort.recent ? 'Recent' : 'Title';
-  }
 
   // SAME grid sizing logic as HomeScreen feed (_FeedListState._gridDelegateFor)
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
@@ -263,6 +266,14 @@ class _SavedScreenState extends State<SavedScreen> {
                           tooltip: 'Home',
                           icon: Icons.home_rounded,
                           onTap: widget.onOpenHome,
+                        ),
+                        const SizedBox(width: 8),
+                        _HeaderIconButton(
+                          tooltip: 'Discover',
+                          icon: kIsWeb
+                              ? Icons.explore_outlined
+                              : Icons.manage_search_rounded,
+                          onTap: widget.onOpenDiscover,
                         ),
                         const SizedBox(width: 8),
                         _HeaderIconButton(
