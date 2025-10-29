@@ -1,4 +1,55 @@
 // lib/features/home/home_screen.dart
+//
+// HOME TAB
+// -------------------------------------------------------------
+// This screen renders the main feed grid plus header + filters.
+//
+// FINAL NAV / HEADER RULES (after mobile nav changes)
+// -------------------------------------------------------------
+//
+// • On phones (<768px wide):
+//    - Bottom nav has 4 CTAs: Home / Discover / Saved / Alerts.
+//    - Because of that, the HOME header should NOT show nav pills
+//      for Discover / Saved / Alerts. Those already exist in bottom nav.
+//    - Mobile header should only show utility CTAs:
+//         [Search] [Refresh] [Menu]
+//      - Tapping Search toggles the inline search row ("Row 3").
+//
+// • On wide layouts (≥768px wide):
+//    - There is NO bottom nav, so header must expose cross-nav CTAs.
+//    - HomeScreen is "current", so we do NOT show a "Home" CTA.
+//    - We DO show:
+//         [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
+//      (Search still toggles the inline search row.)
+//
+// • The inline search row sits UNDER the chips row.
+//   It's hidden by default and appears when the header Search CTA is tapped.
+//   RootShell no longer tries to control it. We keep `showSearchBar` prop
+//   for backward compatibility, but RootShell now always passes `false`.
+//
+// ROW STRUCTURE
+// -------------------------------------------------------------
+// Row 1: Frosted header bar with logo + CTAs
+// Row 2: Category chips (All / Entertainment / Sports) + Sort pill
+// Row 3: (conditional) Search bar (shows if user taps Search CTA)
+// Body : TabBarView with 3 feeds (All / Entertainment / Sports)
+//
+// Offline banner shows above Row 2 if we're offline.
+//
+// Data / refresh
+// -------------------------------------------------------------
+// _PagedFeed manages paging per tab, caches to disk, polls API,
+// and we keep a WebSocket open for realtime pings that trigger reload.
+//
+// We also support manual refresh (Refresh CTA), periodic refresh,
+// and auto-refresh on realtime "ping".
+//
+// Sorting
+// -------------------------------------------------------------
+// Sort modes: Latest / Trending / Most viewed / Editor's pick
+// Applied client-side on the visible list before rendering.
+//
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
@@ -15,7 +66,7 @@ import '../../core/models.dart';
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton_card.dart';
-import '../../widgets/search_bar.dart'; // <-- moved to shared widgets
+import '../../widgets/search_bar.dart'; // shared SearchBarInput
 import '../story/story_card.dart';
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -34,7 +85,7 @@ enum _SortMode {
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    this.showSearchBar = false,
+    this.showSearchBar = false, // legacy flag, RootShell now always false
     this.onMenuPressed,
     this.onHeaderRefresh,
     this.onOpenDiscover,
@@ -42,12 +93,19 @@ class HomeScreen extends StatefulWidget {
     this.onOpenAlerts,
   });
 
-  /// From RootShell bottom nav "Search" tab (mobile). When true, we force
-  /// the inline search row to be visible.
+  /// Legacy hook from older bottom nav design where "Search" was a tab.
+  /// RootShell now always passes false. We keep it only so RootShell
+  /// doesn't break. Inline search row is now controlled internally
+  /// by tapping the header Search CTA.
   final bool showSearchBar;
 
+  /// Opens global menu drawer.
   final VoidCallback? onMenuPressed;
+
+  /// Called after manual refresh succeeds.
   final VoidCallback? onHeaderRefresh;
+
+  /// Navigation pills for wide layouts (≥768px).
   final VoidCallback? onOpenDiscover;
   final VoidCallback? onOpenSaved;
   final VoidCallback? onOpenAlerts;
@@ -86,7 +144,8 @@ class _HomeScreenState extends State<HomeScreen>
 
   _SortMode _sortMode = _SortMode.latest;
 
-  // NEW: desktop/web toggle for showing the inline search row
+  // Inline search row visibility (Row 3). This is toggled by tapping
+  // the header "Search" icon CTA.
   bool _showHeaderSearch = false;
 
   // timers / subs
@@ -108,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen>
   void initState() {
     super.initState();
 
-    // warm feeds
+    // warm initial feeds
     for (final f in _feeds.values) {
       unawaited(f.load(reset: true));
     }
@@ -121,6 +180,7 @@ class _HomeScreenState extends State<HomeScreen>
       final hasNetwork = _hasNetworkFrom(event);
       if (!mounted) return;
       final wasOffline = _offline;
+
       setState(() => _offline = !hasNetwork);
 
       if (hasNetwork) {
@@ -133,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen>
       if (hasNetwork && wasOffline) _wsBackoffSecs = 2;
     });
 
-    // initial connectivity
+    // initial connectivity bootstrap
     () async {
       final initial = await Connectivity().checkConnectivity();
       final hasNetwork = _hasNetworkFrom(initial);
@@ -286,12 +346,11 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (tabIndex < 0 || tabIndex >= _chipKeys.length) return;
 
-    // wait until layout is done so the chip actually has a context/size
+    // Post-frame so layout is complete and chip has context/size.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = _chipKeys[tabIndex].currentContext;
       if (ctx == null) return;
-
       Scrollable.ensureVisible(
         ctx,
         alignment: 0.5,
@@ -433,11 +492,10 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /* ────────────────────────────────────────────────────────────────────────
-     NEW: toggle inline search row from header 🔍
+     Toggle inline search row (Row 3) via header 🔍
      ─────────────────────────────────────────────────────────────────────── */
   void _toggleHeaderSearch() {
     setState(() {
-      // flip the desktop flag
       _showHeaderSearch = !_showHeaderSearch;
 
       // if we're hiding it, also clear input + keyboard focus
@@ -456,7 +514,7 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       return _buildSimpleLayout(context);
     } catch (err, stack) {
-      debugPrint('HomeScreen simple build ERROR: $err\n$stack');
+      debugPrint('HomeScreen build ERROR: $err\n$stack');
       return _HomeCrashedView(
         error: err.toString(),
         stack: stack.toString(),
@@ -467,17 +525,20 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildSimpleLayout(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
+    final bgColor =
+        isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
-    // breakpoint for mobile vs wide layout
+    // breakpoint for compact vs wide layout
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
 
-    // do we currently want the search row visible?
+    // should Row 3 (search bar row) currently be visible?
     final bool showSearchRow = widget.showSearchBar || _showHeaderSearch;
 
     return Scaffold(
       backgroundColor: bgColor,
+
+      // Frosted header (Row 1)
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(64),
         child: ClipRRect(
@@ -512,13 +573,8 @@ class _HomeScreenState extends State<HomeScreen>
                   const _ModernBrandLogo(),
                   const Spacer(),
 
-                  // Desktop / wide actions appear in usage order:
-                  // 1. Search (toggles row 3)
-                  // 2. Saved
-                  // 3. Alerts
-                  // 4. Discover
-                  // 5. Refresh
-                  // 6. Menu
+                  // WIDE (≥768px):
+                  // [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
                   if (isWide) ...[
                     _HeaderIconButton(
                       tooltip: 'Search',
@@ -538,43 +594,65 @@ class _HomeScreenState extends State<HomeScreen>
                       onTap: widget.onOpenAlerts,
                     ),
                     const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Discover',
+                      icon: kIsWeb
+                          ? Icons.explore_outlined
+                          : Icons.manage_search_rounded,
+                      onTap: widget.onOpenDiscover,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Refresh',
+                      icon: Icons.refresh_rounded,
+                      onTap: _refreshManually,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Menu',
+                      icon: Icons.menu_rounded,
+                      onTap: widget.onMenuPressed,
+                    ),
                   ],
 
-                  _HeaderIconButton(
-                    tooltip: 'Discover',
-                    icon: kIsWeb
-                        ? Icons.explore_outlined
-                        : Icons.manage_search_rounded,
-                    onTap: widget.onOpenDiscover,
-                  ),
-                  const SizedBox(width: 8),
-                  _HeaderIconButton(
-                    tooltip: 'Refresh',
-                    icon: Icons.refresh_rounded,
-                    onTap: _refreshManually,
-                  ),
-                  const SizedBox(width: 8),
-                  _HeaderIconButton(
-                    tooltip: 'Menu',
-                    icon: Icons.menu_rounded,
-                    onTap: widget.onMenuPressed,
-                  ),
+                  // COMPACT (<768px):
+                  // [Search] [Refresh] [Menu]
+                  if (!isWide) ...[
+                    _HeaderIconButton(
+                      tooltip: 'Search',
+                      icon: Icons.search_rounded,
+                      onTap: _toggleHeaderSearch,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Refresh',
+                      icon: Icons.refresh_rounded,
+                      onTap: _refreshManually,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Menu',
+                      icon: Icons.menu_rounded,
+                      onTap: widget.onMenuPressed,
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
         ),
       ),
+
       body: Column(
         children: [
-          // offline banner (row before filters if offline)
+          // Offline banner (shows ABOVE the category chips)
           if (_offline)
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: OfflineBanner(),
             ),
 
-          // category + sort row  (Row 2 visually)
+          // Row 2: category chips + sort
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
@@ -586,7 +664,7 @@ class _HomeScreenState extends State<HomeScreen>
             onSortTap: (ctx) => _showSortSheet(ctx),
           ),
 
-          // CONDITIONAL SEARCH ROW (Row 3 visually)
+          // Row 3 (conditional): inline search bar
           if (showSearchRow)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -603,7 +681,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-          // Tab pages -> Expanded so it fills remaining height
+          // Body grid for the current tab
           Expanded(
             child: TabBarView(
               controller: _tab,
@@ -626,7 +704,7 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Filters row (used in simple layout instead of SliverPersistentHeader)
+   Filters row (Row 2 under header)
    ───────────────────────────────────────────────────────────────────────── */
 class _FiltersRow extends StatelessWidget {
   const _FiltersRow({
@@ -701,9 +779,9 @@ class _FiltersRow extends StatelessWidget {
                 ),
               ],
             ),
-            child: Text(
-              label,
-              style: const TextStyle(
+            child: const Text(
+              'All', // will be replaced below (we'll override via label param)
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
                 height: 1.2,
@@ -716,6 +794,47 @@ class _FiltersRow extends StatelessWidget {
       return Container(
         key: itemKey,
         child: inactiveChip(label, () => onSelect(index)),
+      );
+    }
+
+    // We can't just const Text('All') above because we need dynamic label.
+    // Let's wrap tabChip's "selected" case manually here so we keep label:
+    Widget buildTabChip(int index, String label, Key itemKey) {
+      final sel = (activeIndex == index);
+      if (!sel) {
+        return Container(
+          key: itemKey,
+          child: inactiveChip(label, () => onSelect(index)),
+        );
+      }
+      return InkWell(
+        key: itemKey,
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => onSelect(index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: accent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: accent, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+              color: Colors.white,
+            ),
+          ),
+        ),
       );
     }
 
@@ -803,11 +922,11 @@ class _FiltersRow extends StatelessWidget {
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  tabChip(0, 'All', chipKeys[0]),
+                  buildTabChip(0, 'All', chipKeys[0]),
                   const SizedBox(width: 8),
-                  tabChip(1, 'Entertainment', chipKeys[1]),
+                  buildTabChip(1, 'Entertainment', chipKeys[1]),
                   const SizedBox(width: 8),
-                  tabChip(2, 'Sports', chipKeys[2]),
+                  buildTabChip(2, 'Sports', chipKeys[2]),
                 ],
               ),
             ),
@@ -822,7 +941,7 @@ class _FiltersRow extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Feed list (unchanged logic, just copied)
+   Feed list
    ───────────────────────────────────────────────────────────────────────── */
 class _FeedList extends StatefulWidget {
   const _FeedList({
@@ -1006,6 +1125,7 @@ class _FeedListState extends State<_FeedList>
                 final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
                 final bottomPad = 28.0 + bottomSafe;
 
+                // 1) loading state (skeleton cards grid)
                 if (feed.isInitialLoading) {
                   return GridView.builder(
                     padding: EdgeInsets.fromLTRB(
@@ -1022,6 +1142,7 @@ class _FeedListState extends State<_FeedList>
                   );
                 }
 
+                // 2) total failure + empty list
                 if (feed.hasError && feed.items.isEmpty) {
                   return ListView(
                     padding: EdgeInsets.fromLTRB(
@@ -1041,6 +1162,7 @@ class _FeedListState extends State<_FeedList>
                   );
                 }
 
+                // 3) apply search + sort
                 final q = widget.searchText.text.trim().toLowerCase();
                 final baseList = (q.isEmpty)
                     ? feed.items
@@ -1070,6 +1192,7 @@ class _FeedListState extends State<_FeedList>
                   );
                 }
 
+                // 4) normal grid
                 const showLoadMore = false;
 
                 return GridView.builder(
@@ -1117,7 +1240,7 @@ class _FeedListState extends State<_FeedList>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Feed paging model (unchanged)
+   Feed paging model
    ───────────────────────────────────────────────────────────────────────── */
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
@@ -1220,7 +1343,7 @@ class _PagedFeed extends ChangeNotifier {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Header icon button
+   Header icon button (square pill)
    ───────────────────────────────────────────────────────────────────────── */
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
@@ -1322,7 +1445,7 @@ class _ModernBrandLogo extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   CRASH VIEW
+   Crash fallback (dev visibility)
    ───────────────────────────────────────────────────────────────────────── */
 class _HomeCrashedView extends StatelessWidget {
   const _HomeCrashedView({
