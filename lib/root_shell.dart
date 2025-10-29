@@ -8,7 +8,7 @@
 //  • The bottom nav on phones only (<768px width)
 //  • Deep link handling for /s/<id> → StoryDetailsScreen
 //
-// Drawer spec (CURRENT):
+// Drawer spec:
 //
 // HEADER
 //   CinePulse brand block
@@ -28,8 +28,7 @@
 //   Report an issue     (> email)
 //
 // SETTINGS
-//   App language        (> _openAppLanguageSettings() bottom sheet
-//                          with 7 Indian languages for CinePulse UI chrome)
+//   App language        (> _openAppLanguageSettings() bottom sheet)
 //   Subscription        (> _openSubscriptionSettings() bottom sheet)
 //   Sign in             (> _openAccountSettings() bottom sheet)
 //
@@ -40,13 +39,15 @@
 //
 // RootShell is responsible for:
 //   • reading prefs from SharedPreferences
-//        - feed lang ('english' | 'hindi' | 'mixed' ...)  [for header summary]
+//        - feed lang ('english' | 'hindi' | 'mixed' ...)
 //        - content type ('all' | 'read' | 'video' | 'audio')
-//   • exposing callbacks the drawer calls for each row
-//   • handling responsive layout (bottom nav only under 768px width)
+//   • exposing callbacks that the header icons and drawer rows call
+//   • rendering a consistent frosted header in each screen via those callbacks
+//   • responsive layout (bottom nav only under 768px width)
 //
-// AppDrawer is "dumb": it just calls the callbacks we pass in.
-// We close the drawer first, then RootShell shows a bottom sheet.
+// SavedScreen and AlertsScreen now both expect navigation callbacks so their
+// headers can render the same nav icon pills (Home / Discover / Saved / Alerts / Menu)
+// that HomeScreen has. We provide those here.
 //
 
 import 'dart:async';
@@ -209,12 +210,11 @@ class _RootShellState extends State<RootShell> {
   // Whether HomeScreen should show its inline search bar (Search tab behavior)
   bool _showSearchBar = false;
 
-  // feed language / for header summary
+  // feed language / for drawer header summary
   // 'english' | 'hindi' | 'mixed' | etc.
   String _currentLang = 'mixed';
 
   // App UI language for CinePulse chrome ("App language" setting).
-  // We'll start with English and let the user pick from the 7-language sheet.
   String _appUiLanguageCode = 'english_ui';
 
   // Content type ('all' | 'read' | 'video' | 'audio')
@@ -339,7 +339,11 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /* ───────────────────── Header actions from HomeScreen / SavedScreen ───── */
+  /* ───────────────────── Header / nav callbacks ─────────────────────
+   *
+   * These are passed down into HomeScreen, SavedScreen, AlertsScreen
+   * so their frosted headers and icon pills behave consistently.
+   */
 
   // "Home" / main feed
   void _openHome() {
@@ -485,8 +489,7 @@ class _RootShellState extends State<RootShell> {
 
   // SETTINGS → "App language"
   //
-  // We'll open a dedicated sheet that lists 7 CinePulse UI languages.
-  // User picks one and taps Apply.
+  // We'll open a dedicated sheet that lists CinePulse UI languages.
   Future<void> _openAppLanguageSettings(BuildContext drawerContext) async {
     Navigator.pop(drawerContext);
 
@@ -631,7 +634,7 @@ class _RootShellState extends State<RootShell> {
               versionLabel: versionLabel,
               contentTypeLabel: contentTypeLabel,
 
-              // so HomeScreen etc can refresh if prefs change
+              // let HomeScreen etc refresh if prefs change
               onFiltersChanged: () => setState(() {}),
 
               // CONTENT & FILTERS
@@ -675,11 +678,16 @@ class _RootShellState extends State<RootShell> {
                 const _DiscoverPlaceholder(),
                 SavedScreen(
                   onOpenHome: _openHome,
-                  onOpenAlerts: _openAlerts,
                   onOpenDiscover: _openDiscover,
+                  onOpenAlerts: _openAlerts,
                   onOpenMenu: _openEndDrawer,
                 ),
-                const AlertsScreen(),
+                AlertsScreen(
+                  onOpenHome: _openHome,
+                  onOpenDiscover: _openDiscover,
+                  onOpenSaved: _openSaved,
+                  onOpenMenu: _openEndDrawer,
+                ),
               ],
             ),
           ),
@@ -697,7 +705,8 @@ class _RootShellState extends State<RootShell> {
   }
 }
 
-/* Small host widget to pass callbacks into HomeScreen without wrappers above */
+/* Small host widget to pass callbacks into HomeScreen without wrappers above.
+   We find the ancestor _RootShellState so we can call its methods. */
 class _HomeTabHost extends StatelessWidget {
   const _HomeTabHost();
 
