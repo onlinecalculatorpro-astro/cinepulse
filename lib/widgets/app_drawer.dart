@@ -1,76 +1,74 @@
 // lib/widgets/app_drawer.dart
 //
-// CinePulse right-side drawer (endDrawer).
-// This is the slide-out panel when you tap the Menu button.
+// CinePulse endDrawer (right-side slide-out menu).
 //
-// FINAL SPEC (current):
+// WHAT LIVES HERE
+// -----------------------------------------------------------------------------
+// • Branding header (CinePulse badge, tagline, feed summary, Close button)
+// • User-facing controls surfaced in sections:
 //
-// HEADER
-//   [🎬 gradient box] CinePulse
-//   "Movies & OTT, in a minute."
-//   "<CategorySummary> · <ContentTypeSummary>"  (feedStatusLine from RootShell)
-//   [✕ Close]
+//   CONTENT & FILTERS
+//     - Categories
+//     - Content type  (All / Read / Video / Audio)
 //
-// CONTENT & FILTERS
-//   [🏷️] Categories
-//        (no subtitle)
-//   [🎞️] Content type
-//        <contentTypeLabel>  (All / Read / Video / Audio)
+//   APPEARANCE
+//     - Theme         (System / Light / Dark)
 //
-// APPEARANCE
-//   [🎨] Theme
-//        "System / Light / Dark · Affects Home & stories"
+//   SHARE & SUPPORT
+//     - Share CinePulse
+//     - Report an issue
 //
-// SHARE & SUPPORT
-//   [📣] Share CinePulse
-//        "Send the app link"
-//   [🛠️] Report an issue
-//        "Tell us if something is broken or fake. We’ll remove it."
+//   SETTINGS
+//     - App language
+//     - Subscription
+//     - Sign in
 //
-// SETTINGS
-//   [🌍] App language
-//        "Change the CinePulse UI language"
-//   [💎] Subscription
-//        "Remove ads & unlock extras"
-//   [👤] Sign in
-//        "Sync saved stories across devices"
+//   ABOUT & LEGAL
+//     - About CinePulse (shows version label)
+//     - Privacy Policy
+//     - Terms of Use
 //
-// ABOUT & LEGAL
-//   [ℹ️] About CinePulse
-//        versionLabel (e.g. "Version 0.1.0 · Early access")
-//   [🔒] Privacy Policy
-//   [📜] Terms of Use
+// VISUAL LANGUAGE
+// -----------------------------------------------------------------------------
+// • Each row =
+//      [36x36 rounded square badge w/ emoji]
+//      [Title + optional subline]
+//      [chevron]
+//   - Badge is 8px radius, subtle red border + glow,
+//     dark translucent bg in dark mode, light translucent bg in light mode.
+// • Section headers are all-caps, 12px, ~60% opacity.
+// • Each row has a 1px divider at the bottom (onSurface @6%).
 //
-// PROPS from RootShell:
+// PROPS (provided by RootShell)
+// -----------------------------------------------------------------------------
+// feedStatusLine      e.g. "Entertainment +2 · English"
+// versionLabel        e.g. "Version 0.1.0 · Early access"
+// contentTypeLabel    e.g. "All" / "Read" / "Video" / "Audio"
 //
-//   required String feedStatusLine
-//   required String versionLabel
-//   required String contentTypeLabel
+// onClose             required; close the drawer
 //
-//   required VoidCallback onClose
+// onFiltersChanged    optional legacy hook (RootShell may .setState() after
+//                     the user changes categories / type). Safe to ignore.
 //
-//   VoidCallback? onFiltersChanged        // legacy hook, safe to ignore
+// onCategoriesTap     open Categories bottom sheet
+// onContentTypeTap    open Content Type bottom sheet
+// onThemeTap          open Theme picker
 //
-//   VoidCallback? onCategoriesTap         // opens Categories sheet
-//   VoidCallback? onContentTypeTap        // opens Content type sheet
-//   VoidCallback? onThemeTap              // opens Theme sheet
+// onAppLanguageTap    open App language picker
+// onSubscriptionTap   open subscription/paywall sheet
+// onLoginTap          open sign-in flow
 //
-//   VoidCallback? onAppLanguageTap        // opens App language picker
-//   VoidCallback? onSubscriptionTap       // opens Subscription paywall
-//   VoidCallback? onLoginTap              // opens Sign in sheet
+// appShareUrl         link we want users to share
+// privacyUrl          external Privacy Policy
+// termsUrl            external Terms of Use
 //
-//   String? appShareUrl                   // link to share
-//   String? privacyUrl
-//   String? termsUrl
+// NOTE
+// -----------------------------------------------------------------------------
+// This widget is PRESENTATION ONLY. It doesn't read SharedPreferences, etc.
+// RootShell already computed summaries and handles actual sheets.
 //
-// STYLE NOTES:
-// • Each row is: [36x36 rounded square emoji badge] + text + chevron.
-// • Badge: 8px radius, subtle red border/glow, dark translucent bg in dark mode.
-// • Section headers = small all-caps with low opacity.
-// • Divider under every row = 1px using onSurface 6% opacity.
-//
-// No SharedPreferences reads here. RootShell already gives us summaries.
-//
+// Dependencies: google_fonts, share_plus, url_launcher
+// -----------------------------------------------------------------------------
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -82,18 +80,18 @@ import 'package:url_launcher/url_launcher.dart';
 class AppDrawer extends StatefulWidget {
   const AppDrawer({
     super.key,
-    // header + about
+    // header
     required this.onClose,
     required this.feedStatusLine,
     required this.versionLabel,
-    required this.contentTypeLabel, // "All" / "Read" / "Video" / "Audio"
+    required this.contentTypeLabel,
 
-    // optional legacy hook, can trigger setState in RootShell after sheets
+    // optional callback RootShell can use to rebuild feeds after edits
     this.onFiltersChanged,
 
     // CONTENT & FILTERS
-    this.onCategoriesTap,    // opens Categories picker sheet
-    this.onContentTypeTap,   // opens Content type picker sheet
+    this.onCategoriesTap,
+    this.onContentTypeTap,
 
     // APPEARANCE
     this.onThemeTap,
@@ -111,30 +109,21 @@ class AppDrawer extends StatefulWidget {
 
   final VoidCallback onClose;
 
-  // e.g. "Entertainment +2 · Read"
   final String feedStatusLine;
-
-  // e.g. "Version 0.1.0 · Early access"
   final String versionLabel;
-
-  // e.g. "All" / "Read" / "Video" / "Audio"
   final String contentTypeLabel;
 
   final VoidCallback? onFiltersChanged;
 
-  // CONTENT & FILTERS callbacks
   final VoidCallback? onCategoriesTap;
   final VoidCallback? onContentTypeTap;
 
-  // APPEARANCE
   final VoidCallback? onThemeTap;
 
-  // SETTINGS
   final VoidCallback? onAppLanguageTap;
   final VoidCallback? onSubscriptionTap;
   final VoidCallback? onLoginTap;
 
-  // external / share links
   final String? appShareUrl;
   final String? privacyUrl;
   final String? termsUrl;
@@ -146,19 +135,18 @@ class AppDrawer extends StatefulWidget {
 class _AppDrawerState extends State<AppDrawer> {
   static const _accent = Color(0xFFdc2626);
 
-  // ───────────────── text styles ─────────────────
+  /* ────────────────────────── tiny text helpers ────────────────────────── */
 
-  TextStyle _rowTitleStyle(ColorScheme cs) {
+  TextStyle _titleStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 14,
       fontWeight: FontWeight.w600,
-      color: cs.onSurface,
       height: 1.3,
+      color: cs.onSurface,
     );
   }
 
-  // helper / descriptive subline
-  TextStyle _rowSubStyle(ColorScheme cs) {
+  TextStyle _subStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
       fontWeight: FontWeight.w400,
@@ -167,8 +155,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // bold-ish / primary subline (for the selected "Content type" value)
-  TextStyle _valueLineStyle(ColorScheme cs) {
+  TextStyle _valueStyle(ColorScheme cs) {
     return GoogleFonts.inter(
       fontSize: 13,
       fontWeight: FontWeight.w600,
@@ -177,13 +164,12 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  Widget _emoji(String e, {double size = 18}) {
+  Widget _emoji(String char, {double size = 18}) {
     return Text(
-      e,
+      char,
       style: TextStyle(
         fontSize: size,
         height: 1,
-        fontFamily: null,
         fontFamilyFallback: const [
           'Apple Color Emoji',
           'Segoe UI Emoji',
@@ -194,23 +180,21 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // 36x36 rounded square icon badge at start of each row.
-  Widget _squareIconBadge(String emojiChar) {
+  /// 36x36 rounded square icon badge.
+  Widget _badge(String emojiChar) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color bgColor = isDark
+    final bg = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : Colors.black.withOpacity(0.06);
-
-    final Color borderColor = _accent.withOpacity(0.4);
 
     return Container(
       width: 36,
       height: 36,
       decoration: BoxDecoration(
-        color: bgColor,
+        color: bg,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: borderColor,
+          color: _accent.withOpacity(0.4),
           width: 1,
         ),
         boxShadow: [
@@ -226,8 +210,8 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Section header like "CONTENT & FILTERS"
-  Widget _sectionHeader(BuildContext context, String text) {
+  /// Section label like "CONTENT & FILTERS".
+  Widget _sectionHeader(String text) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
@@ -243,14 +227,11 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // Generic row renderer:
-  //
-  // [badge]  Title
-  //          Subtitle (optional)
-  //                              >
-  //
-  // If isValueLine = true, subtitle uses _valueLineStyle (bold / primary).
-  // Otherwise subtitle uses _rowSubStyle (dim helper text).
+  /// Reusable tap row:
+  /// [ badge ][ Title + (subtitle?) ]        [chevron]
+  ///
+  /// If `isValueLine` is true, subtitle is "value style" (bold-ish),
+  /// otherwise we use the dimmer helper style.
   Widget _drawerRow({
     required String emoji,
     required String title,
@@ -261,12 +242,12 @@ class _AppDrawerState extends State<AppDrawer> {
     final cs = Theme.of(context).colorScheme;
     final dividerColor = cs.onSurface.withOpacity(0.06);
 
-    final subtitleWidget = (subtitle != null && subtitle.isNotEmpty)
+    final subWidget = (subtitle != null && subtitle.isNotEmpty)
         ? Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text(
               subtitle,
-              style: isValueLine ? _valueLineStyle(cs) : _rowSubStyle(cs),
+              style: isValueLine ? _valueStyle(cs) : _subStyle(cs),
             ),
           )
         : const SizedBox.shrink();
@@ -277,20 +258,23 @@ class _AppDrawerState extends State<AppDrawer> {
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         decoration: BoxDecoration(
           border: Border(
-            bottom: BorderSide(width: 1, color: dividerColor),
+            bottom: BorderSide(
+              width: 1,
+              color: dividerColor,
+            ),
           ),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _squareIconBadge(emoji),
+            _badge(emoji),
             const SizedBox(width: 16),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: _rowTitleStyle(cs)),
-                  subtitleWidget,
+                  Text(title, style: _titleStyle(cs)),
+                  subWidget,
                 ],
               ),
             ),
@@ -306,13 +290,10 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────── ROW BUILDERS PER SECTION ─────────
+  /* ────────────────────────── row builders ────────────────────────── */
 
   // CONTENT & FILTERS
-
-  // "Categories" row
-  // No subtitle.
-  Widget _categoriesRow() {
+  Widget _rowCategories() {
     return _drawerRow(
       emoji: '🏷️',
       title: 'Categories',
@@ -322,9 +303,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // "Content type" row
-  // Shows selected format ("All", "Read", "Video", "Audio").
-  Widget _contentTypeRow() {
+  Widget _rowContentType() {
     return _drawerRow(
       emoji: '🎞️',
       title: 'Content type',
@@ -335,7 +314,7 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   // APPEARANCE
-  Widget _themeRow() {
+  Widget _rowTheme() {
     return _drawerRow(
       emoji: '🎨',
       title: 'Theme',
@@ -346,17 +325,17 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   // SHARE & SUPPORT
-  Widget _shareRow() {
+  Widget _rowShare() {
     return _drawerRow(
       emoji: '📣',
       title: 'Share CinePulse',
       subtitle: 'Send the app link',
       isValueLine: false,
-      onTap: () => _shareApp(context),
+      onTap: () => _shareApp(),
     );
   }
 
-  Widget _reportRow() {
+  Widget _rowReport() {
     return _drawerRow(
       emoji: '🛠️',
       title: 'Report an issue',
@@ -368,7 +347,7 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   // SETTINGS
-  Widget _appLanguageRow() {
+  Widget _rowAppLanguage() {
     return _drawerRow(
       emoji: '🌍',
       title: 'App language',
@@ -378,7 +357,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  Widget _subscriptionRow() {
+  Widget _rowSubscription() {
     return _drawerRow(
       emoji: '💎',
       title: 'Subscription',
@@ -388,7 +367,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  Widget _loginRow() {
+  Widget _rowLogin() {
     return _drawerRow(
       emoji: '👤',
       title: 'Sign in',
@@ -399,17 +378,17 @@ class _AppDrawerState extends State<AppDrawer> {
   }
 
   // ABOUT & LEGAL
-  Widget _aboutRow() {
+  Widget _rowAbout() {
     return _drawerRow(
       emoji: 'ℹ️',
       title: 'About CinePulse',
       subtitle: widget.versionLabel,
       isValueLine: false,
-      onTap: widget.onClose, // could later open a dedicated About screen
+      onTap: widget.onClose, // could open a future "About" screen
     );
   }
 
-  Widget _privacyRow() {
+  Widget _rowPrivacy() {
     return _drawerRow(
       emoji: '🔒',
       title: 'Privacy Policy',
@@ -419,7 +398,7 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  Widget _termsRow() {
+  Widget _rowTerms() {
     return _drawerRow(
       emoji: '📜',
       title: 'Terms of Use',
@@ -429,10 +408,14 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────── HEADER BLOCK ─────────
-  Widget _drawerHeader(bool isDark) {
-    final cs = Theme.of(context).colorScheme;
-    final dividerColor = isDark
+  /* ────────────────────────── drawer header ────────────────────────── */
+
+  Widget _header() {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
+    final borderColor = isDark
         ? Colors.white.withOpacity(0.06)
         : cs.onSurface.withOpacity(0.06);
 
@@ -443,13 +426,13 @@ class _AppDrawerState extends State<AppDrawer> {
             ? const Color(0xFF1e2537).withOpacity(0.15)
             : cs.surface.withOpacity(0.05),
         border: Border(
-          bottom: BorderSide(color: dividerColor, width: 1),
+          bottom: BorderSide(color: borderColor, width: 1),
         ),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // red gradient square with 🎬
+          // CinePulse badge
           Container(
             width: 40,
             height: 40,
@@ -480,7 +463,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
           const SizedBox(width: 12),
 
-          // CinePulse + tagline + feed status
+          // App name, tagline, feed summary
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -528,43 +511,49 @@ class _AppDrawerState extends State<AppDrawer> {
 
           IconButton(
             tooltip: 'Close',
+            onPressed: widget.onClose,
             icon: Icon(
               Icons.close_rounded,
               color: cs.onSurface,
             ),
-            onPressed: widget.onClose,
           ),
         ],
       ),
     );
   }
 
-  // ───────── actions for share/report/external links ─────────
+  /* ────────────────────────── actions / helpers ────────────────────────── */
 
-  Future<void> _shareApp(BuildContext context) async {
+  Future<void> _shareApp() async {
     final link = widget.appShareUrl ?? 'https://cinepulse.netlify.app';
-    if (!kIsWeb) {
-      await Share.share(link);
-    } else {
-      // Web fallback: copy to clipboard + toast.
+
+    try {
+      if (!kIsWeb) {
+        await Share.share(link);
+      } else {
+        // Web fallback: copy link + toast.
+        await Clipboard.setData(ClipboardData(text: link));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Link copied to clipboard')),
+        );
+      }
+    } catch (_) {
+      // If share fails, fallback to copy.
       await Clipboard.setData(ClipboardData(text: link));
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Link copied to clipboard'),
-        ),
+        const SnackBar(content: Text('Link copied to clipboard')),
       );
     }
   }
 
   Future<void> _reportIssue() async {
+    // For now we just surface a "mailto:" link.
     final uri = Uri.parse(
       'mailto:feedback@cinepulse.app?subject=CinePulse%20Feedback',
     );
-    await launchUrl(
-      uri,
-      mode: LaunchMode.externalApplication,
-    );
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Future<void> _openExternal(String? url) async {
@@ -575,50 +564,49 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  // ───────── build ─────────
+  /* ────────────────────────── build ────────────────────────── */
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-
-    final drawerBg = isDark ? const Color(0xFF0f172a) : cs.surface;
+    final bgColor = isDark ? const Color(0xFF0f172a) : cs.surface;
 
     return Drawer(
-      backgroundColor: drawerBg,
+      backgroundColor: bgColor,
       child: SafeArea(
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
             // HEADER
-            _drawerHeader(isDark),
+            _header(),
 
             // CONTENT & FILTERS
-            _sectionHeader(context, 'Content & filters'),
-            _categoriesRow(),
-            _contentTypeRow(),
+            _sectionHeader('Content & filters'),
+            _rowCategories(),
+            _rowContentType(),
 
             // APPEARANCE
-            _sectionHeader(context, 'Appearance'),
-            _themeRow(),
+            _sectionHeader('Appearance'),
+            _rowTheme(),
 
             // SHARE & SUPPORT
-            _sectionHeader(context, 'Share & support'),
-            _shareRow(),
-            _reportRow(),
+            _sectionHeader('Share & support'),
+            _rowShare(),
+            _rowReport(),
 
             // SETTINGS
-            _sectionHeader(context, 'Settings'),
-            _appLanguageRow(),
-            _subscriptionRow(),
-            _loginRow(),
+            _sectionHeader('Settings'),
+            _rowAppLanguage(),
+            _rowSubscription(),
+            _rowLogin(),
 
             // ABOUT & LEGAL
-            _sectionHeader(context, 'About & legal'),
-            _aboutRow(),
-            _privacyRow(),
-            _termsRow(),
+            _sectionHeader('About & legal'),
+            _rowAbout(),
+            _rowPrivacy(),
+            _rowTerms(),
 
             const SizedBox(height: 24),
           ],
