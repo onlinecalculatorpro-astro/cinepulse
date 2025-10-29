@@ -49,7 +49,6 @@
 // Sort modes: Latest / Trending / Most viewed / Editor's pick
 // Applied client-side on the visible list before rendering.
 //
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
@@ -85,7 +84,7 @@ enum _SortMode {
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    this.showSearchBar = false, // legacy flag, RootShell now always false
+    this.showSearchBar = false, // legacy flag (RootShell now always false)
     this.onMenuPressed,
     this.onHeaderRefresh,
     this.onOpenDiscover,
@@ -105,7 +104,7 @@ class HomeScreen extends StatefulWidget {
   /// Called after manual refresh succeeds.
   final VoidCallback? onHeaderRefresh;
 
-  /// Navigation pills for wide layouts (≥768px).
+  /// Navigation callbacks for wide layouts (≥768px).
   final VoidCallback? onOpenDiscover;
   final VoidCallback? onOpenSaved;
   final VoidCallback? onOpenAlerts;
@@ -116,7 +115,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // tabs we expose in UI
+  // Tabs we expose in UI.
   static const Map<String, String> _tabs = {
     'all': 'All',
     'entertainment': 'Entertainment',
@@ -135,7 +134,7 @@ class _HomeScreenState extends State<HomeScreen>
     for (final k in _tabs.keys) k: _PagedFeed(tab: k)
   };
 
-  // keys for each category chip ("All", "Entertainment", "Sports")
+  // Keys for each category chip ("All", "Entertainment", "Sports")
   final List<GlobalKey> _chipKeys =
       List.generate(_tabs.length, (_) => GlobalKey());
 
@@ -144,8 +143,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   _SortMode _sortMode = _SortMode.latest;
 
-  // Inline search row visibility (Row 3). This is toggled by tapping
-  // the header "Search" icon CTA.
+  // Inline search row visibility (Row 3). Toggled by header Search CTA.
   bool _showHeaderSearch = false;
 
   // timers / subs
@@ -538,7 +536,7 @@ class _HomeScreenState extends State<HomeScreen>
     return Scaffold(
       backgroundColor: bgColor,
 
-      // Frosted header (Row 1)
+      // Row 1: Frosted header
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(64),
         child: ClipRRect(
@@ -573,9 +571,9 @@ class _HomeScreenState extends State<HomeScreen>
                   const _ModernBrandLogo(),
                   const Spacer(),
 
-                  // WIDE (≥768px):
-                  // [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
                   if (isWide) ...[
+                    // DESKTOP / WIDE (≥768px):
+                    // [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
                     _HeaderIconButton(
                       tooltip: 'Search',
                       icon: Icons.search_rounded,
@@ -613,11 +611,9 @@ class _HomeScreenState extends State<HomeScreen>
                       icon: Icons.menu_rounded,
                       onTap: widget.onMenuPressed,
                     ),
-                  ],
-
-                  // COMPACT (<768px):
-                  // [Search] [Refresh] [Menu]
-                  if (!isWide) ...[
+                  ] else ...[
+                    // COMPACT (<768px):
+                    // [Search] [Refresh] [Menu]
                     _HeaderIconButton(
                       tooltip: 'Search',
                       icon: Icons.search_rounded,
@@ -652,7 +648,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: OfflineBanner(),
             ),
 
-          // Row 2: category chips + sort
+          // Row 2: category chips + sort button
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
@@ -758,55 +754,17 @@ class _FiltersRow extends StatelessWidget {
       );
     }
 
-    Widget tabChip(int index, String label, Key itemKey) {
-      final sel = (activeIndex == index);
-      if (sel) {
-        return InkWell(
-          key: itemKey,
-          borderRadius: BorderRadius.circular(999),
-          onTap: () => onSelect(index),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: accent,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: accent, width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: accent.withOpacity(0.4),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: const Text(
-              'All', // will be replaced below (we'll override via label param)
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                height: 1.2,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        );
-      }
-      return Container(
-        key: itemKey,
-        child: inactiveChip(label, () => onSelect(index)),
-      );
-    }
-
-    // We can't just const Text('All') above because we need dynamic label.
-    // Let's wrap tabChip's "selected" case manually here so we keep label:
+    // selected chip and unselected chip share border radius
     Widget buildTabChip(int index, String label, Key itemKey) {
       final sel = (activeIndex == index);
+
       if (!sel) {
         return Container(
           key: itemKey,
           child: inactiveChip(label, () => onSelect(index)),
         );
       }
+
       return InkWell(
         key: itemKey,
         borderRadius: BorderRadius.circular(999),
@@ -1445,7 +1403,7 @@ class _ModernBrandLogo extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Crash fallback (dev visibility)
+   Crash fallback (dev only)
    ───────────────────────────────────────────────────────────────────────── */
 class _HomeCrashedView extends StatelessWidget {
   const _HomeCrashedView({
