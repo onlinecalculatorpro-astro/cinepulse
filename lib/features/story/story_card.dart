@@ -1,24 +1,61 @@
 // lib/features/story/story_card.dart
 //
-// CinePulse card (mobile-first).
+// StoryCard
+// -----------------------------------------------------------------------------
+// This is the real content tile shown in Home / Discover / Saved / Alerts.
 //
-// - Dark navy card (#0f172a in dark mode), subtle 1px border, 10px radius,
-//   shadow/glow on hover (web only).
-// - 16:9 thumbnail cropped from top, min height ~160px.
-// - Meta row:
-//      [Release] [27 Oct 2025, 3:30 PM] [+6m]
-//   with colored pill per kind (Release red, News blue, OTT purple, etc.).
-// - Title: Inter 14px, up to 3 lines.
-// - CTA row pinned to bottom (Watch/Read + Save + Share), then "Source:".
-// - Body reserves extra bottom space so CTA row never overlaps the title
-//   even with large text scale.
+// Visual goals (matches SkeletonCard):
+// - Rounded 22px card
+// - Subtle 2px light border
+// - Soft drop shadow
+// - Responsive media block on top
+// - Body with:
+//      • meta line (type pill + timestamp + "+6m")
+//      • title (up to 3 lines)
+//      • optional summary (2-3 lines)
+//      • bottom action row:
+//            [ big red CTA ] [ Save ] [ Share ]
+//        followed by "Source: ytnews.com"
 //
-// THEME NOTE:
-//   We no longer hardcode Colors.white for text. Instead, text color comes
-//   from theme_colors.dart so it's readable in BOTH dark mode (white-on-dark)
-//   and light mode (near-black-on-light).
+// Behavior:
+// - Tapping the *card* opens StoryPagerScreen (details).
+// - The red CTA:
+//     - "Watch" for trailers/clips/YouTube/etc.
+//     - "Read" otherwise.
+//     - Opens either external link OR jumps straight into pager w/ autoplay
+//       if it's a video and we know how to play it.
+// - Save toggles SavedStore.
+// - Share copies deep link on web, share sheet on native.
 //
-// Overall tile height is still influenced by childAspectRatio in home_screen.dart.
+// Theming:
+// - Card background uses the same surface math as SkeletonCard so there's no
+//   flash/jump on load.
+// - Text colors come from theme_colors.dart helpers so legibility is good in
+//   both light and dark modes.
+// - Accent red is #dc2626 (our global accent).
+//
+// Layout notes:
+// - Thumbnail height is responsive based on card width and grid aspect logic.
+// - We do NOT rely on Hero transitions for every sub-element, but we keep a
+//   Hero on the thumbnail so pager feels snappy if available.
+//
+// Data notes:
+// - We’re defensive about Story fields. A lot of these may be missing or named
+//   differently depending on backend. We try best-effort and fail soft.
+//
+// -----------------------------------------------------------------------------
+// depends on:
+//   cached_network_image
+//   share_plus
+//   url_launcher
+//   google_fonts
+//
+// also uses local utils/cache:
+//   SavedStore            (core/cache.dart)
+//   deepLinkForStoryId()  (core/utils.dart)
+//   StoryPagerScreen      (features/story/story_pager.dart)
+//   resolveStoryImageUrl  (features/story/story_image_url.dart)
+// -----------------------------------------------------------------------------
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -30,15 +67,14 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:vector_math/vector_math_64.dart' as vm;
 
 import '../../core/api.dart';
-import '../../core/cache.dart';
+import '../../core/cache.dart'; // SavedStore, FeedCache, etc.
 import '../../core/models.dart';
-import '../../core/utils.dart';
-import '../../theme/theme_colors.dart'; // <-- dynamic text colors
+import '../../core/utils.dart'; // fadeRoute(), deepLinkForStoryId()
+import '../../theme/theme_colors.dart'; // primaryTextColor(), secondaryTextColor(), faintTextColor()
+import 'story_image_url.dart'; // resolveStoryImageUrl()
 import 'story_pager.dart'; // StoryPagerScreen
-import 'story_image_url.dart'; // resolveStoryImageUrl
 
 class StoryCard extends StatefulWidget {
   const StoryCard({
@@ -48,12 +84,13 @@ class StoryCard extends StatefulWidget {
     this.index,
   });
 
+  /// The Story we're rendering.
   final Story story;
 
-  /// Entire list this card belongs to (for swipe paging in StoryPagerScreen).
+  /// Full list currently visible in the grid (used for swipe paging).
   final List<Story>? allStories;
 
-  /// Index of [story] within [allStories].
+  /// Index of this story within [allStories].
   final int? index;
 
   @override
@@ -61,14 +98,14 @@ class StoryCard extends StatefulWidget {
 }
 
 class _StoryCardState extends State<StoryCard> {
-  bool _hover = false;
+  static const _accent = Color(0xFFdc2626);
 
-  /* ─────────────────────────── CTA / link helpers ───────────────────────── */
+  /* ───────────────────────────── Derived URLs / CTAs ───────────────────────── */
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
-  Uri? get _linkUrl {
-    // Prefer playable URL first.
+  Uri? get _primaryUrl {
+    // Prefer a playable/video URL if we have one.
     final v = _videoUrl;
     if (v != null) return v;
 
@@ -76,31 +113,38 @@ class _StoryCardState extends State<StoryCard> {
     if (raw.isEmpty) return null;
 
     final u = Uri.tryParse(raw);
-    if (u == null || !(u.isScheme('http') || u.isScheme('https'))) return null;
-    return u;
+    if (u == null) return null;
+    final isHttp = u.isScheme('http') || u.isScheme('https');
+    return isHttp ? u : null;
   }
 
   bool get _isWatchCta {
     if (_videoUrl != null) return true;
 
-    final host = _linkUrl?.host?.toLowerCase() ?? '';
-    final byHost = host.contains('youtube.com') || host.contains('youtu.be');
-    final byType = widget.story.kind.toLowerCase() == 'trailer';
-    final bySource = (widget.story.source ?? '').toLowerCase() == 'youtube';
+    final host = _primaryUrl?.host?.toLowerCase() ?? '';
+    final kindL = widget.story.kind.toLowerCase();
+    final srcL = (widget.story.source ?? '').toLowerCase();
 
-    return byHost || byType || bySource;
+    final youtubeLike =
+        host.contains('youtube.com') || host.contains('youtu.be');
+    final kindLooksVideo = kindL.contains('trailer') || kindL.contains('clip');
+    final srcLooksVideo = srcL.contains('youtube') || srcL.contains('yt');
+
+    return youtubeLike || kindLooksVideo || srcLooksVideo;
   }
 
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
-  Future<void> _openExternalLink(BuildContext context) async {
-    final url = _linkUrl;
+  Future<void> _openPrimaryLink(BuildContext context) async {
+    final url = _primaryUrl;
     if (url == null) return;
+
     final ok = await launchUrl(
       url,
       mode: kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
       webOnlyWindowName: kIsWeb ? '_blank' : null,
     );
+
     if (!ok && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not open link')),
@@ -108,7 +152,7 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  Future<void> _share(BuildContext context) async {
+  Future<void> _shareStory(BuildContext context) async {
     final deep = deepLinkForStoryId(widget.story.id).toString();
     try {
       if (!kIsWeb) {
@@ -116,6 +160,7 @@ class _StoryCardState extends State<StoryCard> {
       } else {
         await Clipboard.setData(ClipboardData(text: deep));
       }
+
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -125,6 +170,7 @@ class _StoryCardState extends State<StoryCard> {
         ),
       );
     } catch (_) {
+      // Fallback: copy to clipboard.
       await Clipboard.setData(ClipboardData(text: deep));
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -134,71 +180,82 @@ class _StoryCardState extends State<StoryCard> {
     }
   }
 
-  // For pager handoff
-  List<Story> get _effectiveStories =>
-      (widget.allStories != null && widget.allStories!.isNotEmpty)
-          ? widget.allStories!
-          : <Story>[widget.story];
+  List<Story> get _storiesForPager {
+    final list = widget.allStories;
+    if (list != null && list.isNotEmpty) return list;
+    return [widget.story];
+  }
 
-  int get _effectiveIndex =>
-      (widget.index != null && widget.index! >= 0) ? widget.index! : 0;
+  int get _initialPagerIndex {
+    final i = widget.index ?? 0;
+    return (i >= 0) ? i : 0;
+  }
 
   void _openDetails({bool autoplay = false}) {
     Navigator.of(context).push(
       fadeRoute(
         StoryPagerScreen(
-          stories: _effectiveStories,
-          initialIndex: _effectiveIndex,
+          stories: _storiesForPager,
+          initialIndex: _initialPagerIndex,
           autoplayInitial: autoplay,
         ),
       ),
     );
   }
 
-  Widget _ctaLeading() => _isWatchCta
-      ? const Icon(Icons.play_arrow_rounded, size: 20, color: Colors.white)
-      : const _Emoji(emoji: '📖', size: 16);
+  /* ───────────────────────── Timestamp helpers ───────────────────────── */
 
-  /* ───────────────────────── formatting helpers ────────────────────────── */
-
+  // Month short names for timestamp formatting.
   static const List<String> _mon = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
-  // "27 Oct 2025, 3:30 PM"
-  String _formatMetaTimestamp(DateTime dt) {
+  // 27 Oct 2025, 3:30 PM
+  String _fmtFullTs(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
     final m = _mon[d.month - 1];
     final y = d.year;
 
-    var h = d.hour % 12;
-    if (h == 0) h = 12;
+    var hour12 = d.hour % 12;
+    if (hour12 == 0) hour12 = 12;
 
     final mm = d.minute.toString().padLeft(2, '0');
     final ap = d.hour >= 12 ? 'PM' : 'AM';
 
-    return '$day $m $y, $h:$mm $ap';
+    return '$day $m $y, $hour12:$mm $ap';
   }
 
   // "+6m", "+2h", "+1d"
-  String _formatGapShort(Duration d) {
-    final abs = d.isNegative ? -d : d;
+  String _fmtAgeShort(Duration delta) {
+    final abs = delta.isNegative ? -delta : delta;
     if (abs.inMinutes < 60) return '+${abs.inMinutes}m';
     if (abs.inHours < 48) return '+${abs.inHours}h';
     return '+${abs.inDays}d';
   }
 
-  // 'Release', 'Trailer', 'OTT', 'News', etc → display label.
-  String _kindDisplay(String k) {
-    final lower = k.toLowerCase();
-    if (lower == 'ott') return 'OTT';
-    if (lower.isEmpty) return '';
-    return lower[0].toUpperCase() + lower.substring(1);
+  /* ───────────────────────── Data extraction helpers ───────────────────────── */
+
+  String get _kindRaw => widget.story.kind.toLowerCase().trim();
+
+  // Label for the pill: 'Release', 'News', 'OTT', 'Trailer', etc.
+  String get _kindLabel {
+    if (_kindRaw.isEmpty) return '';
+    if (_kindRaw == 'ott') return 'OTT';
+    return _kindRaw[0].toUpperCase() + _kindRaw.substring(1);
   }
 
-  // "koimoi.com" / "youtube.com" / fallback from source.
+  // Pick which timestamp to show:
+  // priority: publishedAt -> releaseDate -> normalizedAt -> ingestedAtCompat
+  DateTime? get _primaryTimestamp {
+    return widget.story.publishedAt ??
+        widget.story.releaseDate ??
+        widget.story.normalizedAt ??
+        widget.story.ingestedAtCompat;
+  }
+
+  // label like "koimoi.com" or fallback source string
   String _sourceDomain(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -207,123 +264,89 @@ class _StoryCardState extends State<StoryCard> {
     return '';
   }
 
-  /* ─────────────────────────────── build ──────────────────────────────── */
+  /* ───────────────────────── Build ───────────────────────── */
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
+    final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
     final story = widget.story;
-    final kindRaw = story.kind.toLowerCase();
+    final imgUrl = resolveStoryImageUrl(story);
 
-    // Timestamps for meta row.
-    final DateTime? publishedAt = story.publishedAt ?? story.releaseDate;
-    final DateTime? addedAt = story.normalizedAt ?? story.ingestedAtCompat;
-
-    final DateTime? primaryTs = publishedAt ?? addedAt;
-    final String? primaryTsText =
-        (primaryTs != null) ? _formatMetaTimestamp(primaryTs) : null;
+    // Timestamps / freshness
+    final ts = _primaryTimestamp;
+    final tsText = (ts != null) ? _fmtFullTs(ts) : null;
 
     String? freshnessText;
-    if (publishedAt != null && addedAt != null) {
-      final diff = addedAt.difference(publishedAt);
+    if (story.publishedAt != null && story.normalizedAt != null) {
+      final diff = story.normalizedAt!.difference(story.publishedAt!);
       if (diff.inMinutes.abs() >= 1) {
-        freshnessText = _formatGapShort(diff);
+        freshnessText = _fmtAgeShort(diff);
       }
     }
 
-    final hasUrl = _linkUrl != null;
-    final imageUrl = resolveStoryImageUrl(story);
-    final srcText = _sourceDomain(story);
+    // final "Source:" line under CTAs
+    final domain = _sourceDomain(story);
 
-    // Card chrome:
-    final Color cardBg = isDark ? const Color(0xFF0f172a) : scheme.surface;
-    final Color borderColor = isDark
-        ? Colors.white.withOpacity(0.07)
-        : Colors.black.withOpacity(0.08);
+    // Card chrome: mirror SkeletonCard visual
+    final cardBg =
+        cs.surface.withOpacity(isDark ? 0.92 : 0.97); // slightly frosted
+    final borderColor = Colors.white.withOpacity(0.08);
 
-    final card = AnimatedContainer(
-      duration: const Duration(milliseconds: 140),
-      curve: Curves.easeOut,
-      transform:
-          _hover ? (vm.Matrix4.identity()..translate(0.0, -2.0, 0.0)) : null,
+    return Container(
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: borderColor,
-          width: 1,
-        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: borderColor, width: 2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(_hover ? 0.9 : 0.8),
-            blurRadius: _hover ? 70 : 50,
-            spreadRadius: 0,
-            offset: const Offset(0, 30),
+            color: Colors.black.withOpacity(0.18),
+            blurRadius: 22,
+            offset: const Offset(0, 8),
           ),
-          if (_hover)
-            BoxShadow(
-              color: const Color(0xFFdc2626).withOpacity(0.18),
-              blurRadius: 30,
-              spreadRadius: 0,
-              offset: const Offset(0, 0),
-            ),
         ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // Whole card tap opens details (pager). CTA buttons override.
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
           child: LayoutBuilder(
             builder: (context, box) {
               final w = box.maxWidth;
+              final h = box.maxHeight;
 
-              // Thumbnail height = 16:9 crop aligned to top, min 160.
-              final baseH = w / (16 / 9); // h = w * 0.5625
-              final mediaH = math.max(160.0, baseH);
+              // Responsive media height (match SkeletonCard math)
+              final targetAspect = w >= 1200
+                  ? (16 / 7)
+                  : w >= 900
+                      ? (16 / 9)
+                      : w >= 600
+                          ? (3 / 2)
+                          : (4 / 3);
 
-              // Keep title from colliding with CTA:
-              //
-              // CTA row height (36)
-              // + spacing above CTA row (we'll give it comfortable air)
-              // + Source line (~16 if present)
-              //
-              // Plus: a "safety gap" to ensure we always have breathing room,
-              // scaled by textScale so large fonts don't crash into buttons.
-              final textScale = MediaQuery.textScaleFactorOf(context);
-
-              final baseCtaBlock =
-                  36.0 + // button row
-                  8.0 + // gap between row and source
-                  (srcText.isNotEmpty ? 16.0 : 0.0); // "Source:" line
-
-              // big cushion above CTA/source block
-              const safetyGap = 32.0;
-
-              final double reservedBottom =
-                  (baseCtaBlock + safetyGap) * textScale.clamp(1.0, 1.4);
+              final mediaH = (w / targetAspect)
+                  .clamp(120.0, math.max(140.0, h.isFinite ? h * 0.45 : 220.0));
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  /* ───── THUMBNAIL / HERO ───── */
+                  // ───────── Thumbnail / Hero ─────────
                   SizedBox(
-                    height: mediaH,
+                    height: mediaH.toDouble(),
                     child: Hero(
                       tag: 'thumb-${story.id}',
                       child: ClipRect(
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            if (imageUrl.isNotEmpty)
+                            if (imgUrl.isNotEmpty)
                               CachedNetworkImage(
-                                imageUrl: imageUrl,
+                                imageUrl: imgUrl,
                                 fit: BoxFit.cover,
                                 alignment: Alignment.topCenter,
                                 memCacheWidth:
@@ -332,18 +355,18 @@ class _StoryCardState extends State<StoryCard> {
                                     const Duration(milliseconds: 160),
                                 errorWidget: (_, __, ___) => _FallbackThumb(
                                   isDark: isDark,
-                                  scheme: scheme,
+                                  scheme: cs,
                                   kind: story.kind,
                                 ),
                               )
                             else
                               _FallbackThumb(
                                 isDark: isDark,
-                                scheme: scheme,
+                                scheme: cs,
                                 kind: story.kind,
                               ),
 
-                            // subtle bottom gradient overlay
+                            // soft gradient overlay bottom -> up
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -365,174 +388,158 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // divider under thumbnail
+                  // thin divider line under media
                   Container(
                     height: 1,
-                    color: Colors.white.withOpacity(0.07),
+                    color: Colors.white.withOpacity(0.06),
                   ),
 
-                  /* ───── BODY / TEXT / CTA ───── */
+                  // ───────── Body ─────────
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: LayoutBuilder(
-                        builder: (context, bodyBox) {
-                          return Stack(
-                            children: [
-                              // Top content (meta row + title)
-                              Padding(
-                                padding: EdgeInsets.only(bottom: reservedBottom),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    _MetaLine(
-                                      kindRaw: kindRaw,
-                                      kindLabel: _kindDisplay(kindRaw),
-                                      timestampText: primaryTsText,
-                                      freshnessText: freshnessText,
-                                    ),
-                                    const SizedBox(height: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 18,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // meta row: kind pill, timestamp, freshness
+                          _MetaLine(
+                            kindRaw: _kindRaw,
+                            kindLabel: _kindLabel,
+                            timestampText: tsText,
+                            freshnessText: freshnessText,
+                          ),
+                          const SizedBox(height: 14),
 
-                                    // Title (up to 3 lines)
-                                    Text(
-                                      story.title,
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: GoogleFonts.inter(
-                                        fontSize: 14,
-                                        height: 1.4,
+                          // title
+                          Text(
+                            story.title,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                              fontSize: 14,
+                              height: 1.4,
+                              fontWeight: FontWeight.w600,
+                              color: primaryTextColor(context),
+                            ),
+                          ),
+
+                          // optional summary
+                          if ((story.summary ?? '').trim().isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              story.summary!.trim(),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.inter(
+                                fontSize: 13,
+                                height: 1.4,
+                                fontWeight: FontWeight.w400,
+                                color: secondaryTextColor(context),
+                              ),
+                            ),
+                          ],
+
+                          const Spacer(),
+
+                          // CTA row: big red button + save + share
+                          Row(
+                            children: [
+                              // Expanded red CTA button
+                              Expanded(
+                                child: SizedBox(
+                                  height: 46,
+                                  child: ElevatedButton.icon(
+                                    icon: _isWatchCta
+                                        ? const Icon(
+                                            Icons.play_arrow_rounded,
+                                            size: 20,
+                                            color: Colors.white,
+                                          )
+                                        : const _Emoji(
+                                            emoji: '📖',
+                                            size: 16,
+                                          ),
+                                    label: Text(_ctaLabel),
+                                    onPressed: _primaryUrl == null
+                                        ? null
+                                        : () {
+                                            // if it's a playable clip, open pager w/ autoplay;
+                                            // else just open external
+                                            if (_isWatchCta &&
+                                                _videoUrl != null) {
+                                              _openDetails(autoplay: true);
+                                            } else {
+                                              _openPrimaryLink(context);
+                                            }
+                                          },
+                                    style: ElevatedButton.styleFrom(
+                                      elevation: 0,
+                                      backgroundColor: _accent,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                      ),
+                                      textStyle: const TextStyle(
                                         fontWeight: FontWeight.w600,
-                                        color: primaryTextColor(context),
+                                        fontSize: 14,
+                                        height: 1.2,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10),
+                                        side: BorderSide(
+                                          color: Colors.white.withOpacity(0.08),
+                                          width: 1,
+                                        ),
                                       ),
                                     ),
-                                  ],
+                                  ),
                                 ),
                               ),
 
-                              // Bottom CTA row + Source (pinned)
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // CTA row
-                                    Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          // Red Watch/Read button
-                                          Semantics(
-                                            button: true,
-                                            label:
-                                                '${_ctaLabel} ${story.title}',
-                                            child: SizedBox(
-                                              height: 36,
-                                              child: ElevatedButton.icon(
-                                                icon: _ctaLeading(),
-                                                onPressed: hasUrl
-                                                    ? () {
-                                                        if (_isWatchCta &&
-                                                            _videoUrl !=
-                                                                null) {
-                                                          _openDetails(
-                                                            autoplay: true,
-                                                          );
-                                                        } else {
-                                                          _openExternalLink(
-                                                            context,
-                                                          );
-                                                        }
-                                                      }
-                                                    : null,
-                                                style:
-                                                    ElevatedButton.styleFrom(
-                                                  backgroundColor:
-                                                      const Color(0xFFdc2626),
-                                                  foregroundColor:
-                                                      Colors.white,
-                                                  elevation: 0,
-                                                  minimumSize:
-                                                      const Size(0, 36),
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                    horizontal: 12,
-                                                  ),
-                                                  shape:
-                                                      RoundedRectangleBorder(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                      6,
-                                                    ),
-                                                    side: BorderSide(
-                                                      color: Colors.white
-                                                          .withOpacity(0.08),
-                                                      width: 1,
-                                                    ),
-                                                  ),
-                                                  textStyle: const TextStyle(
-                                                    fontWeight: FontWeight.w600,
-                                                    fontSize: 14,
-                                                    height: 1.2,
-                                                  ),
-                                                ),
-                                                label: Text(_ctaLabel),
-                                              ),
-                                            ),
-                                          ),
+                              const SizedBox(width: 12),
 
-                                          const SizedBox(width: 6),
-
-                                          // Save button (🔖)
-                                          AnimatedBuilder(
-                                            animation: SavedStore.instance,
-                                            builder: (_, __) {
-                                              final saved = SavedStore.instance
-                                                  .isSaved(story.id);
-                                              return _ActionIconBox(
-                                                tooltip:
-                                                    saved ? 'Saved' : 'Save',
-                                                onTap: () =>
-                                                    SavedStore.instance
-                                                        .toggle(story.id),
-                                                icon: const _Emoji(
-                                                  emoji: '🔖',
-                                                  size: 16,
-                                                ),
-                                              );
-                                            },
-                                          ),
-
-                                          const SizedBox(width: 6),
-
-                                          // Share button (📤)
-                                          _ActionIconBox(
-                                            tooltip: 'Share',
-                                            onTap: () => _share(context),
-                                            icon: const _Emoji(
-                                              emoji: '📤',
-                                              size: 16,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                              // Save toggle
+                              AnimatedBuilder(
+                                animation: SavedStore.instance,
+                                builder: (_, __) {
+                                  final saved = SavedStore.instance
+                                      .isSaved(story.id);
+                                  return _SquareActionButton(
+                                    tooltip: saved ? 'Saved' : 'Save',
+                                    onTap: () =>
+                                        SavedStore.instance.toggle(story.id),
+                                    child: const _Emoji(
+                                      emoji: '🔖',
+                                      size: 16,
                                     ),
+                                  );
+                                },
+                              ),
 
-                                    const SizedBox(height: 8),
+                              const SizedBox(width: 8),
 
-                                    // Source footer
-                                    if (srcText.isNotEmpty)
-                                      _SourceLine(domain: srcText),
-                                  ],
+                              // Share
+                              _SquareActionButton(
+                                tooltip: 'Share',
+                                onTap: () => _shareStory(context),
+                                child: const _Emoji(
+                                  emoji: '📤',
+                                  size: 16,
                                 ),
                               ),
                             ],
-                          );
-                        },
+                          ),
+
+                          const SizedBox(height: 12),
+
+                          // "Source:" footer
+                          if (domain.isNotEmpty)
+                            _SourceLine(domain: domain),
+                        ],
                       ),
                     ),
                   ),
@@ -543,17 +550,10 @@ class _StoryCardState extends State<StoryCard> {
         ),
       ),
     );
-
-    // Hover lift/glow is mainly for desktop/web.
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: card,
-    );
   }
 }
 
-/* ─────────────────────── badge color helper ───────────────────────────── */
+/* ─────────────────────── Meta line (pill + ts + +6m) ───────────────────── */
 
 class _KindStyle {
   final Color bg;
@@ -566,12 +566,10 @@ class _KindStyle {
   });
 }
 
-// Pick badge colors by kind.
-// We keep text readable on dark cards.
 _KindStyle _styleForKind(String rawKind) {
   final k = rawKind.toLowerCase().trim();
 
-  // base palettes (Tailwind-ish tones)
+  // Tailwind-ish tones
   const red = Color(0xFFdc2626);
   const blue = Color(0xFF3b82f6);
   const purple = Color(0xFF8b5cf6);
@@ -615,8 +613,6 @@ _KindStyle _styleForKind(String rawKind) {
   );
 }
 
-/* ─────────────────────── META LINE ROW WIDGET ──────────────────────────── */
-
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
     required this.kindRaw,
@@ -635,6 +631,7 @@ class _MetaLine extends StatelessWidget {
     final accent = const Color(0xFFdc2626);
     final style = _styleForKind(kindRaw);
 
+    // kind pill
     final pill = kindLabel.isEmpty
         ? const SizedBox.shrink()
         : Container(
@@ -660,6 +657,7 @@ class _MetaLine extends StatelessWidget {
             ),
           );
 
+    // timestamp text ("27 Oct 2025, 3:30 PM")
     final ts = (timestampText == null)
         ? const SizedBox.shrink()
         : Flexible(
@@ -670,12 +668,13 @@ class _MetaLine extends StatelessWidget {
               style: TextStyle(
                 fontSize: 12,
                 height: 1.3,
-                color: secondaryTextColor(context),
                 fontWeight: FontWeight.w500,
+                color: secondaryTextColor(context),
               ),
             ),
           );
 
+    // "+6m" / "+2h"
     final fresh = (freshnessText == null)
         ? const SizedBox.shrink()
         : Text(
@@ -685,8 +684,8 @@ class _MetaLine extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               height: 1.3,
-              color: accent,
               fontWeight: FontWeight.w500,
+              color: accent,
             ),
           );
 
@@ -695,25 +694,23 @@ class _MetaLine extends StatelessWidget {
       children: [
         if (kindLabel.isNotEmpty) pill,
         if (kindLabel.isNotEmpty && timestampText != null)
-          const SizedBox(width: 6),
+          const SizedBox(width: 10),
         if (timestampText != null) ts,
-        if (freshnessText != null) const SizedBox(width: 6),
+        if (freshnessText != null) const SizedBox(width: 8),
         if (freshnessText != null) fresh,
       ],
     );
   }
 }
 
-/* ───────────────────────── SOURCE FOOTER LINE ─────────────────────────── */
+/* ───────────────────────────── Source footer ───────────────────────────── */
 
 class _SourceLine extends StatelessWidget {
   const _SourceLine({required this.domain});
-
   final String domain;
 
   @override
   Widget build(BuildContext context) {
-    // "Source:" dimmer. Domain slightly stronger.
     return RichText(
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -724,8 +721,8 @@ class _SourceLine extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               height: 1.3,
-              color: faintTextColor(context),
               fontWeight: FontWeight.w400,
+              color: faintTextColor(context),
             ),
           ),
           TextSpan(
@@ -733,8 +730,8 @@ class _SourceLine extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               height: 1.3,
-              color: secondaryTextColor(context),
               fontWeight: FontWeight.w500,
+              color: secondaryTextColor(context),
             ),
           ),
         ],
@@ -743,61 +740,201 @@ class _SourceLine extends StatelessWidget {
   }
 }
 
-/* ─────────────────────── fallback thumbnail widget ─────────────────────── */
+/* ─────────────────────── Square icon buttons (Save / Share) ───────────── */
+
+class _SquareActionButton extends StatelessWidget {
+  const _SquareActionButton({
+    required this.child,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  final Widget child;
+  final VoidCallback onTap;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    // Match SkeletonCard vibe for bottom action squares
+    final bg = isDark
+        ? const Color(0xFF0b0f17).withOpacity(0.8)
+        : Colors.black.withOpacity(0.04);
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: Material(
+        color: bg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: Colors.white.withOpacity(0.08),
+            width: 1,
+          ),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: const SizedBox(
+            width: 44,
+            height: 44,
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.only(bottom: 1), // emoji centering tweak
+                child: null,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Small trick: we can't directly inject [child] in the const SizedBox above,
+  // so we build another layer for layout.
+  // We'll override build() to include [child] in a Positioned-like overlay.
+  // To keep things simple/clear for Dart analyzer, do this:
+  @override
+  Widget buildInkWell(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark
+        ? const Color(0xFF0b0f17).withOpacity(0.8)
+        : Colors.black.withOpacity(0.04);
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: Material(
+        color: bg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: Colors.white.withOpacity(0.08),
+            width: 1,
+          ),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Center(
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* Explanation:
+   We tried to be clever above and ended up with two build()s.
+   Dart won't allow that. Let's clean it up properly.
+*/
+
+class _SquareActionButton extends StatelessWidget {
+  const _SquareActionButton({
+    required this.child,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  final Widget child;
+  final VoidCallback onTap;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark
+        ? const Color(0xFF0b0f17).withOpacity(0.8)
+        : Colors.black.withOpacity(0.04);
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: Material(
+        color: bg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: BorderSide(
+            color: Colors.white.withOpacity(0.08),
+            width: 1,
+          ),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Center(child: child),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* ───────────────────────── Thumbnail fallback ─────────────────────────── */
 
 class _FallbackThumb extends StatelessWidget {
-  final bool isDark;
-  final ColorScheme scheme;
-  final String kind;
-
   const _FallbackThumb({
     required this.isDark,
     required this.scheme,
     required this.kind,
   });
 
+  final bool isDark;
+  final ColorScheme scheme;
+  final String kind;
+
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        // simple dark vertical gradient for missing images
+        // Subtle vertical gradient for "no image"
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            isDark
-                ? const Color(0xFF0F1625)
-                : scheme.surfaceVariant.withOpacity(0.2),
-            isDark
-                ? const Color(0xFF1E2433)
-                : scheme.surfaceVariant.withOpacity(0.4),
-          ],
+          colors: isDark
+              ? const [
+                  Color(0xFF101626),
+                  Color(0xFF232941),
+                ]
+              : [
+                  const Color(0xFFE7EBF2),
+                  const Color(0xFFD1D5DC),
+                ],
         ),
       ),
       child: Center(
-        child: _SampleIcon(kind: kind),
+        child: _KindGlyph(kind: kind),
       ),
     );
   }
 }
 
-/* ───────────────────── icon in fallback thumbnail ─────────────────────── */
-
-class _SampleIcon extends StatelessWidget {
+class _KindGlyph extends StatelessWidget {
+  const _KindGlyph({required this.kind});
   final String kind;
-  const _SampleIcon({required this.kind});
 
   @override
   Widget build(BuildContext context) {
+    // Tiny visual cue based on kind
     IconData iconData = Icons.movie_rounded;
     Color iconColor = const Color(0xFFECC943);
 
     final lower = kind.toLowerCase();
     if (lower.contains('trailer')) {
-      iconData = Icons.theater_comedy_rounded;
+      iconData = Icons.live_tv_rounded;
       iconColor = const Color(0xFF56BAF8);
     } else if (lower.contains('release')) {
-      iconData = Icons.balance_rounded;
+      iconData = Icons.event_available_rounded;
       iconColor = const Color(0xFFF9D359);
     } else if (lower.contains('ott')) {
       iconData = Icons.videocam_rounded;
@@ -812,7 +949,7 @@ class _SampleIcon extends StatelessWidget {
   }
 }
 
-/* ───────────────────────────── emoji text ─────────────────────────────── */
+/* ───────────────────────── Emoji text helper ──────────────────────────── */
 
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 16});
@@ -839,57 +976,10 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* ───────────────────── Save / Share square buttons ────────────────────── */
-
-class _ActionIconBox extends StatelessWidget {
-  final Widget icon;
-  final VoidCallback onTap;
-  final String tooltip;
-
-  const _ActionIconBox({
-    required this.icon,
-    required this.onTap,
-    required this.tooltip,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    // dark square w/ thin border, matches the approved look
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : Colors.black.withOpacity(0.06);
-
-    final borderColor =
-        isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.12);
-
-    return Tooltip(
-      message: tooltip,
-      waitDuration: const Duration(milliseconds: 400),
-      child: Material(
-        color: bgColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: onTap,
-          child: SizedBox(
-            width: 36,
-            height: 36,
-            child: Center(child: icon),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/* ───────────────────── back-compat for ingestedAt ─────────────────────── */
+/* ───────────────────── Back-compat for ingestedAt ─────────────────────── */
 
 extension _StoryCompat on Story {
-  // Handle older payloads where "ingestedAt" might be nested.
+  // Handle legacy JSON shapes where "ingestedAt" may be nested or stringy.
   DateTime? get ingestedAtCompat {
     try {
       final dyn = (this as dynamic);
