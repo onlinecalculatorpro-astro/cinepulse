@@ -10,13 +10,14 @@
 // • The grid uses the SAME sizing logic as Home feed (_FeedListState._gridDelegateFor)
 //   so StoryCard tiles are identical size everywhere in the app.
 //
-// Notes:
-// - We listen to SavedStore.instance so the screen live-updates when bookmarks
-//   change.
-// - We debounce search (250ms).
-// - "Export" copies/shares the links.
-// - "Clear all" wipes SavedStore after confirm.
+// Navigation:
+// - We accept callbacks from RootShell: onOpenHome, onOpenAlerts, onOpenMenu.
+//   These are used by the header icons on desktop/wide screens.
+//   (On phone, bottom nav still handles nav.)
 //
+// Live updates:
+// - We listen to SavedStore.instance so the list updates when bookmarks change.
+// - We debounce search (250ms).
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -32,7 +33,21 @@ import '../../core/models.dart';
 import '../story/story_card.dart';
 
 class SavedScreen extends StatefulWidget {
-  const SavedScreen({super.key});
+  const SavedScreen({
+    super.key,
+    this.onOpenHome,
+    this.onOpenAlerts,
+    this.onOpenMenu,
+  });
+
+  /// Go to Home tab (RootShell will implement this).
+  final VoidCallback? onOpenHome;
+
+  /// Go to Alerts tab (RootShell will implement this).
+  final VoidCallback? onOpenAlerts;
+
+  /// Open the drawer / menu (RootShell will implement this).
+  final VoidCallback? onOpenMenu;
 
   @override
   State<SavedScreen> createState() => _SavedScreenState();
@@ -125,7 +140,7 @@ class _SavedScreenState extends State<SavedScreen> {
     return s == SavedSort.recent ? 'Recent' : 'Title';
   }
 
-  // same grid sizing logic as HomeScreen feed (_FeedListState._gridDelegateFor)
+  // SAME grid sizing logic as HomeScreen feed (_FeedListState._gridDelegateFor)
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
     if (width < 520) {
@@ -196,7 +211,7 @@ class _SavedScreenState extends State<SavedScreen> {
                 return title.contains(q) || summ.contains(q);
               }).toList();
 
-        // "3 items", "1 item", etc. (this uses *total* saved count, like before)
+        // "3 items", "1 item", etc. (uses total saved count)
         final total = stories.length;
         final countText = switch (total) {
           0 => 'No items',
@@ -247,13 +262,13 @@ class _SavedScreenState extends State<SavedScreen> {
                         _HeaderIconButton(
                           tooltip: 'Home',
                           icon: Icons.home_rounded,
-                          onTap: null, // nav handled by RootShell
+                          onTap: widget.onOpenHome,
                         ),
                         const SizedBox(width: 8),
                         _HeaderIconButton(
                           tooltip: 'Alerts',
                           icon: Icons.notifications_rounded,
-                          onTap: null, // nav handled by RootShell
+                          onTap: widget.onOpenAlerts,
                         ),
                         const SizedBox(width: 8),
                       ],
@@ -261,7 +276,7 @@ class _SavedScreenState extends State<SavedScreen> {
                       _HeaderIconButton(
                         tooltip: 'Menu',
                         icon: Icons.menu_rounded,
-                        onTap: null, // drawer opened by RootShell
+                        onTap: widget.onOpenMenu,
                       ),
                     ],
                   ),
@@ -310,7 +325,7 @@ class _SavedScreenState extends State<SavedScreen> {
                     const horizontalPad = 12.0;
                     const topPad = 8.0;
                     final bottomSafe =
-                        MediaQuery.viewPaddingOf(ctx).bottom; // for iOS notch
+                        MediaQuery.viewPaddingOf(ctx).bottom; // iOS safe area
                     final bottomPad = 28.0 + bottomSafe;
 
                     if (filtered.isEmpty) {
@@ -366,7 +381,7 @@ class _SavedScreenState extends State<SavedScreen> {
  * - same background color band
  * - same bottom border line
  * - red-accent pill controls
- * But instead of chips we show:
+ * But instead of category chips we show:
  *   [ Search box .................. ]  [Sort pill] [Export] [Clear]
  */
 class _SavedToolbarRow extends StatelessWidget {
@@ -424,7 +439,7 @@ class _SavedToolbarRow extends StatelessWidget {
         ],
         child: InkWell(
           borderRadius: BorderRadius.circular(999),
-          onTap: null, // tap handled by PopupMenuButton
+          onTap: null, // tap handled by PopupMenuButton menu
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
@@ -467,7 +482,7 @@ class _SavedToolbarRow extends StatelessWidget {
       );
     }
 
-    // export button and clear-all button use same visual style
+    // export button and clear-all button reuse Home-style square pills
     Widget actionSquare({
       required IconData icon,
       required String tooltip,
