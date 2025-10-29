@@ -859,7 +859,7 @@ class _MetaLine extends StatelessWidget {
         if (kindLabel.isNotEmpty && timestampText != null)
           const SizedBox(width: 6),
         if (timestampText != null) ts,
-        if (freshnessText != null) const SizedBox.width(6),
+        if (freshnessText != null) const SizedBox(width: 6),
         if (freshnessText != null) fresh,
       ],
     );
