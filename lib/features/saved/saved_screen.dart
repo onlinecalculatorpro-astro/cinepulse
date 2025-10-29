@@ -1,19 +1,41 @@
 // lib/features/saved/saved_screen.dart
 //
 // SAVED TAB
-// - Header icons now follow global CTA order:
-//   Home • Search • (no Saved here) • Alerts • Discover • Refresh • Menu
-// - Search button in header toggles a 3rd row search bar (like Home).
-// - Row 2 shows category chips (All / Entertainment / Sports) on the left
-//   and [Recent ▼] [Export] [Clear] on the right.
-// - Count line ("3 items") stays under row 2.
-// - Grid layout + empty state same as before.
-// - Search text filters saved items locally.
+// ----------------------------------------------------------------------
+// Header rules (matches global nav spec):
+//
+// WIDE (≥768px):
+//   [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
+//   - DO NOT show "Saved" CTA here because we're already on Saved.
+//
+// COMPACT (<768px):
+//   [Search] [Refresh] [Menu]
+//   - We skip Home / Alerts / Discover in the compact header because
+//     mobile bottom nav already has Home / Discover / Saved / Alerts.
+//
+// Search button behavior:
+//   - Tapping "Search" in the header toggles a dedicated Row 3 search bar
+//     *inside this Saved tab* (not navigating to Home).
+//   - Closing that bar clears the query.
+//
+// Layout stack for Saved tab body:
+//
+//   Row 1 (header): CinePulse brand + icon CTAs (above rules)
+//   Row 2 (SavedToolbarRow): category chips on left and actions on right
+//       Chips: [ All ] [ Entertainment ] [ Sports ]
+//       Right side: [ Recent ▼ ] [ Export ] [ Clear ]
+//       (Recent ▼ is sort popup; Export copies/shares all saved links;
+//        Clear wipes all saved items on this device.)
+//   Row 2.5: "3 items" count line (always shown, under Row 2)
+//   Row 3 (conditional): the inline search bar shown when header Search is active
+//   Body: grid of StoryCard for filtered saved stories
 //
 // Notes:
-// - We don't actually filter by category chips yet; they’re just UI right now.
-// - Refresh in Saved just forces a rebuild (no network).
+// - Category chips don't actually filter yet (visual only).
+// - "Refresh" here just rebuilds local state (no network).
+// - Local search filters only within saved items, not the main feed.
 //
+// ----------------------------------------------------------------------
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -92,11 +114,11 @@ class _SavedScreenState extends State<SavedScreen> {
     setState(() {
       _activeCatIndex = i;
     });
-    // (Future: actually filter by category here)
+    // (future: actually filter by category here)
   }
 
   void _refreshSaved() {
-    // Saved is local, so "refresh" just rebuilds.
+    // Saved is local, so "refresh" is just a rebuild.
     setState(() {});
   }
 
@@ -119,7 +141,7 @@ class _SavedScreenState extends State<SavedScreen> {
         ),
       );
     } catch (_) {
-      // fallback: just copy
+      // Fallback: just copy to clipboard.
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -147,6 +169,7 @@ class _SavedScreenState extends State<SavedScreen> {
         ],
       ),
     );
+
     if (ok == true) {
       await SavedStore.instance.clearAll();
       if (mounted) setState(() {});
@@ -154,8 +177,8 @@ class _SavedScreenState extends State<SavedScreen> {
   }
 
   /* ───────────────────────── Grid sizing helper ─────────────────────────
-   * EXACT SAME math as HomeScreen _FeedListState._gridDelegateFor
-   * so StoryCard tiles are visually identical across tabs.
+   * SAME math as HomeScreen's _FeedListState._gridDelegateFor,
+   * so StoryCard tiles match visually.
    */
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
@@ -201,7 +224,7 @@ class _SavedScreenState extends State<SavedScreen> {
     final bgColor =
         isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
-    // same breakpoint as HomeScreen to decide if header icons are shown
+    // same breakpoint as HomeScreen
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
 
@@ -212,12 +235,12 @@ class _SavedScreenState extends State<SavedScreen> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        // Pull saved stories from cache in selected sort order.
+        // All saved story IDs, sorted by _sort (recent or title)
         final ids = SavedStore.instance.orderedIds(_sort);
         final stories =
             ids.map(FeedCache.get).whereType<Story>().toList(growable: false);
 
-        // Local search filter.
+        // local search filter
         final q = _query.text.trim().toLowerCase();
         final filtered = q.isEmpty
             ? stories
@@ -227,7 +250,7 @@ class _SavedScreenState extends State<SavedScreen> {
                 return title.contains(q) || summ.contains(q);
               }).toList();
 
-        // "3 items", "1 item", etc., based on TOTAL saved (not just filtered).
+        // "3 items" etc (total saved, not filtered count)
         final total = stories.length;
         final countText = switch (total) {
           0 => 'No items',
@@ -238,7 +261,7 @@ class _SavedScreenState extends State<SavedScreen> {
         return Scaffold(
           backgroundColor: bgColor,
 
-          /* ───────── Frosted CinePulse header bar ───────── */
+          /* ───────── Row 1: Frosted header bar ───────── */
           appBar: PreferredSize(
             preferredSize: const Size.fromHeight(64),
             child: ClipRRect(
@@ -273,9 +296,8 @@ class _SavedScreenState extends State<SavedScreen> {
                       const _ModernBrandLogo(),
                       const Spacer(),
 
-                      // Wide / desktop: show nav/action pills.
-                      // Order spec:
-                      // Home • Search • (no Saved here) • Alerts • Discover • Refresh • Menu
+                      // WIDE DESKTOP / TABLET (≥768px):
+                      // [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
                       if (isWide) ...[
                         _HeaderIconButton(
                           tooltip: 'Home',
@@ -313,13 +335,37 @@ class _SavedScreenState extends State<SavedScreen> {
                           onTap: _refreshSaved,
                         ),
                         const SizedBox(width: 8),
+
+                        _HeaderIconButton(
+                          tooltip: 'Menu',
+                          icon: Icons.menu_rounded,
+                          onTap: widget.onOpenMenu,
+                        ),
                       ],
 
-                      _HeaderIconButton(
-                        tooltip: 'Menu',
-                        icon: Icons.menu_rounded,
-                        onTap: widget.onOpenMenu,
-                      ),
+                      // COMPACT (<768px):
+                      // [Search] [Refresh] [Menu]
+                      if (!isWide) ...[
+                        _HeaderIconButton(
+                          tooltip: 'Search',
+                          icon: Icons.search_rounded,
+                          onTap: _toggleSearchRow,
+                        ),
+                        const SizedBox(width: 8),
+
+                        _HeaderIconButton(
+                          tooltip: 'Refresh',
+                          icon: Icons.refresh_rounded,
+                          onTap: _refreshSaved,
+                        ),
+                        const SizedBox(width: 8),
+
+                        _HeaderIconButton(
+                          tooltip: 'Menu',
+                          icon: Icons.menu_rounded,
+                          onTap: widget.onOpenMenu,
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -343,7 +389,7 @@ class _SavedScreenState extends State<SavedScreen> {
                 onClearAllTap: () => _clearAll(context),
               ),
 
-              // Row: count text ("3 items")
+              // Row 2.5: count line ("3 items")
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -355,7 +401,7 @@ class _SavedScreenState extends State<SavedScreen> {
                 ),
               ),
 
-              // Row 3: search bar (only when _showSearchRow is true)
+              // Row 3: search bar (only visible when header Search is toggled)
               if (_showSearchRow)
                 Padding(
                   padding:
@@ -383,11 +429,11 @@ class _SavedScreenState extends State<SavedScreen> {
                     const horizontalPad = 12.0;
                     const topPad = 8.0;
                     final bottomSafe =
-                        MediaQuery.viewPaddingOf(ctx).bottom; // for iOS
+                        MediaQuery.viewPaddingOf(ctx).bottom; // for iOS home bar
                     final bottomPad = 28.0 + bottomSafe;
 
                     if (filtered.isEmpty) {
-                      // empty / no matches
+                      // empty or no matches
                       return ListView(
                         padding: EdgeInsets.fromLTRB(
                           horizontalPad,
@@ -433,13 +479,15 @@ class _SavedScreenState extends State<SavedScreen> {
   }
 }
 
-/* ───────────────────────── Toolbar row under header ──────────────────────
+/* ───────────────────────── Toolbar row under header (Row 2) ─────────────────
  *
- * Matches Home-style chip pills on the left:
- *   [ All ] [ Entertainment ] [ Sports ]
+ * Left side: pill chips like Home:
+ *    [ All ] [ Entertainment ] [ Sports ]
  *
- * Right side group:
- *   [ Recent ▼ ] [ Export ] [ Clear ]
+ * Right side: actions
+ *    [ Recent ▼ ] [ Export ] [ Clear ]
+ *
+ * "Recent ▼" is actually a popup sort menu (recent vs title).
  */
 class _SavedToolbarRow extends StatelessWidget {
   const _SavedToolbarRow({
@@ -494,46 +542,8 @@ class _SavedToolbarRow extends StatelessWidget {
       );
     }
 
-    Widget tabChip(int index, String label) {
-      final sel = (activeIndex == index);
-      if (sel) {
-        return InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: () => onCategoryTap(index),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: _accent,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: _accent, width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: _accent.withOpacity(0.4),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: const Text(
-              'All', // we'll override text below anyway
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                height: 1.2,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        );
-      }
-      return inactiveChip(label, () => onCategoryTap(index));
-    }
-
-    // tabChip above always renders "All". Let's fix label for selected:
-    Widget fixedTabChip(int index, String label) {
-      final sel = (activeIndex == index);
-      if (!sel) return tabChip(index, label);
-
+    // Active chip (red fill + glow)
+    Widget activeChip(String label, int index) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => onCategoryTap(index),
@@ -564,7 +574,12 @@ class _SavedToolbarRow extends StatelessWidget {
       );
     }
 
-    // pill-style SORT ("Recent"/"Title") with dropdown
+    Widget chip(int index, String label) {
+      final sel = (activeIndex == index);
+      return sel ? activeChip(label, index) : inactiveChip(label, () => onCategoryTap(index));
+    }
+
+    // Sort pill ("Recent" / "Title") showing popup on tap
     Widget sortPill() {
       final isRecent = (currentSort == SavedSort.recent);
       final iconData = isRecent ? Icons.history : Icons.sort_by_alpha;
@@ -636,6 +651,7 @@ class _SavedToolbarRow extends StatelessWidget {
       );
     }
 
+    // Square pill actions on the right ("Export", "Clear")
     Widget actionSquare({
       required IconData icon,
       required String tooltip,
@@ -664,18 +680,18 @@ class _SavedToolbarRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // category chips (scrollable on small widths)
+          // category chips (scrollable horizontally if needed)
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  fixedTabChip(0, 'All'),
+                  chip(0, 'All'),
                   const SizedBox(width: 8),
-                  fixedTabChip(1, 'Entertainment'),
+                  chip(1, 'Entertainment'),
                   const SizedBox(width: 8),
-                  fixedTabChip(2, 'Sports'),
+                  chip(2, 'Sports'),
                 ],
               ),
             ),
@@ -683,7 +699,7 @@ class _SavedToolbarRow extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // sort / export / clear
+          // Right-side controls
           Wrap(
             spacing: 8,
             runSpacing: 8,
