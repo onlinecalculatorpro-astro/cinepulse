@@ -62,6 +62,7 @@ import 'features/saved/saved_screen.dart';
 import 'features/alerts/alerts_screen.dart';
 import 'features/story/story_details.dart';
 import 'widgets/app_drawer.dart';
+import 'theme_colors.dart'; // primaryTextColor()
 
 const String _kAppVersion = '0.1.0';
 
@@ -1429,7 +1430,7 @@ class _NavButton extends StatelessWidget {
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : Colors.black.withOpacity(0.06);
     final Color inactiveBorder = _accent.withOpacity(0.3);
-    final Color inactiveText = isDark ? Colors.white : Colors.black87;
+    final Color inactiveText = primaryTextColor(context);
 
     final Color activeBg = _accent.withOpacity(0.12);
     final Color activeBorder = _accent;
