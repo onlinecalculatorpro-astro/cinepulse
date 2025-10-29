@@ -1,4 +1,21 @@
 // lib/features/home/home_screen.dart
+//
+// HomeScreen
+// - Main feed with tabs (All / Entertainment / Sports)
+// - Header matches the dark frosted style used across the app
+// - Category chips + sort pill row under header
+// - Responsive StoryCard grid
+//
+// Updates in this version:
+// 1) Header icon row now includes a Search button on wide/desktop layouts.
+//    Order is now (most used first):
+//       [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
+//    • Search is wide-only (desktop-style); not shown on narrow/mobile.
+//    • Saved + Alerts stay wide-only.
+//    • Discover / Refresh / Menu are always visible.
+// 2) We import the shared SearchBarInput from ../../widgets/search_bar.dart
+//    so Search UI can be reused by other screens.
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
@@ -15,7 +32,7 @@ import '../../core/models.dart';
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton_card.dart';
-import 'widgets/search_bar.dart';
+import '../../widgets/search_bar.dart'; // <-- shared SearchBarInput now
 import '../story/story_card.dart';
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -42,11 +59,23 @@ class HomeScreen extends StatefulWidget {
     this.onOpenAlerts,
   });
 
+  /// Whether to show the inline search bar under the header.
+  /// On phones, RootShell sets this true when the bottom nav "Search" tab is tapped.
   final bool showSearchBar;
+
+  /// Opens the global drawer / menu.
   final VoidCallback? onMenuPressed;
+
+  /// Let RootShell know we pulled-to-refresh / manual refresh tapped.
   final VoidCallback? onHeaderRefresh;
+
+  /// Navigate to Discover tab/page.
   final VoidCallback? onOpenDiscover;
+
+  /// Navigate to Saved tab/page.
   final VoidCallback? onOpenSaved;
+
+  /// Navigate to Alerts tab/page.
   final VoidCallback? onOpenAlerts;
 
   @override
@@ -426,6 +455,14 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  // Wide/desktop search button action.
+  // Hook this to whatever we decide later (open Discover, show a sheet, etc).
+  void _onSearchTap() {
+    debugPrint('TODO: wide-screen search icon tapped');
+    // Example future behavior:
+    // widget.onOpenDiscover?.call();
+  }
+
   /* ────────────────────────────────────────────────────────────────────────
      UI BUILD
      ─────────────────────────────────────────────────────────────────────── */
@@ -487,8 +524,14 @@ class _HomeScreenState extends State<HomeScreen>
                   const _ModernBrandLogo(),
                   const Spacer(),
 
-                  // Saved + Alerts should only appear on wide layouts.
+                  // Wide-only quick actions
                   if (isWide) ...[
+                    _HeaderIconButton(
+                      tooltip: 'Search',
+                      icon: Icons.search_rounded,
+                      onTap: _onSearchTap,
+                    ),
+                    const SizedBox(width: 8),
                     _HeaderIconButton(
                       tooltip: 'Saved',
                       icon: Icons.bookmark_rounded,
@@ -503,6 +546,7 @@ class _HomeScreenState extends State<HomeScreen>
                     const SizedBox(width: 8),
                   ],
 
+                  // Always visible (mobile + desktop)
                   _HeaderIconButton(
                     tooltip: 'Discover',
                     icon: kIsWeb
@@ -511,12 +555,14 @@ class _HomeScreenState extends State<HomeScreen>
                     onTap: widget.onOpenDiscover,
                   ),
                   const SizedBox(width: 8),
+
                   _HeaderIconButton(
                     tooltip: 'Refresh',
                     icon: Icons.refresh_rounded,
                     onTap: _refreshManually,
                   ),
                   const SizedBox(width: 8),
+
                   _HeaderIconButton(
                     tooltip: 'Menu',
                     icon: Icons.menu_rounded,
@@ -530,7 +576,7 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       body: Column(
         children: [
-          // inline Search (like Search tab mode)
+          // inline Search (like "Search" tab behavior on phones)
           if (widget.showSearchBar)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -550,7 +596,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: OfflineBanner(),
             ),
 
-          // category + sort row
+          // category chips + sort pill row
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
@@ -585,7 +631,7 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Filters row (used in simple layout instead of SliverPersistentHeader)
+   Filters row (just under header)
    ───────────────────────────────────────────────────────────────────────── */
 class _FiltersRow extends StatelessWidget {
   const _FiltersRow({
