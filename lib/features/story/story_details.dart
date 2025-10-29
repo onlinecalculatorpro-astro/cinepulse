@@ -13,6 +13,10 @@
 // All other features/logic (hero header, inline player, share logic,
 // saved/bookmark logic in the AppBar actions, source attribution text, etc.)
 // stay the same.
+//
+// THEME NOTE:
+// We now import theme_colors.dart and ONLY update text color usage to be
+// light/dark safe where it was previously hardcoded white.
 
 import 'dart:math' as math;
 
@@ -28,6 +32,7 @@ import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
 import '../../core/cache.dart'; // SavedStore
 import '../../core/models.dart';
 import '../../widgets/smart_video_player.dart';
+import '../../theme/theme_colors.dart'; // <-- theme-aware text colors
 import 'story_image_url.dart'; // resolveStoryImageUrl
 
 class StoryDetailsScreen extends StatefulWidget {
@@ -251,12 +256,11 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     // cleaned attribution footer string
     final attribution = _sourceAttribution(widget.story);
 
-    // ----- NEW: figure out meta line data EXACTLY like StoryCard -------------
+    // ----- meta line data (mirrors StoryCard) -----------------
     final story = widget.story;
     final kindRaw = story.kind.toLowerCase();
     final String kindLabel = _kindDisplay(kindRaw);
 
-    // timestamps
     final DateTime? publishedAt = story.publishedAt ?? story.releaseDate;
     final DateTime? addedAt = story.normalizedAt ?? story.ingestedAtCompat;
 
@@ -271,7 +275,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
         freshnessText = _formatGapShort(diff);
       }
     }
-    // ------------------------------------------------------------------------
+    // ----------------------------------------------------------
 
     return Scaffold(
       body: CustomScrollView(
@@ -361,7 +365,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // ── NEW: meta line styled like StoryCard _MetaLine ──
+                      // meta line
                       _MetaLine(
                         kindRaw: kindRaw,
                         kindLabel: kindLabel,
@@ -382,7 +386,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           ),
                         ),
 
-                      // KEEPING facets block feature
+                      // optional facets
                       if (widget.story.languages.isNotEmpty ||
                           widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
@@ -406,7 +410,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 20),
 
-                      // ── NEW CTA row: match StoryCard bottom row exactly ──
+                      // CTA row
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -423,7 +427,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                         if (_hasVideo) {
                                           _openPlayerInHeader();
                                         } else {
-                                          _openExternalPrimary(context);
+                                            _openExternalPrimary(context);
                                         }
                                       }
                                     : null,
@@ -497,7 +501,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                         ],
                       ),
 
-                      // legal / source attribution footer (unchanged)
+                      // legal / source attribution footer
                       if (attribution.isNotEmpty) ...[
                         const SizedBox(height: 24),
                         Text(
@@ -774,7 +778,7 @@ _KindStyle _styleForKind(String rawKind) {
   );
 }
 
-// Meta line row, exactly like StoryCard
+// Meta line row, mostly same as StoryCard but now theme-aware text color
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
     required this.kindRaw,
@@ -825,10 +829,10 @@ class _MetaLine extends StatelessWidget {
               timestampText!,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 height: 1.3,
-                color: Colors.white,
+                color: secondaryTextColor(context),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -855,7 +859,7 @@ class _MetaLine extends StatelessWidget {
         if (kindLabel.isNotEmpty && timestampText != null)
           const SizedBox(width: 6),
         if (timestampText != null) ts,
-        if (freshnessText != null) const SizedBox(width: 6),
+        if (freshnessText != null) const SizedBox.width(6),
         if (freshnessText != null) fresh,
       ],
     );
