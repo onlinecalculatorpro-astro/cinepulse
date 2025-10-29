@@ -2,38 +2,40 @@
 //
 // ALERTS TAB
 // ----------------------------------------------------------------------
-// Header rules (matches global CTA model):
+// Header rules (global CTA model):
 //
 // WIDE (≥768px):
 //   [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
-//   - We DO NOT show an "Alerts" CTA here because we're already on Alerts.
+//   - We do NOT show "Alerts" in the header because we're already on Alerts.
 //
 // COMPACT (<768px):
 //   [Search] [Refresh] [Menu]
-//   - We skip Home / Saved / Discover in compact header because
-//     bottom nav on mobile already covers Home / Discover / Saved / Alerts.
+//   - We skip Home / Saved / Discover in compact mode because bottom nav
+//     already exposes Home / Discover / Saved / Alerts.
 //
 // Search CTA behavior:
 //   - Tapping Search in the header toggles a dedicated inline search row
-//     (Row 3 below the chips and count line), *inside Alerts tab only*.
+//     (Row 3 below the chips + count line), scoped to Alerts only.
 //   - Closing that row clears the query.
 //
-// Body layout below header:
+// Layout structure:
 //
-//   Row 2: AlertsToolbarRow
-//          LEFT  = category chips [ All / Entertainment / Sports ]
+//   Row 1 (header): CinePulse brand + CTAs above
+//
+//   Row 2: _AlertsToolbarRow
+//          LEFT  = category chips [All / Entertainment / Sports]
 //          RIGHT = "Mark all read" pill
 //
-//   Row 2.5: Count line, e.g. "3 new alerts"
+//   Row 2.5: count line, e.g. "3 new alerts"
 //
-//   Row 3 (conditional): SearchBarInput if header Search is toggled
+//   Row 3 (conditional): inline SearchBarInput (only if header Search toggled)
 //          - Filters the visible alerts list locally
 //
 //   Body: pull-to-refresh + grid of unread alerts
 //
-// Other notes:
+// Other behavior:
 //   • "Mark all read" advances lastSeen, clears current list.
-//   • Refresh icon lives in header, not in Row 2.
+//   • Refresh icon is in header, not in Row 2.
 //   • Grid sizing math matches Home and Saved so StoryCard tiles line up.
 // ----------------------------------------------------------------------
 
@@ -72,11 +74,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
   static const _kPrefKey = 'alerts_last_seen';
   static const _accent = Color(0xFFdc2626);
 
-  // When user last "marked all read" (UTC).
+  // Last time user "marked all read" (UTC).
   DateTime _lastSeenUtc =
-      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true); // first run ever
+      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true); // first run
 
-  // Stories newer than _lastSeenUtc.
+  // Stories published after _lastSeenUtc.
   List<Story> _alerts = [];
 
   bool _loading = true;
@@ -84,10 +86,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   bool get _hasAlerts => _alerts.isNotEmpty;
 
-  // category chip visual state (0=All,1=Entertainment,2=Sports)
+  // Category chip state (0=All,1=Entertainment,2=Sports).
   int _activeCatIndex = 0;
 
-  // header search toggle + controller
+  // Inline search row toggle + controller.
   bool _showSearchRow = false;
   final _searchCtl = TextEditingController();
   Timer? _debounce;
@@ -114,9 +116,9 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   Future<void> _loadLastSeen() async {
     final sp = await SharedPreferences.getInstance();
-    final s = sp.getString(_kPrefKey);
-    if (s != null) {
-      final parsed = DateTime.tryParse(s);
+    final raw = sp.getString(_kPrefKey);
+    if (raw != null) {
+      final parsed = DateTime.tryParse(raw);
       if (parsed != null) {
         _lastSeenUtc = parsed.toUtc();
       }
@@ -128,7 +130,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     await sp.setString(_kPrefKey, t.toUtc().toIso8601String());
   }
 
-  /// Fetch newest feed, keep only those newer than _lastSeenUtc.
+  /// Fetch latest feed and keep only "new since lastSeen".
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -198,11 +200,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
     setState(() {
       _activeCatIndex = i;
     });
-    // (future: actually filter alerts by category here)
+    // (future: actually filter by category here)
   }
 
   /* ───────────────────────── Grid sizing helper ─────────────────────────
-   * SAME math as Home/Saved, so StoryCard tiles align across tabs.
+   * SAME math as Home and Saved tabs so StoryCard tiles line up.
    */
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
@@ -250,6 +252,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return '$total new alerts';
   }
 
+  // apply local search filter
   List<Story> _filteredAlerts() {
     final q = _searchCtl.text.trim().toLowerCase();
     if (q.isEmpty) return _alerts;
@@ -275,7 +278,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return Scaffold(
       backgroundColor: bgColor,
 
-      /* ───────── Row 1: Frosted CinePulse header bar ───────── */
+      /* ───────── Row 1: Frosted CinePulse header ───────── */
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(64),
         child: ClipRRect(
@@ -310,8 +313,9 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   const _ModernBrandLogo(),
                   const Spacer(),
 
-                  // WIDE (≥768px) CTA order:
+                  // WIDE (≥768px):
                   // [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
+                  // (No "Alerts" CTA because we're already here.)
                   if (isWide) ...[
                     _HeaderIconButton(
                       tooltip: 'Home',
@@ -357,7 +361,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     ),
                   ],
 
-                  // COMPACT (<768px) CTA order:
+                  // COMPACT (<768px):
                   // [Search] [Refresh] [Menu]
                   if (!isWide) ...[
                     _HeaderIconButton(
@@ -387,11 +391,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
         ),
       ),
 
-      /* ───────── Body content ───────── */
+      /* ───────── Body ───────── */
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row 2: category chips (All / Entertainment / Sports) + Mark all read
+          // Row 2: category chips + "Mark all read"
           _AlertsToolbarRow(
             activeIndex: _activeCatIndex,
             onCategoryTap: _setCategory,
@@ -400,7 +404,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
             onMarkAllRead: _markAllRead,
           ),
 
-          // Row 2.5: count label ("3 new alerts")
+          // Row 2.5: count line ("3 new alerts")
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
@@ -411,7 +415,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
             ),
           ),
 
-          // Row 3: inline search (only if header Search is toggled)
+          // Row 3: inline search bar (if toggled)
           if (_showSearchRow)
             Padding(
               padding:
@@ -428,8 +432,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
               ),
             ),
 
-          // Main alert grid / loading / empty states,
-          // wrapped in pull-to-refresh.
+          // Body: refreshable grid / states
           Expanded(
             child: RefreshIndicator.adaptive(
               onRefresh: _load,
@@ -447,7 +450,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
                   final visibleAlerts = _filteredAlerts();
 
-                  // 1) Loading → SkeletonCard grid
+                  // 1) Loading -> skeleton grid
                   if (_loading) {
                     return GridView.builder(
                       padding: EdgeInsets.fromLTRB(
@@ -464,7 +467,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     );
                   }
 
-                  // 2) Error → scrollable list with error text
+                  // 2) Error -> simple scrollable error view
                   if (_error != null) {
                     return ListView(
                       padding: EdgeInsets.fromLTRB(
@@ -488,7 +491,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     );
                   }
 
-                  // 3) Empty / caught up
+                  // 3) Empty / all caught up
                   if (visibleAlerts.isEmpty) {
                     return ListView(
                       padding: EdgeInsets.fromLTRB(
@@ -537,13 +540,13 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
 /* ───────────────────────── Row 2 under header ─────────────────────────
  *
- * _AlertsToolbarRow:
- *    LEFT  : category chips (All / Entertainment / Sports)
- *    RIGHT : "Mark all read" pill
+ * _AlertsToolbarRow
+ * LEFT  : category chips (All / Entertainment / Sports)
+ * RIGHT : "Mark all read" pill
  *
- * "Mark all read":
- *    - Red outline pill.
- *    - Disabled if no alerts or currently loading.
+ * The pill:
+ *   - Red outline style
+ *   - Disabled when there are no alerts or we're loading
  */
 class _AlertsToolbarRow extends StatelessWidget {
   const _AlertsToolbarRow({
@@ -693,7 +696,7 @@ class _AlertsToolbarRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // LEFT: category chips (scroll if narrow)
+          // LEFT: chip row, horizontally scrollable if needed
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -712,7 +715,7 @@ class _AlertsToolbarRow extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // RIGHT: mark all read pill
+          // RIGHT: "Mark all read" pill
           markAllReadPill(),
         ],
       ),
@@ -761,7 +764,7 @@ class _EmptyAlerts extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── Shared header widgets ───────────────────────── */
+/* ───────────────────────── Header CTA button + brand ───────────────────────── */
 
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
