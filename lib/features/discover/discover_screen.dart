@@ -56,6 +56,7 @@ import '../../core/api.dart';
 import '../../core/models.dart';
 import '../../widgets/search_bar.dart';
 import '../../widgets/skeleton_card.dart';
+import '../../theme/theme_colors.dart'; // theme-aware text colors
 import '../story/story_card.dart';
 
 class DiscoverScreen extends StatefulWidget {
@@ -959,19 +960,19 @@ class _ModernBrandLogo extends StatelessWidget {
               style: TextStyle(
                 fontSize: 16,
                 height: 1,
-                color: Colors.white,
+                color: Colors.white, // icon-on-red stays white
               ),
             ),
           ),
         ),
         const SizedBox(width: 8),
-        const Text(
+        Text(
           'CinePulse',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: Colors.white,
+            color: primaryTextColor(context), // theme-aware brand text
           ),
         ),
       ],
