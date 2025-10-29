@@ -1,38 +1,47 @@
 // lib/root_shell.dart
 //
-// RootShell = main scaffold / shell for the whole app.
+// RootShell = the main scaffold/shell for the entire app.
 //
 // It owns:
-//  • Tab pages (Home / Discover / Saved / Alerts) via an IndexedStack
-//  • The global right-side drawer ("Menu")
-//  • The bottom nav on phones only (<768px width)
-//  • Deep link handling for /s/<id> → StoryDetailsScreen
+//   • The 4 primary tabs (Home / Discover / Saved / Alerts) via an IndexedStack
+//   • Global right-side drawer ("Menu")
+//   • Bottom nav on compact layouts (<768px width)
+//   • Cross-tab navigation callbacks for wide headers
+//   • Initial deep links (/s/<id>) → StoryDetailsScreen
 //
-// ─────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 // FINAL NAV / HEADER MODEL
-// ─────────────────────────────────────────────────────────────────────
+// ----------------------------------------------------------------------
 //
-// MOBILE (<768px):
-//   Bottom nav has 4 CTA icons:
-//     0 = Home
-//     1 = Discover
-//     2 = Saved
-//     3 = Alerts
+// COMPACT (<768px wide):
+//   - We show a frosted bottom nav with 4 icons:
+//       0 = Home
+//       1 = Discover
+//       2 = Saved
+//       3 = Alerts
 //
-//   Screen headers DO NOT duplicate bottom-nav destinations. They only
-//   show utility actions (Search / Refresh / Menu, etc.).
+//   - Each screen's header only shows utility CTAs:
+//       [Search] [Refresh] [Menu]
+//     (No nav-style pills for other tabs in the header, because bottom
+//      nav already handles cross-navigation.)
 //
-// DESKTOP / WIDE (≥768px):
-//   No bottom nav. Each screen header can show more nav-style pills
-//   (Home / Discover / Saved / Alerts / Search / Refresh / Menu), with
-//   the rule that a screen never shows a pill for itself
-//   (SavedScreen won't show "Saved", etc.).
+// WIDE (≥768px wide):
+//   - There is NO bottom nav.
+//   - Each screen's header shows nav-style CTA pills so you can hop
+//     between tabs. Rules per screen:
+//       • HomeScreen header shows:     [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
+//       • DiscoverScreen header shows: [Home] [Search] [Saved] [Alerts]   [Refresh] [Menu]
+//       • SavedScreen header shows:    [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
+//       • AlertsScreen header shows:   [Home] [Search] [Saved] [Discover]  [Refresh] [Menu]
+//     …and each screen omits a pill for itself.
 //
-// RootShell exposes navigation callbacks so headers can switch tabs,
-// and also opens the global drawer ("Menu").
+// RootShell passes simple callbacks like `_openHome()`, `_openDiscover()`,
+// etc., down into the tab screens so those header pills actually switch tabs.
+// RootShell also provides `_openEndDrawer()` so they can open the Menu drawer.
 //
-// Drawer also exposes settings sheets (theme, categories, language, etc.).
-//
+// The right-side drawer surface also exposes settings sheets (theme, categories,
+// content type, language, subscription stub, etc.).
+// ----------------------------------------------------------------------
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -48,9 +57,10 @@ import 'core/cache.dart';
 import 'core/models.dart';
 import 'core/utils.dart'; // fadeRoute()
 import 'features/home/home_screen.dart';
+import 'features/discover/discover_screen.dart';
 import 'features/saved/saved_screen.dart';
-import 'features/story/story_details.dart';
 import 'features/alerts/alerts_screen.dart';
+import 'features/story/story_details.dart';
 import 'widgets/app_drawer.dart';
 
 const String _kAppVersion = '0.1.0';
@@ -59,9 +69,10 @@ const String _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed' | etc.
 const String _kContentTypePrefKey =
     'cp.contentType'; // 'all' | 'read' | 'video' | 'audio'
 
-/* ────────────────────────────────────────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS (drawer "Categories")
- * ────────────────────────────────────────────────────────────────────────────*/
+ * Keeps which verticals are active in the user's feed.
+ * ───────────────────────────────────────────────────────────────────────── */
 class CategoryPrefs extends ChangeNotifier {
   CategoryPrefs._internal();
   static final CategoryPrefs instance = CategoryPrefs._internal();
@@ -72,7 +83,7 @@ class CategoryPrefs extends ChangeNotifier {
   static const String keyTravel = 'travel';
   static const String keyFashion = 'fashion';
 
-  // Default feed selection = "All".
+  // Default is "All".
   final Set<String> _selected = {keyAll};
 
   Set<String> get selected => Set.unmodifiable(_selected);
@@ -86,7 +97,7 @@ class CategoryPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Human label for drawer header ("Entertainment +2", etc.).
+  /// Drawer summary string ("Entertainment +2", etc.).
   String summary() {
     if (_selected.contains(keyAll)) return 'All';
 
@@ -126,10 +137,10 @@ class CategoryPrefs extends ChangeNotifier {
   }
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────────────────
  * CONTENT TYPE PREFS (drawer "Content type")
- * 'all' | 'read' | 'video' | 'audio'
- * ────────────────────────────────────────────────────────────────────────────*/
+ * One of: 'all' | 'read' | 'video' | 'audio'
+ * ───────────────────────────────────────────────────────────────────────── */
 class ContentTypePrefs extends ChangeNotifier {
   ContentTypePrefs._internal();
   static final ContentTypePrefs instance = ContentTypePrefs._internal();
@@ -161,10 +172,13 @@ class ContentTypePrefs extends ChangeNotifier {
   }
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────────────────
  * ROOT SHELL
- * Main scaffold for the app.
- * ────────────────────────────────────────────────────────────────────────────*/
+ * --------------------------------------------------------------------------
+ * This is the one Scaffold that lives under MaterialApp.
+ * It swaps our four main tabs using an IndexedStack.
+ * --------------------------------------------------------------------------
+ */
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
 
@@ -175,28 +189,31 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // Which tab is visible in the IndexedStack:
-  // 0 = Home, 1 = Discover, 2 = Saved, 3 = Alerts
+  // Visible page in the IndexedStack:
+  //   0 = Home
+  //   1 = Discover
+  //   2 = Saved
+  //   3 = Alerts
   int _pageIndex = 0;
 
-  // Which item is highlighted in the bottom nav (phones only):
-  // 0 = Home
-  // 1 = Discover
-  // 2 = Saved
-  // 3 = Alerts
+  // Highlighted destination in the bottom nav (compact layouts only).
+  //   0 = Home
+  //   1 = Discover
+  //   2 = Saved
+  //   3 = Alerts
   int _navIndex = 0;
 
-  // feed language for drawer status line ("Entertainment · English")
-  // 'english' | 'hindi' | 'mixed' | etc.
+  // User's chosen feed language for the drawer summary line ("Entertainment · English")
+  // Example values: 'english', 'hindi', 'mixed'
   String _currentLang = 'mixed';
 
-  // CinePulse UI chrome language (drawer "App language")
+  // App UI language (drawer "App language"), e.g. 'english_ui'
   String _appUiLanguageCode = 'english_ui';
 
-  // Content type filter ('all' | 'read' | 'video' | 'audio')
+  // Content type ('all' | 'read' | 'video' | 'audio')
   String _currentContentType = ContentTypePrefs.typeAll;
 
-  // Deep link (/s/<id>) support
+  // Deep link (/s/<id>) bootstrap
   String? _pendingDeepLinkId;
   bool _deepLinkHandled = false;
 
@@ -207,13 +224,13 @@ class _RootShellState extends State<RootShell> {
     _loadLangPref();
     _loadContentTypePref();
 
-    // After first frame, try to open the deep link story if any.
+    // After first frame, attempt deep link open.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _tryOpenPendingDeepLink();
     });
   }
 
-  /* ─────────────────── prefs bootstrap ─────────────────── */
+  /* ───────────────────────── prefs bootstrap ───────────────────────── */
 
   Future<void> _loadLangPref() async {
     final sp = await SharedPreferences.getInstance();
@@ -249,10 +266,12 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ─────────────────── deep link /s/<id> ─────────────────── */
-
+  /* ───────────────────────── deep link /s/<id> ─────────────────────────
+   *
+   * On web we may load at /s/xyz or even #/s/xyz. We store that ID, then
+   * after init we try to open StoryDetailsScreen with it.
+   */
   void _captureInitialDeepLink() {
-    // On web, may come as path "/s/xyz" or hash "#/s/xyz".
     final frag = Uri.base.fragment;
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
 
@@ -269,7 +288,7 @@ class _RootShellState extends State<RootShell> {
     const tick = Duration(milliseconds: 200);
     final started = DateTime.now();
 
-    // 1. Poll FeedCache briefly to give feed a chance to warm up.
+    // 1. First, poll FeedCache briefly in case Home already warmed it.
     while (mounted && DateTime.now().difference(started) < maxWait) {
       final Story? cached = FeedCache.get(_pendingDeepLinkId!);
       if (cached != null) {
@@ -279,7 +298,7 @@ class _RootShellState extends State<RootShell> {
       await Future<void>.delayed(tick);
     }
 
-    // 2. Fallback to network.
+    // 2. Otherwise just fetch directly.
     try {
       final s = await fetchStory(_pendingDeepLinkId!);
       if (!mounted) return;
@@ -287,14 +306,14 @@ class _RootShellState extends State<RootShell> {
       await _openDetails(s);
       return;
     } catch (_) {
-      // ignore; we'll just land on normal UI
+      // If it fails, we just fall back to normal UI.
     }
   }
 
   Future<void> _openDetails(Story s) async {
     _deepLinkHandled = true;
 
-    // Make sure Home tab is visible behind the details view.
+    // Show Home tab in the background behind details.
     if (_pageIndex != 0) {
       setState(() {
         _pageIndex = 0;
@@ -302,7 +321,7 @@ class _RootShellState extends State<RootShell> {
       });
     }
 
-    // tiny delay so Navigator is definitely ready
+    // Small delay so Navigator is definitely ready.
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!mounted) return;
 
@@ -311,10 +330,11 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /* ─────────────────── header / nav callbacks ───────────────────
+  /* ───────────────────────── header/nav callbacks ─────────────────────────
    *
-   * These get passed into HomeScreen, SavedScreen, AlertsScreen so
-   * their header icon pills can trigger tab changes or open the drawer.
+   * These callbacks get passed into HomeScreen / DiscoverScreen / SavedScreen /
+   * AlertsScreen so that on wide layouts (≥768px) their header nav pills can
+   * jump between tabs, and can open the global Menu drawer.
    */
 
   void _openHome() {
@@ -349,8 +369,9 @@ class _RootShellState extends State<RootShell> {
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
-  /* ─────────────────── bottom nav taps (phones) ───────────────────
+  /* ───────────────────────── bottom nav taps (phones) ─────────────────────────
    *
+   * Bottom nav order:
    *   0 = Home
    *   1 = Discover
    *   2 = Saved
@@ -359,14 +380,11 @@ class _RootShellState extends State<RootShell> {
   void _onDestinationSelected(int i) {
     setState(() {
       _navIndex = i;
-      if (i == 0) _pageIndex = 0;
-      if (i == 1) _pageIndex = 1;
-      if (i == 2) _pageIndex = 2;
-      if (i == 3) _pageIndex = 3;
+      _pageIndex = i;
     });
   }
 
-  /* ─────────────────── drawer sheet helpers ─────────────────── */
+  /* ───────────────────────── drawer sheet helpers ───────────────────────── */
 
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final current = AppSettings.instance.themeMode;
@@ -516,7 +534,7 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /* ─────────────────── responsive helpers ─────────────────── */
+  /* ───────────────────────── responsive helpers ───────────────────────── */
 
   bool _isCompact(BuildContext context) =>
       MediaQuery.of(context).size.width < 768;
@@ -526,22 +544,22 @@ class _RootShellState extends State<RootShell> {
     final compact = _isCompact(context);
     final showBottomNav = compact;
 
-    // Drawer header line, e.g. "Entertainment · English"
+    // Drawer subheader line, e.g. "Entertainment · English"
     final categorySummary = CategoryPrefs.instance.summary();
     final langSummary = _langHeaderSummary(_currentLang);
     final feedStatusLine = '$categorySummary · $langSummary';
 
-    // "Content type" pill text in drawer
+    // "Content type" line in drawer
     final contentTypeLabel = ContentTypePrefs.instance.summary();
 
-    // About footer text in drawer
+    // Drawer footer version label
     final versionLabel = 'Version $_kAppVersion · Early access';
 
     return WillPopScope(
       onWillPop: () async {
         // Android back:
-        // If StoryDetailsScreen (or anything else) is pushed above RootShell,
-        // pop that first instead of exiting the entire shell.
+        // If something (like StoryDetailsScreen) is pushed above RootShell,
+        // pop that first instead of leaving the whole app.
         final canPop = Navigator.of(context).canPop();
         if (canPop) {
           Navigator.of(context).maybePop();
@@ -554,18 +572,18 @@ class _RootShellState extends State<RootShell> {
         drawer: null,
         drawerEnableOpenDragGesture: false,
 
-        // We use ONLY an endDrawer (right side) for "Menu".
+        // We only use endDrawer (right side) for the "Menu".
         endDrawerEnableOpenDragGesture: false,
         endDrawer: Builder(
           builder: (drawerCtx) {
             return AppDrawer(
-              // header bits
+              // HEADER SUMMARY
               onClose: () => Navigator.of(drawerCtx).pop(),
               feedStatusLine: feedStatusLine,
               versionLabel: versionLabel,
               contentTypeLabel: contentTypeLabel,
 
-              // so Home/Saved can rebuild if filters changed
+              // so Home / Saved / etc. can rebuild after filters change
               onFiltersChanged: () => setState(() {}),
 
               // CONTENT & FILTERS
@@ -594,10 +612,11 @@ class _RootShellState extends State<RootShell> {
           },
         ),
 
-        // BODY:
-        // SafeArea(top:true,bottom:false) so our custom headers don't sit
-        // under the OS status bar on phones, but we still allow our own
-        // frosted bottom nav to hug the bottom.
+        // BODY
+        //
+        // SafeArea(top:true,bottom:false):
+        // - top:true keeps our frosted headers from colliding with status bar.
+        // - bottom:false lets our custom frosted bottom nav sit flush.
         body: SafeArea(
           top: true,
           bottom: false,
@@ -605,14 +624,26 @@ class _RootShellState extends State<RootShell> {
             child: IndexedStack(
               index: _pageIndex,
               children: [
+                // HOME
                 const _HomeTabHost(),
-                const _DiscoverPlaceholder(),
+
+                // DISCOVER
+                _DiscoverTabHost(
+                  onOpenHome: _openHome,
+                  onOpenSaved: _openSaved,
+                  onOpenAlerts: _openAlerts,
+                  onOpenMenu: _openEndDrawer,
+                ),
+
+                // SAVED
                 SavedScreen(
                   onOpenHome: _openHome,
                   onOpenDiscover: _openDiscover,
                   onOpenAlerts: _openAlerts,
                   onOpenMenu: _openEndDrawer,
                 ),
+
+                // ALERTS
                 AlertsScreen(
                   onOpenHome: _openHome,
                   onOpenDiscover: _openDiscover,
@@ -636,15 +667,14 @@ class _RootShellState extends State<RootShell> {
   }
 }
 
-/* ─────────────────── Home tab host ───────────────────
+/* ───────────────────────── HOME TAB HOST ─────────────────────────
  *
- * Helper widget so we can grab _RootShellState via context and pass
- * its callbacks / flags into HomeScreen cleanly.
+ * Small wrapper so we can reach _RootShellState and cleanly pass its
+ * callbacks / hooks into HomeScreen.
  *
- * NOTE:
- *  HomeScreen itself will control its own header Search toggle
- *  (to reveal the inline search row under the chips). RootShell no longer
- *  tries to drive that via a "Search" bottom-tab.
+ * Note:
+ * - HomeScreen manages its own inline search row visibility internally.
+ *   RootShell does NOT force it anymore.
  */
 class _HomeTabHost extends StatelessWidget {
   const _HomeTabHost();
@@ -653,20 +683,49 @@ class _HomeTabHost extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.findAncestorStateOfType<_RootShellState>()!;
     return HomeScreen(
-      // RootShell no longer forces search row open;
-      // HomeScreen manages its own search CTA in the header.
+      // RootShell no longer drives the inline search bar; HomeScreen toggles
+      // it via its header [Search] CTA.
       showSearchBar: false,
 
       // header actions
       onMenuPressed: state._openEndDrawer,
       onHeaderRefresh: () {
-        // keep this hook if HomeScreen wants to call back after refresh
+        // hook from HomeScreen after manual refresh, if needed
       },
 
-      // nav CTA callbacks (for wide header versions)
+      // wide header nav pills
       onOpenDiscover: state._openDiscover,
       onOpenSaved: state._openSaved,
       onOpenAlerts: state._openAlerts,
+    );
+  }
+}
+
+/* ───────────────────────── DISCOVER TAB HOST ─────────────────────────
+ *
+ * Same idea as _HomeTabHost, but DiscoverScreen doesn't have the old
+ * `showSearchBar` prop. We just forward the nav/drawer callbacks.
+ */
+class _DiscoverTabHost extends StatelessWidget {
+  const _DiscoverTabHost({
+    required this.onOpenHome,
+    required this.onOpenSaved,
+    required this.onOpenAlerts,
+    required this.onOpenMenu,
+  });
+
+  final VoidCallback onOpenHome;
+  final VoidCallback onOpenSaved;
+  final VoidCallback onOpenAlerts;
+  final VoidCallback onOpenMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    return DiscoverScreen(
+      onOpenHome: onOpenHome,
+      onOpenSaved: onOpenSaved,
+      onOpenAlerts: onOpenAlerts,
+      onOpenMenu: onOpenMenu,
     );
   }
 }
@@ -758,9 +817,9 @@ class _CategoryPickerState extends State<_CategoryPicker> {
       } else {
         _local.add(key);
       }
-      // once you pick a specific vertical, drop "all"
+      // Once you pick a specific category, drop "all".
       _local.remove(all);
-      // never allow empty
+      // Never allow empty.
       if (_local.isEmpty) {
         _local.add(all);
       }
@@ -1195,28 +1254,10 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
   }
 }
 
-/* ───────────────────────── DISCOVER PLACEHOLDER ───────────────────────── */
-class _DiscoverPlaceholder extends StatelessWidget {
-  const _DiscoverPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Text(
-        'Discover (coming soon)',
-        style: GoogleFonts.inter(
-          fontWeight: FontWeight.w700,
-          fontSize: 22,
-        ),
-      ),
-    );
-  }
-}
-
 /* ───────────────────────── RESPONSIVE WIDTH WRAPPER ─────────────────────────
  *
- * On desktop/tablet we clamp max width to ~1300px so the feed grid doesn't
- * stretch into ultra-wide 1-row galleries. On phones we just fill width.
+ * On desktop/tablet we clamp content to ~1300px so the feed doesn't stretch
+ * into a single ultra-wide row. On phones we just fill the screen.
  */
 class _ResponsiveWidth extends StatelessWidget {
   const _ResponsiveWidth({super.key, required this.child});
