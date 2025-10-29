@@ -51,7 +51,7 @@ import '../../core/models.dart';
 import '../../widgets/search_bar.dart';
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
-import '../../theme_colors.dart';
+import '../../theme/theme_colors.dart';
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({
