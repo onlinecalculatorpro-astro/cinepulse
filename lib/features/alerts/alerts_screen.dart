@@ -1,35 +1,90 @@
 // lib/features/alerts/alerts_screen.dart
 //
-// Alerts tab
-// - Shows only the "new since you last checked" stories.
-// - "Mark all read" = remember now() as lastSeen and clear list.
-// - Pull to refresh = refetch feed/all and recompute what's new.
+// ALERTS TAB (restyled to match HomeScreen & SavedScreen)
 //
-// Layout changes vs old version:
-// - We no longer try to shove StoryCard in a SliverList (that would explode,
-//   because StoryCard's internal Column uses Expanded and expects a bounded
-//   height).
-// - Instead, we render alerts in a responsive SliverGrid with the same
-//   StoryCard used on Home. This gives each card a fixed tile size
-//   (so Expanded inside StoryCard is happy).
+// High-level:
+// ----------
+// • Frosted CinePulse header bar identical to SavedScreen/HomeScreen
+//   - Left: CinePulse brand
+//   - Right: nav icon pills (Home / Discover / Saved) on wide layouts
+//   - Far right: Menu pill (always)
+//   - All pills use the same square capsule style as SavedScreen
 //
-// Swipe UX:
-// - StoryCard now supports prev/next swipe via StoryPagerScreen.
-//   We pass the whole `_alerts` list + index into each StoryCard so that
-//   AlertsScreen gets the same swipe experience as Home.
+// • Row under header matches the dark "toolbar strip" used in Home (_FiltersRow)
+//   and Saved (_SavedToolbarRow):
+//   - Left: red-accent pill "Mark all read"
+//          * disabled if there are no unread alerts
+//   - Right: refresh pill (square icon button like in header)
+//   - Same background color band and 1px divider as in other tabs
+//
+// • Next line: subtle "X new alerts" text in onSurfaceVariant
+//
+// • Body: EXACT SAME GRID GEOMETRY AS HOME/SAVED
+//   (SliverGridDelegateWithMaxCrossAxisExtent with the same breakpoints,
+//    same aspect ratio math)
+//
+// • Pull-to-refresh: still supported via RefreshIndicator
+//
+// • Loading state: uses SkeletonCard grid (unified with Home)
+// • Empty state: friendly bell message in a scrollable ListView (so you
+//   can still pull-to-refresh)
+// • Error state: scrollable ListView with error text (refresh still works)
+//
+// Data model:
+// -----------
+// We persist `_lastSeenUtc` in SharedPreferences under `alerts_last_seen`.
+// `_alerts` holds "stories published after lastSeenUtc".
+// `_markAllRead()` sets lastSeenUtc = now() and clears `_alerts`.
+//
+// Navigation callbacks supplied by RootShell:
+// ------------------------------------------
+// onOpenHome     → switch to Home tab
+// onOpenDiscover → switch to Discover tab
+// onOpenSaved    → switch to Saved tab
+// onOpenMenu     → open drawer
+//
+// RootShell should now build AlertsScreen like:
+//
+// AlertsScreen(
+//   onOpenHome: _openHome,
+//   onOpenDiscover: _openDiscover,
+//   onOpenSaved: _openSaved,
+//   onOpenMenu: _openEndDrawer,
+// );
+//
 
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api.dart';
 import '../../core/models.dart';
+import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
 
 class AlertsScreen extends StatefulWidget {
-  const AlertsScreen({super.key});
+  const AlertsScreen({
+    super.key,
+    this.onOpenHome,
+    this.onOpenDiscover,
+    this.onOpenSaved,
+    this.onOpenMenu,
+  });
+
+  /// Switch to Home tab.
+  final VoidCallback? onOpenHome;
+
+  /// Switch to Discover tab.
+  final VoidCallback? onOpenDiscover;
+
+  /// Switch to Saved tab.
+  final VoidCallback? onOpenSaved;
+
+  /// Open right-side drawer / menu.
+  final VoidCallback? onOpenMenu;
 
   @override
   State<AlertsScreen> createState() => _AlertsScreenState();
@@ -37,12 +92,13 @@ class AlertsScreen extends StatefulWidget {
 
 class _AlertsScreenState extends State<AlertsScreen> {
   static const _kPrefKey = 'alerts_last_seen';
+  static const _accent = Color(0xFFdc2626);
 
-  // When user last visited + marked as read (UTC).
+  // When user last "marked all read" (UTC).
   DateTime _lastSeenUtc =
       DateTime.fromMillisecondsSinceEpoch(0, isUtc: true); // first run
 
-  // Stories that are "new since lastSeenUtc".
+  // Stories that are new since _lastSeenUtc.
   List<Story> _alerts = [];
 
   bool _loading = true;
@@ -77,6 +133,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     await sp.setString(_kPrefKey, t.toUtc().toIso8601String());
   }
 
+  /// Fetch latest feed, filter anything newer than _lastSeenUtc.
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -84,8 +141,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
 
     try {
-      // Grab a window from the "all" feed.
-      // (Server returns newest-first or near-newest. We'll sort anyway.)
+      // Grab newest window from "all" feed (server returns newest-first-ish).
       final list = await fetchFeed(tab: 'all', since: null, limit: 80);
 
       final fresh = list.where((s) {
@@ -128,194 +184,537 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
   }
 
-  // We reuse the same responsive card tiling logic conceptually as Home.
-  // The grid delegate we build here must give each StoryCard a *bounded*
-  // height (via childAspectRatio), otherwise StoryCard's Expanded will throw.
-  SliverGridDelegate _gridDelegateFor(BuildContext context) {
-    final screenW = MediaQuery.of(context).size.width;
-    final textScale = MediaQuery.textScaleFactorOf(context);
-
-    // Choose an approximate "max card width" like Home does,
-    // and also pick an aspect ratio bucket for that width.
-    double maxTileW;
-    if (screenW < 520) {
-      maxTileW = screenW; // 1 col on phones
-    } else if (screenW < 900) {
-      maxTileW = screenW / 2; // 2 cols
-    } else if (screenW < 1400) {
-      maxTileW = screenW / 3; // 3 cols
+  /* ───────────────────────── Grid geometry helper ─────────────────────────
+   *
+   * EXACT SAME sizing logic we use on Home (_FeedListState._gridDelegateFor)
+   * and the Saved tab, so StoryCard tiles look 100% consistent across screens.
+   */
+  SliverGridDelegate _gridDelegateFor(double width, double textScale) {
+    int estCols;
+    if (width < 520) {
+      estCols = 1;
+    } else if (width < 900) {
+      estCols = 2;
+    } else if (width < 1400) {
+      estCols = 3;
     } else {
-      maxTileW = screenW / 4; // 4 cols on wide screens
+      estCols = 4;
     }
+
+    double maxTileW = width / estCols;
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // childAspectRatio = width / height.
-    // Lower ratio => taller tile.
-    double ratio;
-    if (maxTileW <= 340) {
-      ratio = 0.56;
-    } else if (maxTileW <= 380) {
-      ratio = 0.64;
-    } else if (maxTileW <= 420) {
-      ratio = 0.72;
+    double baseRatio;
+    if (estCols == 1) {
+      baseRatio = 0.88;
+    } else if (estCols == 2) {
+      baseRatio = 0.95;
     } else {
-      ratio = 0.80;
+      baseRatio = 1.00;
     }
 
-    // Respect user text scaling (bigger text -> need taller tiles).
-    ratio /= textScale.clamp(1.0, 1.8);
+    final scaleForHeight = textScale.clamp(1.0, 1.4);
+    final effectiveRatio = baseRatio / scaleForHeight;
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
-      childAspectRatio: ratio,
+      childAspectRatio: effectiveRatio,
     );
   }
 
+  /* ───────────────────────── Count line helper ───────────────────────── */
+
+  String _countLabel() {
+    if (_loading) return 'Checking…';
+    if (_error != null) return 'Couldn’t refresh';
+    final total = _alerts.length;
+    if (total == 0) return 'No new alerts';
+    if (total == 1) return '1 new alert';
+    return '$total new alerts';
+  }
+
+  /* ───────────────────────── UI build ───────────────────────── */
+
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bgColor =
+        isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
-    final horizontalPad = 12.0;
-    final topPad = 8.0;
-    final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
-    final bottomPad = 28.0 + bottomSafe;
+    // same breakpoint we use in Home/Saved to decide whether to show
+    // the row of nav icons in the header:
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWide = screenWidth >= 768;
 
-    return RefreshIndicator.adaptive(
-      onRefresh: _load,
-      color: const Color(0xFFdc2626),
-      child: CustomScrollView(
-        slivers: [
-          SliverAppBar(
-            pinned: true,
-            title: Text(
-              'Alerts',
-              style: GoogleFonts.inter(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            actions: [
-              IconButton(
-                tooltip: 'Mark all read',
-                icon: const Icon(Icons.done_all_rounded),
-                onPressed: _hasAlerts ? _markAllRead : null,
-              ),
-            ],
-          ),
+    return Scaffold(
+      backgroundColor: bgColor,
 
-          // Error
-          if (_error != null && !_loading)
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(_error!),
+      /* ───────── Frosted CinePulse header bar (same as Home/Saved) ───────── */
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(64),
+        child: ClipRRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: Container(
+              height: 64,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: isDark
+                      ? [
+                          const Color(0xFF1e2537).withOpacity(0.9),
+                          const Color(0xFF0b0f17).withOpacity(0.95),
+                        ]
+                      : [
+                          theme.colorScheme.surface.withOpacity(0.95),
+                          theme.colorScheme.surface.withOpacity(0.9),
+                        ],
                 ),
-              ),
-            ),
-
-          // Loading skeletons (simple list rows)
-          if (_loading)
-            SliverList.separated(
-              itemCount: 6,
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemBuilder: (_, __) => const _SkeletonLine(),
-            ),
-
-          // Empty state
-          if (!_loading && !_hasAlerts)
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    "You're all caught up!\nNew trailers will appear here.",
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.inter(fontSize: 16),
+                border: const Border(
+                  bottom: BorderSide(
+                    color: Color(0x0FFFFFFF),
+                    width: 1,
                   ),
                 ),
               ),
-            ),
+              child: Row(
+                children: [
+                  const _ModernBrandLogo(),
+                  const Spacer(),
 
-          // Grid of unread alerts
-          if (_hasAlerts)
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(
-                horizontalPad,
-                topPad,
-                horizontalPad,
-                bottomPad,
-              ),
-              sliver: SliverGrid(
-                gridDelegate: _gridDelegateFor(context),
-                delegate: SliverChildBuilderDelegate(
-                  (context, i) {
-                    final story = _alerts[i];
-                    return StoryCard(
-                      story: story,
-                      allStories: _alerts,
-                      index: i,
-                    );
-                  },
-                  childCount: _alerts.length,
-                ),
+                  // On wide / desktop, show quick nav to other tabs.
+                  if (isWide) ...[
+                    _HeaderIconButton(
+                      tooltip: 'Home',
+                      icon: Icons.home_rounded,
+                      onTap: widget.onOpenHome,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Discover',
+                      icon: kIsWeb
+                          ? Icons.explore_outlined
+                          : Icons.manage_search_rounded,
+                      onTap: widget.onOpenDiscover,
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      tooltip: 'Saved',
+                      icon: Icons.bookmark_rounded,
+                      onTap: widget.onOpenSaved,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+
+                  _HeaderIconButton(
+                    tooltip: 'Menu',
+                    icon: Icons.menu_rounded,
+                    onTap: widget.onOpenMenu,
+                  ),
+                ],
               ),
             ),
+          ),
+        ),
+      ),
+
+      /* ───────── Body column (toolbar strip + count + grid w/ pull-to-refresh) ───────── */
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // toolbar strip under header
+          _AlertsToolbarRow(
+            hasAlerts: _hasAlerts,
+            loading: _loading,
+            onMarkAllRead: _markAllRead,
+            onRefresh: _load,
+          ),
+
+          // "3 new alerts" line
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text(
+              _countLabel(),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 4),
+
+          // main grid / states wrapped in pull-to-refresh
+          Expanded(
+            child: RefreshIndicator.adaptive(
+              onRefresh: _load,
+              color: _accent,
+              child: LayoutBuilder(
+                builder: (ctx, constraints) {
+                  final w = constraints.maxWidth;
+                  final textScale = MediaQuery.textScaleFactorOf(ctx);
+                  final gridDelegate = _gridDelegateFor(w, textScale);
+
+                  const horizontalPad = 12.0;
+                  const topPad = 8.0;
+                  final bottomSafe = MediaQuery.viewPaddingOf(ctx).bottom;
+                  final bottomPad = 28.0 + bottomSafe;
+
+                  // 1) Loading → SkeletonCard grid
+                  if (_loading) {
+                    return GridView.builder(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPad,
+                        topPad,
+                        horizontalPad,
+                        bottomPad,
+                      ),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      cacheExtent: 1800,
+                      gridDelegate: gridDelegate,
+                      itemCount: 9,
+                      itemBuilder: (_, __) => const SkeletonCard(),
+                    );
+                  }
+
+                  // 2) Error → scrollable list with error text (pull to retry still works)
+                  if (_error != null) {
+                    return ListView(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPad,
+                        24,
+                        horizontalPad,
+                        bottomPad,
+                      ),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        Center(
+                          child: Text(
+                            _error!,
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+
+                  // 3) Empty / caught up → friendly bell message
+                  if (!_hasAlerts) {
+                    return ListView(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPad,
+                        24,
+                        horizontalPad,
+                        bottomPad,
+                      ),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        _EmptyAlerts(),
+                      ],
+                    );
+                  }
+
+                  // 4) Normal grid of unread alerts
+                  return GridView.builder(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPad,
+                      topPad,
+                      horizontalPad,
+                      bottomPad,
+                    ),
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    cacheExtent: 2000,
+                    gridDelegate: gridDelegate,
+                    itemCount: _alerts.length,
+                    itemBuilder: (_, i) {
+                      final story = _alerts[i];
+                      return StoryCard(
+                        story: story,
+                        allStories: _alerts,
+                        index: i,
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-/* --------------------------- skeleton row --------------------------- */
+/* ───────────────────────── Toolbar row (under header) ─────────────────────────
+ *
+ * Matches style of HomeScreen._FiltersRow / SavedScreen._SavedToolbarRow.
+ *
+ * Layout:
+ * [ Mark all read ]           [refresh-icon]
+ *
+ * The left side is a red-accent pill ("Mark all read"), disabled if
+ * there are no alerts. The right side is a square icon pill that calls refresh.
+ */
 
-class _SkeletonLine extends StatelessWidget {
-  const _SkeletonLine();
+class _AlertsToolbarRow extends StatelessWidget {
+  const _AlertsToolbarRow({
+    required this.hasAlerts,
+    required this.loading,
+    required this.onMarkAllRead,
+    required this.onRefresh,
+  });
+
+  final bool hasAlerts;
+  final bool loading;
+  final VoidCallback onMarkAllRead;
+  final VoidCallback onRefresh;
+
+  static const _accent = Color(0xFFdc2626);
 
   @override
   Widget build(BuildContext context) {
-    final s = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    Widget markAllReadPill() {
+      final enabled = hasAlerts && !loading;
+
+      final borderColor = enabled
+          ? _accent.withOpacity(0.4)
+          : _accent.withOpacity(0.15);
+      final textColor =
+          enabled ? _accent : _accent.withOpacity(0.4);
+
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: enabled ? onMarkAllRead : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              width: 1,
+              color: borderColor,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.done_all_rounded,
+                size: 16,
+                color: textColor,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Mark all read',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  height: 1.2,
+                  color: textColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget refreshButton() {
+      return _HeaderIconButton(
+        tooltip: 'Refresh',
+        icon: Icons.refresh_rounded,
+        onTap: onRefresh,
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(
+            width: 1,
+            color: isDark
+                ? Colors.white.withOpacity(0.06)
+                : Colors.black.withOpacity(0.06),
+          ),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 96,
-            height: 54,
-            decoration: BoxDecoration(
-              color: s.surfaceVariant.withOpacity(0.4),
-              borderRadius: BorderRadius.circular(8),
+          // left side "Mark all read" pill
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  markAllReadPill(),
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  height: 14,
-                  decoration: BoxDecoration(
-                    color: s.surfaceVariant.withOpacity(0.4),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  height: 12,
-                  width: 140,
-                  decoration: BoxDecoration(
-                    color: s.surfaceVariant.withOpacity(0.35),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ],
-            ),
-          ),
+          // right side refresh button
+          refreshButton(),
         ],
       ),
+    );
+  }
+}
+
+/* ───────────────────────── Empty state ───────────────────────── */
+
+class _EmptyAlerts extends StatelessWidget {
+  const _EmptyAlerts();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.notifications_none_rounded,
+              size: 48,
+              color: cs.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "You're all caught up",
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'New trailers, clips, and drops will show here.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: cs.onSurfaceVariant),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/* ───────────────────────── Shared header widgets ─────────────────────────
+ *
+ * These are copied from SavedScreen (which mirrors HomeScreen),
+ * so Alerts header matches the same visual language everywhere.
+ */
+
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton({
+    required this.icon,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  final IconData icon;
+  final VoidCallback? onTap;
+  final String tooltip;
+
+  static const _accent = Color(0xFFdc2626);
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color bg = isDark
+        ? const Color(0xFF0f172a).withOpacity(0.7)
+        : Colors.black.withOpacity(0.06);
+    final Color fg = isDark ? Colors.white : Colors.black87;
+
+    return Tooltip(
+      message: tooltip,
+      waitDuration: const Duration(milliseconds: 400),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: _accent.withOpacity(0.3),
+              width: 1,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 16,
+            color: fg,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModernBrandLogo extends StatelessWidget {
+  const _ModernBrandLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: const Color(0xFFdc2626),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFdc2626).withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: const Center(
+            child: Text(
+              '🎬',
+              style: TextStyle(
+                fontSize: 16,
+                height: 1,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        const Text(
+          'CinePulse',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.2,
+            color: Colors.white,
+          ),
+        ),
+      ],
     );
   }
 }
