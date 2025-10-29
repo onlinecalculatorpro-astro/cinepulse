@@ -1,61 +1,25 @@
 // lib/features/story/story_card.dart
 //
-// StoryCard
+// FINAL CARD BEHAVIOR (matches your screenshots):
 // -----------------------------------------------------------------------------
-// This is the tile used in Home / Discover / Saved / Alerts.
+// - Top image (16:9-ish responsive height)
+// - Meta row: [pill] [timestamp] [+6m]
+// - Title (3 lines max)
+// - CTA row pinned at bottom: [ big red Watch/Read ] [🔖] [📤]
+// - "Source: xyz.com"
+// - NO summary/body text in the card
 //
-// Visual goals (mirrors SkeletonCard):
-// - Rounded 22px card
-// - Soft 2px border
-// - Gentle drop shadow
-// - Responsive media block up top
-// - Body with:
-//      • meta row (kind pill + timestamp + "+6m")
-//      • title (3 lines max)
-//      • optional summary (2–3 lines)
-//      • bottom row: [ big red CTA ] [ Save ] [ Share ]
-//        then a tiny "Source: example.com"
-//
-// Behavior:
-// - Tapping anywhere on the card opens StoryPagerScreen.
-// - CTA button:
-//     • Label is "Watch" for clips/trailers/video-like things, else "Read".
-//     • If it's a playable clip we understand, we jump into pager with autoplay.
-//       Otherwise we just open the external link.
-// - Save toggles SavedStore.
-// - Share copies deep link on web, opens native sheet on device.
+// Card tap -> opens StoryPagerScreen.
+// Big red CTA:
+//   • If it's a playable clip/trailer we know, open pager w/ autoplay.
+//   • Otherwise, open external link.
+// Save toggles SavedStore. Share copies deeplink (web) / share sheet (native).
 //
 // Theming:
-// - Card background and border match SkeletonCard so loading feels smooth.
-// - All text pulls from theme_colors.dart for contrast in both dark/light.
-// - Accent red is #dc2626 across the app.
+// - Uses theme_colors.dart for text colors so it looks right in light & dark.
+// - Card bg / border line up with SkeletonCard so no flash-on-load.
 //
-// Layout details:
-// - Media height depends on the card width (to keep grid harmonious).
-// - We reserve bottom space so the CTA row doesn't overlap the title/summary
-//   even with large text scale.
-// - Thumbnail uses Hero(tag: 'thumb-<id>') for a snappy open transition.
-//
-// Data resilience:
-// - We try multiple possible timestamp fields (publishedAt, releaseDate, etc.).
-// - We try to guess "Watch" vs "Read" based on URL / kind / source.
-//
-// Dependencies:
-//   cached_network_image
-//   share_plus
-//   url_launcher
-//   google_fonts
-//
-// Local helpers referenced:
-//   SavedStore                (core/cache.dart)
-//   deepLinkForStoryId()      (core/utils.dart)
-//   StoryPagerScreen          (features/story/story_pager.dart)
-//   resolveStoryImageUrl()    (features/story/story_image_url.dart)
-//   storyVideoUrl()           (core/api.dart)
-// -----------------------------------------------------------------------------
-
 import 'dart:math' as math;
-
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -64,7 +28,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // storyVideoUrl
+import '../../core/api.dart'; // storyVideoUrl()
 import '../../core/cache.dart'; // SavedStore
 import '../../core/models.dart';
 import '../../core/utils.dart'; // fadeRoute(), deepLinkForStoryId()
@@ -80,13 +44,12 @@ class StoryCard extends StatefulWidget {
     this.index,
   });
 
-  /// Story content for this tile.
   final Story story;
 
-  /// Full list of stories currently rendered in the grid (for swipe paging).
+  /// The list this story came from (for swipe in pager).
   final List<Story>? allStories;
 
-  /// Index of this story within [allStories].
+  /// Index of this story in [allStories].
   final int? index;
 
   @override
@@ -96,11 +59,11 @@ class StoryCard extends StatefulWidget {
 class _StoryCardState extends State<StoryCard> {
   static const _accent = Color(0xFFdc2626);
 
-  /* ───────────────────────── CTA / URL helpers ───────────────────────── */
+  /* ──────────────── URL / CTA helpers ──────────────── */
 
   Uri? get _videoUrl => storyVideoUrl(widget.story);
 
-  /// Primary link to open (video URL wins, else story.url).
+  /// Prefer playable URL first, fallback to story.url if it's http(s).
   Uri? get _primaryUrl {
     final v = _videoUrl;
     if (v != null) return v;
@@ -110,11 +73,11 @@ class _StoryCardState extends State<StoryCard> {
 
     final u = Uri.tryParse(raw);
     if (u == null) return null;
-    final httpish = u.isScheme('http') || u.isScheme('https');
-    return httpish ? u : null;
+    if (!(u.isScheme('http') || u.isScheme('https'))) return null;
+    return u;
   }
 
-  /// Decide if CTA should say "Watch" vs "Read".
+  /// Should CTA say "Watch" or "Read"?
   bool get _isWatchCta {
     if (_videoUrl != null) return true;
 
@@ -158,7 +121,6 @@ class _StoryCardState extends State<StoryCard> {
       } else {
         await Clipboard.setData(ClipboardData(text: deep));
       }
-
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -168,7 +130,7 @@ class _StoryCardState extends State<StoryCard> {
         ),
       );
     } catch (_) {
-      // Fallback: just copy.
+      // Fallback: copy to clipboard.
       await Clipboard.setData(ClipboardData(text: deep));
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -201,30 +163,30 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  /* ───────────────────────── Timestamp helpers ───────────────────────── */
+  /* ──────────────── Timestamp helpers ──────────────── */
 
   static const List<String> _mon = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
-  // "27 Oct 2025, 3:30 PM"
+  // "29 Oct 2025, 7:19 PM"
   String _fmtFullTs(DateTime dt) {
     final d = dt.toLocal();
-    final dd = d.day;
+    final day = d.day;
     final m = _mon[d.month - 1];
     final y = d.year;
 
-    var h = d.hour % 12;
-    if (h == 0) h = 12;
+    var h12 = d.hour % 12;
+    if (h12 == 0) h12 = 12;
 
     final mm = d.minute.toString().padLeft(2, '0');
     final ap = d.hour >= 12 ? 'PM' : 'AM';
 
-    return '$dd $m $y, $h:$mm $ap';
+    return '$day $m $y, $h12:$mm $ap';
   }
 
-  // "+6m", "+2h", "+1d"
+  // "+3m", "+2h", "+1d"
   String _fmtAgeShort(Duration delta) {
     final abs = delta.isNegative ? -delta : delta;
     if (abs.inMinutes < 60) return '+${abs.inMinutes}m';
@@ -232,7 +194,7 @@ class _StoryCardState extends State<StoryCard> {
     return '+${abs.inDays}d';
   }
 
-  /* ───────────────────── Story data helpers ───────────────────── */
+  /* ──────────────── Story data helpers ──────────────── */
 
   String get _kindRaw => widget.story.kind.toLowerCase().trim();
 
@@ -242,8 +204,8 @@ class _StoryCardState extends State<StoryCard> {
     return _kindRaw[0].toUpperCase() + _kindRaw.substring(1);
   }
 
-  /// Which timestamp do we surface?
-  /// Priority: publishedAt -> releaseDate -> normalizedAt -> ingestedAtCompat.
+  /// Pick a display timestamp:
+  /// publishedAt -> releaseDate -> normalizedAt -> ingestedAtCompat.
   DateTime? get _primaryTimestamp {
     return widget.story.publishedAt ??
         widget.story.releaseDate ??
@@ -251,7 +213,7 @@ class _StoryCardState extends State<StoryCard> {
         widget.story.ingestedAtCompat;
   }
 
-  /// e.g. "youtube.com" or "koimoi.com"
+  /// "koimoi.com" / "youtube.com" / source fallback.
   String _sourceDomain(Story s) {
     final dom = (s.sourceDomain ?? '').trim();
     if (dom.isNotEmpty) return dom;
@@ -260,7 +222,7 @@ class _StoryCardState extends State<StoryCard> {
     return '';
   }
 
-  /* ────────────────────────────── build() ────────────────────────────── */
+  /* ──────────────── build() ──────────────── */
 
   @override
   Widget build(BuildContext context) {
@@ -285,9 +247,8 @@ class _StoryCardState extends State<StoryCard> {
 
     final domain = _sourceDomain(story);
 
-    // Card chrome (matches SkeletonCard)
-    final cardBg =
-        cs.surface.withOpacity(isDark ? 0.92 : 0.97); // frosted feel
+    // Card surface styling (sync with SkeletonCard)
+    final cardBg = cs.surface.withOpacity(isDark ? 0.92 : 0.97);
     final borderColor = Colors.white.withOpacity(0.08);
 
     return Container(
@@ -307,7 +268,7 @@ class _StoryCardState extends State<StoryCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          // Whole card tap → open pager.
+          // Whole card should open details.
           onTap: () => _openDetails(
             autoplay: _isWatchCta && _videoUrl != null,
           ),
@@ -316,7 +277,7 @@ class _StoryCardState extends State<StoryCard> {
               final w = box.maxWidth;
               final h = box.maxHeight;
 
-              // Responsive media height (same math we used in SkeletonCard)
+              // Responsive media height (same idea as SkeletonCard)
               final targetAspect = w >= 1200
                   ? (16 / 7)
                   : w >= 900
@@ -331,7 +292,7 @@ class _StoryCardState extends State<StoryCard> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  /* ───── Thumbnail / Hero ───── */
+                  /* ── Thumbnail / hero ── */
                   SizedBox(
                     height: mediaH.toDouble(),
                     child: Hero(
@@ -362,7 +323,7 @@ class _StoryCardState extends State<StoryCard> {
                                 kind: story.kind,
                               ),
 
-                            // Subtle bottom overlay gradient
+                            // subtle bottom gradient overlay
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -384,13 +345,13 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // divider under image
+                  // hairline divider
                   Container(
                     height: 1,
                     color: Colors.white.withOpacity(0.06),
                   ),
 
-                  /* ───── Body ───── */
+                  /* ── Body ── */
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
@@ -400,7 +361,7 @@ class _StoryCardState extends State<StoryCard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // meta line
+                          // meta row
                           _MetaLine(
                             kindRaw: _kindRaw,
                             kindLabel: _kindLabel,
@@ -409,7 +370,7 @@ class _StoryCardState extends State<StoryCard> {
                           ),
                           const SizedBox(height: 14),
 
-                          // title
+                          // title ONLY (no summary, keep 3 lines)
                           Text(
                             story.title,
                             maxLines: 3,
@@ -422,28 +383,12 @@ class _StoryCardState extends State<StoryCard> {
                             ),
                           ),
 
-                          // summary (if any)
-                          if ((story.summary ?? '').trim().isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Text(
-                              story.summary!.trim(),
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.inter(
-                                fontSize: 13,
-                                height: 1.4,
-                                fontWeight: FontWeight.w400,
-                                color: secondaryTextColor(context),
-                              ),
-                            ),
-                          ],
-
                           const Spacer(),
 
                           // CTA row
                           Row(
                             children: [
-                              // Big red CTA
+                              // Red Watch/Read button
                               Expanded(
                                 child: SizedBox(
                                   height: 46,
@@ -462,6 +407,8 @@ class _StoryCardState extends State<StoryCard> {
                                     onPressed: _primaryUrl == null
                                         ? null
                                         : () {
+                                            // If it's a playable clip, open pager w/ autoplay.
+                                            // Otherwise, launch the external article/video URL.
                                             if (_isWatchCta &&
                                                 _videoUrl != null) {
                                               _openDetails(autoplay: true);
@@ -485,7 +432,8 @@ class _StoryCardState extends State<StoryCard> {
                                         borderRadius:
                                             BorderRadius.circular(10),
                                         side: BorderSide(
-                                          color: Colors.white.withOpacity(0.08),
+                                          color:
+                                              Colors.white.withOpacity(0.08),
                                           width: 1,
                                         ),
                                       ),
@@ -496,7 +444,7 @@ class _StoryCardState extends State<StoryCard> {
 
                               const SizedBox(width: 12),
 
-                              // Save toggle
+                              // Save button
                               AnimatedBuilder(
                                 animation: SavedStore.instance,
                                 builder: (_, __) {
@@ -516,7 +464,7 @@ class _StoryCardState extends State<StoryCard> {
 
                               const SizedBox(width: 8),
 
-                              // Share
+                              // Share button
                               _SquareActionButton(
                                 tooltip: 'Share',
                                 onTap: () => _shareStory(context),
@@ -530,8 +478,9 @@ class _StoryCardState extends State<StoryCard> {
 
                           const SizedBox(height: 12),
 
-                          // "Source:" footer
-                          if (domain.isNotEmpty) _SourceLine(domain: domain),
+                          // Source: domain
+                          if (domain.isNotEmpty)
+                            _SourceLine(domain: domain),
                         ],
                       ),
                     ),
@@ -546,7 +495,7 @@ class _StoryCardState extends State<StoryCard> {
   }
 }
 
-/* ─────────────────────── Meta line row ─────────────────────── */
+/* ──────────────── Meta line row ──────────────── */
 
 class _KindStyle {
   final Color bg;
@@ -559,10 +508,11 @@ class _KindStyle {
   });
 }
 
+// Pick badge colors per kind ("News", "Release", etc.)
 _KindStyle _styleForKind(String rawKind) {
   final k = rawKind.toLowerCase().trim();
 
-  // Tailwind-ish tones
+  // Tailwind-ish accents
   const red = Color(0xFFdc2626);
   const blue = Color(0xFF3b82f6);
   const purple = Color(0xFF8b5cf6);
@@ -621,8 +571,8 @@ class _MetaLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = _styleForKind(kindRaw);
     const accent = Color(0xFFdc2626);
+    final style = _styleForKind(kindRaw);
 
     final pill = kindLabel.isEmpty
         ? const SizedBox.shrink()
@@ -690,7 +640,7 @@ class _MetaLine extends StatelessWidget {
   }
 }
 
-/* ─────────────────────── Source footer line ─────────────────────── */
+/* ──────────────── "Source:" footer ──────────────── */
 
 class _SourceLine extends StatelessWidget {
   const _SourceLine({required this.domain});
@@ -727,7 +677,7 @@ class _SourceLine extends StatelessWidget {
   }
 }
 
-/* ─────────────────────── Square icon buttons ─────────────────────── */
+/* ──────────────── Square action buttons (Save / Share) ──────────────── */
 
 class _SquareActionButton extends StatelessWidget {
   const _SquareActionButton({
@@ -774,7 +724,7 @@ class _SquareActionButton extends StatelessWidget {
   }
 }
 
-/* ─────────────────────── Fallback thumbnail ─────────────────────── */
+/* ──────────────── Fallback thumbnail when no image ──────────────── */
 
 class _FallbackThumb extends StatelessWidget {
   const _FallbackThumb({
@@ -791,7 +741,6 @@ class _FallbackThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        // Light vertical gradient when we have no actual image
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
@@ -816,7 +765,6 @@ class _KindGlyph extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Quick visual hint when no thumbnail image
     IconData iconData = Icons.movie_rounded;
     Color iconColor = const Color(0xFFECC943);
 
@@ -837,10 +785,10 @@ class _KindGlyph extends StatelessWidget {
       size: 52,
       color: iconColor.withOpacity(0.9),
     );
-    }
+  }
 }
 
-/* ─────────────────────── Emoji text helper ─────────────────────── */
+/* ──────────────── Emoji glyph helper (📖, 📤, etc.) ──────────────── */
 
 class _Emoji extends StatelessWidget {
   const _Emoji({required this.emoji, this.size = 16});
@@ -867,7 +815,7 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-/* ─────────────────────── Legacy ingestion timestamp ─────────────────────── */
+/* ──────────────── Legacy ingestion timestamp helper ──────────────── */
 
 extension _StoryCompat on Story {
   // Some payloads have ingestedAt in weird places / formats.
