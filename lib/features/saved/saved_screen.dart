@@ -1,46 +1,45 @@
 // lib/features/saved/saved_screen.dart
 //
-// Saved tab
-// - Local bookmarks from SavedStore.
-// - CinePulse-style header (same vibe as HomeScreen).
-// - Search + sort (recent vs title) + export + clear
-// - Responsive SliverGrid like Home.
-// - Cards open into StoryPagerScreen via StoryCard (already handled there).
+// SAVED TAB (restyled to match HomeScreen)
+// ---------------------------------------
+// • Header bar now matches HomeScreen header style (CinePulse + pill icons).
+// • The row right under the header now matches HomeScreen's _FiltersRow style:
+//   - dark strip with red-accent pills
+//   - left: search box for saved items
+//   - right: sort pill ("Recent"/"Title"), export, clear-all
+// • The grid uses the SAME sizing logic as Home feed (_FeedListState._gridDelegateFor)
+//   so StoryCard tiles are identical size everywhere in the app.
+//
+// Notes:
+// - We listen to SavedStore.instance so the screen live-updates when bookmarks
+//   change.
+// - We debounce search (250ms).
+// - "Export" copies/shares the links.
+// - "Clear all" wipes SavedStore after confirm.
+//
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/cache.dart'; // SavedStore, SavedSort, FeedCache
 import '../../core/models.dart';
 import '../story/story_card.dart';
 
 class SavedScreen extends StatefulWidget {
-  const SavedScreen({
-    super.key,
-    this.onOpenHome,
-    this.onOpenAlerts,
-    this.onOpenDiscover,
-    this.onOpenMenu,
-  });
-
-  // Header actions passed from RootShell so user can navigate without browser back.
-  final VoidCallback? onOpenHome;
-  final VoidCallback? onOpenAlerts;
-  final VoidCallback? onOpenDiscover;
-  final VoidCallback? onOpenMenu;
+  const SavedScreen({super.key});
 
   @override
   State<SavedScreen> createState() => _SavedScreenState();
 }
 
 class _SavedScreenState extends State<SavedScreen> {
-  // We use SavedSort from core/cache.dart. DO NOT redeclare another enum.
+  // sort mode for saved list (SavedSort comes from core/cache.dart)
   SavedSort _sort = SavedSort.recent;
 
   final _query = TextEditingController();
@@ -67,6 +66,8 @@ class _SavedScreenState extends State<SavedScreen> {
     });
   }
 
+  /* ───────────────────────── Export / Clear all ───────────────────────── */
+
   Future<void> _export(BuildContext context) async {
     final text = SavedStore.instance.exportLinks();
     try {
@@ -84,6 +85,7 @@ class _SavedScreenState extends State<SavedScreen> {
         ),
       );
     } catch (_) {
+      // fallback: just copy
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -116,387 +118,464 @@ class _SavedScreenState extends State<SavedScreen> {
     }
   }
 
-  // Just re-run filters/sort, there's no network fetch for local saved items.
-  Future<void> _refreshLocal() async {
-    setState(() {});
+  /* ───────────────────────── Helpers ───────────────────────── */
+
+  // label for the sort pill
+  String _sortLabel(SavedSort s) {
+    return s == SavedSort.recent ? 'Recent' : 'Title';
   }
 
-  // same responsive grid math we used before
-  SliverGridDelegate _gridDelegateFor(BuildContext context) {
-    final screenW = MediaQuery.of(context).size.width;
-    final textScale = MediaQuery.textScaleFactorOf(context);
-
-    double maxTileW;
-    if (screenW < 520) {
-      maxTileW = screenW; // 1 col on narrow phones
-    } else if (screenW < 900) {
-      maxTileW = screenW / 2; // 2 cols
-    } else if (screenW < 1400) {
-      maxTileW = screenW / 3; // 3 cols
+  // same grid sizing logic as HomeScreen feed (_FeedListState._gridDelegateFor)
+  SliverGridDelegate _gridDelegateFor(double width, double textScale) {
+    int estCols;
+    if (width < 520) {
+      estCols = 1;
+    } else if (width < 900) {
+      estCols = 2;
+    } else if (width < 1400) {
+      estCols = 3;
     } else {
-      maxTileW = screenW / 4; // 4 cols on wide layouts
+      estCols = 4;
     }
+
+    double maxTileW = width / estCols;
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
-    // childAspectRatio = width / height (lower -> taller).
-    double ratio;
-    if (maxTileW <= 340) {
-      ratio = 0.56;
-    } else if (maxTileW <= 380) {
-      ratio = 0.64;
-    } else if (maxTileW <= 420) {
-      ratio = 0.72;
+    double baseRatio;
+    if (estCols == 1) {
+      baseRatio = 0.88;
+    } else if (estCols == 2) {
+      baseRatio = 0.95;
     } else {
-      ratio = 0.80;
+      baseRatio = 1.00;
     }
 
-    // Bigger text -> give more height.
-    ratio /= textScale.clamp(1.0, 1.8);
+    final scaleForHeight = textScale.clamp(1.0, 1.4);
+    final effectiveRatio = baseRatio / scaleForHeight;
 
     return SliverGridDelegateWithMaxCrossAxisExtent(
       maxCrossAxisExtent: maxTileW,
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
-      childAspectRatio: ratio,
+      childAspectRatio: effectiveRatio,
     );
   }
 
-  String _sortChipLabel(SavedSort s) {
-    switch (s) {
-      case SavedSort.recent:
-        return 'Recent';
-      case SavedSort.title:
-        return 'Title';
-    }
-  }
+  /* ───────────────────────── UI build ───────────────────────── */
 
-  IconData _sortChipIcon(SavedSort s) {
-    switch (s) {
-      case SavedSort.recent:
-        return Icons.history;
-      case SavedSort.title:
-        return Icons.sort_by_alpha;
-    }
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bgColor =
+        isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
+
+    // breakpoint for wide layouts, same as HomeScreen
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isWide = screenWidth >= 768;
+
+    return AnimatedBuilder(
+      animation: SavedStore.instance,
+      builder: (context, _) {
+        if (!SavedStore.instance.isReady) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        // Pull saved stories from cache in the requested sort order.
+        final ids = SavedStore.instance.orderedIds(_sort);
+        final stories =
+            ids.map(FeedCache.get).whereType<Story>().toList(growable: false);
+
+        // Filter by local search.
+        final q = _query.text.trim().toLowerCase();
+        final filtered = q.isEmpty
+            ? stories
+            : stories.where((s) {
+                final title = s.title.toLowerCase();
+                final summ = (s.summary ?? '').toLowerCase();
+                return title.contains(q) || summ.contains(q);
+              }).toList();
+
+        // "3 items", "1 item", etc. (this uses *total* saved count, like before)
+        final total = stories.length;
+        final countText = switch (total) {
+          0 => 'No items',
+          1 => '1 item',
+          _ => '$total items',
+        };
+
+        return Scaffold(
+          backgroundColor: bgColor,
+
+          /* ───────────────── Header bar (matches HomeScreen style) ──────────── */
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(64),
+            child: ClipRRect(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  height: 64,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: isDark
+                          ? [
+                              const Color(0xFF1e2537).withOpacity(0.9),
+                              const Color(0xFF0b0f17).withOpacity(0.95),
+                            ]
+                          : [
+                              theme.colorScheme.surface.withOpacity(0.95),
+                              theme.colorScheme.surface.withOpacity(0.9),
+                            ],
+                    ),
+                    border: const Border(
+                      bottom: BorderSide(
+                        color: Color(0x0FFFFFFF),
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const _ModernBrandLogo(),
+                      const Spacer(),
+
+                      // On wide / desktop, surface quick nav icons.
+                      if (isWide) ...[
+                        _HeaderIconButton(
+                          tooltip: 'Home',
+                          icon: Icons.home_rounded,
+                          onTap: null, // nav handled by RootShell
+                        ),
+                        const SizedBox(width: 8),
+                        _HeaderIconButton(
+                          tooltip: 'Alerts',
+                          icon: Icons.notifications_rounded,
+                          onTap: null, // nav handled by RootShell
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+
+                      _HeaderIconButton(
+                        tooltip: 'Menu',
+                        icon: Icons.menu_rounded,
+                        onTap: null, // drawer opened by RootShell
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          /* ───────────────── Body ───────────────── */
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Row under header: styled like HomeScreen._FiltersRow
+              _SavedToolbarRow(
+                queryController: _query,
+                currentSort: _sort,
+                onSortPicked: (v) {
+                  setState(() => _sort = v);
+                },
+                onExportTap: () => _export(context),
+                onClearAllTap: () => _clearAll(context),
+              ),
+
+              // count line (left aligned)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Text(
+                  countText,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 4),
+
+              // main grid of saved cards
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (ctx, constraints) {
+                    final w = constraints.maxWidth;
+                    final textScale = MediaQuery.textScaleFactorOf(ctx);
+                    final gridDelegate = _gridDelegateFor(w, textScale);
+
+                    const horizontalPad = 12.0;
+                    const topPad = 8.0;
+                    final bottomSafe =
+                        MediaQuery.viewPaddingOf(ctx).bottom; // for iOS notch
+                    final bottomPad = 28.0 + bottomSafe;
+
+                    if (filtered.isEmpty) {
+                      // empty state centered
+                      return ListView(
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPad,
+                          24,
+                          horizontalPad,
+                          bottomPad,
+                        ),
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: const [
+                          _EmptySaved(),
+                        ],
+                      );
+                    }
+
+                    return GridView.builder(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPad,
+                        topPad,
+                        horizontalPad,
+                        bottomPad,
+                      ),
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      cacheExtent: 2000,
+                      gridDelegate: gridDelegate,
+                      itemCount: filtered.length,
+                      itemBuilder: (_, i) {
+                        final story = filtered[i];
+                        return StoryCard(
+                          story: story,
+                          allStories: filtered,
+                          index: i,
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
+}
+
+/* ───────────────────────── Toolbar row under header ─────────────────────────
+ *
+ * Visually matches HomeScreen._FiltersRow:
+ * - same background color band
+ * - same bottom border line
+ * - red-accent pill controls
+ * But instead of chips we show:
+ *   [ Search box .................. ]  [Sort pill] [Export] [Clear]
+ */
+class _SavedToolbarRow extends StatelessWidget {
+  const _SavedToolbarRow({
+    required this.queryController,
+    required this.currentSort,
+    required this.onSortPicked,
+    required this.onExportTap,
+    required this.onClearAllTap,
+  });
+
+  final TextEditingController queryController;
+  final SavedSort currentSort;
+  final ValueChanged<SavedSort> onSortPicked;
+  final VoidCallback onExportTap;
+  final VoidCallback onClearAllTap;
+
+  static const _accent = Color(0xFFdc2626);
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
+    // pill for sort ("Recent"/"Title") with popup menu, styled like Home sort pill
+    Widget sortPill() {
+      IconData icon =
+          (currentSort == SavedSort.recent) ? Icons.history : Icons.sort_by_alpha;
+      final label = currentSort == SavedSort.recent ? 'Recent' : 'Title';
 
-    // header gradient colors copied from HomeScreen style
-    final headerGradientColors = isDark
-        ? [
-            const Color(0xFF1e2537).withOpacity(0.9),
-            const Color(0xFF0b0f17).withOpacity(0.95),
-          ]
-        : [
-            theme.colorScheme.surface.withOpacity(0.95),
-            theme.colorScheme.surface.withOpacity(0.9),
-          ];
-
-    final borderBottomColor =
-        isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.06);
-
-    return Scaffold(
-      backgroundColor: bgColor,
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(64),
-        child: ClipRRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-            child: Container(
-              height: 64,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: headerGradientColors,
-                ),
-                border: Border(
-                  bottom: BorderSide(
-                    color: borderBottomColor,
-                    width: 1,
-                  ),
-                ),
+      return PopupMenuButton<SavedSort>(
+        tooltip: 'Sort',
+        onSelected: onSortPicked,
+        itemBuilder: (_) => [
+          PopupMenuItem(
+            value: SavedSort.recent,
+            child: Row(
+              children: const [
+                Icon(Icons.history, size: 18),
+                SizedBox(width: 8),
+                Text('Recently saved'),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: SavedSort.title,
+            child: Row(
+              children: const [
+                Icon(Icons.sort_by_alpha, size: 18),
+                SizedBox(width: 8),
+                Text('Title (A–Z)'),
+              ],
+            ),
+          ),
+        ],
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: null, // tap handled by PopupMenuButton
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                width: 1,
+                color: _accent.withOpacity(0.4),
               ),
-              child: Row(
-                children: [
-                  const _SavedBrandLogo(),
-                  const Spacer(),
-                  // Nav icons so user can move around without browser Back.
-                  _SavedHeaderIconButton(
-                    tooltip: 'Home',
-                    icon: Icons.home_rounded,
-                    onTap: widget.onOpenHome,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  size: 16,
+                  color: _accent,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    height: 1.2,
+                    color: _accent,
                   ),
-                  const SizedBox(width: 8),
-                  _SavedHeaderIconButton(
-                    tooltip: 'Alerts',
-                    icon: Icons.notifications_rounded,
-                    onTap: widget.onOpenAlerts,
-                  ),
-                  const SizedBox(width: 8),
-                  _SavedHeaderIconButton(
-                    tooltip: 'Discover',
-                    icon: kIsWeb
-                        ? Icons.explore_outlined
-                        : Icons.manage_search_rounded,
-                    onTap: widget.onOpenDiscover,
-                  ),
-                  const SizedBox(width: 8),
-                  _SavedHeaderIconButton(
-                    tooltip: 'Menu',
-                    icon: Icons.menu_rounded,
-                    onTap: widget.onOpenMenu,
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 2),
+                const Icon(
+                  Icons.arrow_drop_down_rounded,
+                  size: 18,
+                  color: _accent,
+                ),
+              ],
             ),
           ),
         ),
+      );
+    }
+
+    // export button and clear-all button use same visual style
+    Widget actionSquare({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback onTap,
+    }) {
+      return _HeaderIconButton(
+        icon: icon,
+        tooltip: tooltip,
+        onTap: onTap,
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(
+            width: 1,
+            color: isDark
+                ? Colors.white.withOpacity(0.06)
+                : Colors.black.withOpacity(0.06),
+          ),
+        ),
       ),
-      body: AnimatedBuilder(
-        animation: SavedStore.instance,
-        builder: (context, _) {
-          if (!SavedStore.instance.isReady) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          // pull stories from local store in chosen sort order
-          final ids = SavedStore.instance.orderedIds(_sort);
-          final stories =
-              ids.map(FeedCache.get).whereType<Story>().toList(growable: false);
-
-          // apply search filter
-          final q = _query.text.trim().toLowerCase();
-          final filtered = q.isEmpty
-              ? stories
-              : stories.where((s) {
-                  final title = s.title.toLowerCase();
-                  final summ = (s.summary ?? '').toLowerCase();
-                  return title.contains(q) || summ.contains(q);
-                }).toList();
-
-          // for count label
-          final total = stories.length;
-          final countText = switch (total) {
-            0 => 'No items',
-            1 => '1 item',
-            _ => '$total items',
-          };
-
-          // paddings mimic Home grid
-          const horizontalPad = 12.0;
-          const topPad = 8.0;
-          final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
-          final bottomPad = 28.0 + bottomSafe;
-
-          final gridDelegate = _gridDelegateFor(context);
-
-          return RefreshIndicator.adaptive(
-            onRefresh: _refreshLocal,
-            color: const Color(0xFFdc2626),
-            child: CustomScrollView(
-              slivers: [
-                // TOOLBAR ROW
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // search field
-                        Expanded(
-                          child: TextField(
-                            controller: _query,
-                            textInputAction: TextInputAction.search,
-                            decoration: InputDecoration(
-                              hintText: 'Search saved…',
-                              prefixIcon: const Icon(Icons.search),
-                              suffixIcon: (_query.text.trim().isEmpty)
-                                  ? null
-                                  : IconButton(
-                                      tooltip: 'Clear',
-                                      onPressed: () {
-                                        _query.clear();
-                                      },
-                                      icon: const Icon(Icons.close_rounded),
-                                    ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-
-                        // sort pill popup
-                        PopupMenuButton<SavedSort>(
-                          tooltip: 'Sort',
-                          onSelected: (v) => setState(() => _sort = v),
-                          itemBuilder: (_) => [
-                            PopupMenuItem(
-                              value: SavedSort.recent,
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.history, size: 18),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Recently saved',
-                                    style: GoogleFonts.inter(),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            PopupMenuItem(
-                              value: SavedSort.title,
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.sort_by_alpha, size: 18),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Title (A–Z)',
-                                    style: GoogleFonts.inter(),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                          child: _SavedSortChip(
-                            label: _sortChipLabel(_sort),
-                            icon: _sortChipIcon(_sort),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-
-                        // Export (share / copy links)
-                        IconButton.filledTonal(
-                          tooltip: 'Export saved',
-                          icon: const Icon(Icons.ios_share),
-                          onPressed: () => _export(context),
-                        ),
-                        const SizedBox(width: 4),
-
-                        // Clear all
-                        IconButton(
-                          tooltip: 'Clear all',
-                          icon: const Icon(Icons.delete_outline),
-                          onPressed: () => _clearAll(context),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                // count row
-                SliverToBoxAdapter(
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 4,
-                      ),
-                      child: Text(
-                        countText,
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SliverToBoxAdapter(child: SizedBox(height: 4)),
-
-                // empty state
-                if (filtered.isEmpty)
-                  SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: const _EmptySaved(),
-                  )
-                else
-                  // grid of saved cards
-                  SliverPadding(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPad,
-                      topPad,
-                      horizontalPad,
-                      bottomPad,
-                    ),
-                    sliver: SliverGrid(
-                      gridDelegate: gridDelegate,
-                      delegate: SliverChildBuilderDelegate(
-                        (ctx, i) {
-                          final story = filtered[i];
-                          return StoryCard(
-                            story: story,
-                            allStories: filtered,
-                            index: i,
-                          );
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Search field expands
+          Expanded(
+            child: TextField(
+              controller: queryController,
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: 'Search saved…',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: (queryController.text.trim().isEmpty)
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear',
+                        onPressed: () {
+                          queryController.clear();
                         },
-                        childCount: filtered.length,
+                        icon: const Icon(Icons.close_rounded),
                       ),
-                    ),
-                  ),
-              ],
+              ),
             ),
-          );
-        },
+          ),
+
+          const SizedBox(width: 12),
+
+          // trailing pills / buttons
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              sortPill(),
+              actionSquare(
+                icon: Icons.ios_share,
+                tooltip: 'Export saved',
+                onTap: onExportTap,
+              ),
+              actionSquare(
+                icon: Icons.delete_outline,
+                tooltip: 'Clear all',
+                onTap: onClearAllTap,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-/* ------------------------- Sort chip pill ------------------------- */
+/* ───────────────────────── Empty state ───────────────────────── */
 
-class _SavedSortChip extends StatelessWidget {
-  const _SavedSortChip({
-    required this.label,
-    required this.icon,
-  });
-
-  final String label;
-  final IconData icon;
-
-  static const _accent = Color(0xFFdc2626);
+class _EmptySaved extends StatelessWidget {
+  const _EmptySaved();
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            width: 1,
-            color: _accent.withOpacity(0.4),
-          ),
-        ),
-        child: Row(
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 16, color: _accent),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                height: 1.2,
-                color: _accent,
-              ),
+            Icon(
+              Icons.bookmark_add_outlined,
+              size: 48,
+              color: cs.onSurfaceVariant,
             ),
-            const SizedBox(width: 2),
-            const Icon(
-              Icons.arrow_drop_down_rounded,
-              size: 18,
-              color: _accent,
+            const SizedBox(height: 12),
+            Text(
+              'No saved items yet',
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Tap the bookmark on any card to save it here.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: cs.onSurfaceVariant),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -505,10 +584,14 @@ class _SavedSortChip extends StatelessWidget {
   }
 }
 
-/* ------------------------- Header helpers ------------------------- */
+/* ───────────────────────── Shared UI bits ─────────────────────────
+ *
+ * These mirror the private widgets in HomeScreen so SavedScreen header
+ * looks/feels identical: red CinePulse logo block and square icon pills.
+ */
 
-class _SavedHeaderIconButton extends StatelessWidget {
-  const _SavedHeaderIconButton({
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton({
     required this.icon,
     required this.onTap,
     required this.tooltip,
@@ -521,11 +604,11 @@ class _SavedHeaderIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = isDark
+    final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
+    final Color bg = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : Colors.black.withOpacity(0.06);
-    final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
-    final iconColor = isDark ? Colors.white : Colors.black87;
+    final Color fg = isDark ? Colors.white : Colors.black87;
 
     return Tooltip(
       message: tooltip,
@@ -547,7 +630,7 @@ class _SavedHeaderIconButton extends StatelessWidget {
           child: Icon(
             icon,
             size: 16,
-            color: iconColor,
+            color: fg,
           ),
         ),
       ),
@@ -555,8 +638,8 @@ class _SavedHeaderIconButton extends StatelessWidget {
   }
 }
 
-class _SavedBrandLogo extends StatelessWidget {
-  const _SavedBrandLogo();
+class _ModernBrandLogo extends StatelessWidget {
+  const _ModernBrandLogo();
 
   @override
   Widget build(BuildContext context) {
@@ -599,47 +682,6 @@ class _SavedBrandLogo extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-/* ------------------------------ Empty state ------------------------------ */
-
-class _EmptySaved extends StatelessWidget {
-  const _EmptySaved();
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.bookmark_add_outlined,
-              size: 48,
-              color: cs.onSurfaceVariant,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'No saved items yet',
-              style: Theme.of(context).textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Tap the bookmark on any card to save it here.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: cs.onSurfaceVariant),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
