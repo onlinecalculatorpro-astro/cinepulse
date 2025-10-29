@@ -1,54 +1,70 @@
 // lib/features/home/home_screen.dart
 //
-// HOME TAB
-// -------------------------------------------------------------
-// This screen renders the main feed grid plus header + filters.
+// HomeScreen = main "Home" tab.
 //
-// FINAL NAV / HEADER RULES (after mobile nav changes)
-// -------------------------------------------------------------
+// Responsibilities:
+//   • Renders the main feed grid (cards / skeletons / errors)
+//   • Shows the global header bar and filter row
+//   • Handles inline search, sorting, paging, pull-to-refresh,
+//     offline fallback, and realtime updates
 //
-// • On phones (<768px wide):
-//    - Bottom nav has 4 CTAs: Home / Discover / Saved / Alerts.
-//    - Because of that, the HOME header should NOT show nav pills
-//      for Discover / Saved / Alerts. Those already exist in bottom nav.
-//    - Mobile header should only show utility CTAs:
-//         [Search] [Refresh] [Menu]
-//      - Tapping Search toggles the inline search row ("Row 3").
+// -----------------------------------------------------------------------------
+// NAV / HEADER BEHAVIOR
+// -----------------------------------------------------------------------------
 //
-// • On wide layouts (≥768px wide):
-//    - There is NO bottom nav, so header must expose cross-nav CTAs.
-//    - HomeScreen is "current", so we do NOT show a "Home" CTA.
-//    - We DO show:
-//         [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
-//      (Search still toggles the inline search row.)
+// COMPACT (<768px width):
+//   - Bottom nav (RootShell) already shows [Home][Discover][Saved][Alerts].
+//   - So Home header only shows utility icons:
+//        [Search] [Refresh] [Menu]
+//   - Tapping [Search] reveals the inline search bar row.
 //
-// • The inline search row sits UNDER the chips row.
-//   It's hidden by default and appears when the header Search CTA is tapped.
-//   RootShell no longer tries to control it. We keep `showSearchBar` prop
-//   for backward compatibility, but RootShell now always passes `false`.
+// WIDE (≥768px width):
+//   - No bottom nav, so header must expose cross-tab CTAs.
+//   - Home is considered "current", so we DO NOT show a "Home" pill.
+//   - We DO show:
+//        [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
+//   - [Search] still toggles the inline search bar row.
 //
-// ROW STRUCTURE
-// -------------------------------------------------------------
-// Row 1: Frosted header bar with logo + CTAs
-// Row 2: Category chips (All / Entertainment / Sports) + Sort pill
-// Row 3: (conditional) Search bar (shows if user taps Search CTA)
-// Body : TabBarView with 3 feeds (All / Entertainment / Sports)
+// -----------------------------------------------------------------------------
+// LAYOUT
+// -----------------------------------------------------------------------------
 //
-// Offline banner shows above Row 2 if we're offline.
+// Row 1: Frosted header bar (logo + CTAs)
+// Row 2: Filter row
+//        - Category chips: All / Entertainment / Sports
+//        - Sort pill ("Latest first", "Trending now", etc.)
+//        - Offline banner appears ABOVE this row if offline
+// Row 3: Inline search bar (visible after tapping [Search])
+// Body : TabBarView with a feed per category
 //
-// Data / refresh
-// -------------------------------------------------------------
-// _PagedFeed manages paging per tab, caches to disk, polls API,
-// and we keep a WebSocket open for realtime pings that trigger reload.
+// The feed supports:
+//   - local paging cache
+//   - manual refresh (Refresh CTA)
+//   - auto-refresh every 2 minutes (only when foreground and not offline)
+//   - realtime WebSocket ping triggers (debounced)
+//   - offline mode fallback (cached content)
+//   - client-side sorting modes
+//   - client-side text search
 //
-// We also support manual refresh (Refresh CTA), periodic refresh,
-// and auto-refresh on realtime "ping".
+// -----------------------------------------------------------------------------
+// SORT MODES
+// -----------------------------------------------------------------------------
+// Latest first     (_SortMode.latest)
+// Trending now     (_SortMode.trending)
+// Most viewed      (_SortMode.views)
+// Editor’s pick    (_SortMode.editorsPick)
 //
-// Sorting
-// -------------------------------------------------------------
-// Sort modes: Latest / Trending / Most viewed / Editor's pick
-// Applied client-side on the visible list before rendering.
+// Sorting is applied client-side on the in-memory list for the
+// currently-selected tab.
 //
+// -----------------------------------------------------------------------------
+// NOTE ABOUT showSearchBar
+// -----------------------------------------------------------------------------
+// RootShell used to control search visibility. Now HomeScreen controls it
+// internally via the [Search] CTA in the header. We keep `showSearchBar`
+// as a legacy prop (RootShell always passes false).
+// -----------------------------------------------------------------------------
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' show ImageFilter;
@@ -59,19 +75,20 @@ import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
-import '../../core/api.dart';
-import '../../core/cache.dart';
+import '../../core/api.dart'; // fetchFeed(), kApiBaseUrl
+import '../../core/cache.dart'; // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
+import '../../core/utils.dart'; // fadeRoute(), deepLinkForStoryId()
+import '../../theme/theme_colors.dart'; // primaryTextColor(), secondaryTextColor(), faintTextColor()
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
+import '../../widgets/search_bar.dart'; // SearchBarInput
 import '../../widgets/skeleton_card.dart';
-import '../../widgets/search_bar.dart'; // shared SearchBarInput
-import '../../theme/theme_colors.dart'; // theme-aware text colors
 import '../story/story_card.dart';
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Sort mode enum
-   ───────────────────────────────────────────────────────────────────────── */
+ * Sort mode enum
+ * ───────────────────────────────────────────────────────────────────────── */
 enum _SortMode {
   latest,
   trending,
@@ -80,12 +97,12 @@ enum _SortMode {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   HomeScreen
-   ───────────────────────────────────────────────────────────────────────── */
+ * HomeScreen widget
+ * ───────────────────────────────────────────────────────────────────────── */
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    this.showSearchBar = false, // legacy flag (RootShell now always false)
+    this.showSearchBar = false, // legacy; RootShell always sends false now
     this.onMenuPressed,
     this.onHeaderRefresh,
     this.onOpenDiscover,
@@ -93,19 +110,17 @@ class HomeScreen extends StatefulWidget {
     this.onOpenAlerts,
   });
 
-  /// Legacy hook from older bottom nav design where "Search" was a tab.
-  /// RootShell now always passes false. We keep it only so RootShell
-  /// doesn't break. Inline search row is now controlled internally
-  /// by tapping the header Search CTA.
+  /// Legacy prop from when search was "owned" by RootShell.
+  /// We keep it to avoid breaking the call site.
   final bool showSearchBar;
 
-  /// Opens global menu drawer.
+  /// Opens the global right-side drawer ("Menu").
   final VoidCallback? onMenuPressed;
 
-  /// Called after manual refresh succeeds.
+  /// Callback after a manual refresh succeeds.
   final VoidCallback? onHeaderRefresh;
 
-  /// Navigation callbacks for wide layouts (≥768px).
+  /// Wide-layout navigation callbacks that jump to other RootShell tabs.
   final VoidCallback? onOpenDiscover;
   final VoidCallback? onOpenSaved;
   final VoidCallback? onOpenAlerts;
@@ -116,38 +131,44 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  // Tabs we expose in UI.
+  // Tabs for this feed layer.
   static const Map<String, String> _tabs = {
     'all': 'All',
     'entertainment': 'Entertainment',
     'sports': 'Sports',
   };
 
+  // refresh + realtime timing
   static const Duration _kAutoRefreshEvery = Duration(minutes: 2);
   static const Duration _kRealtimeDebounce = Duration(milliseconds: 500);
 
+  // controller for tabs ("All" / "Entertainment" / "Sports")
   late final TabController _tab =
       TabController(length: _tabs.length, vsync: this);
 
+  // inline search text controller (Row 3)
   final TextEditingController _search = TextEditingController();
 
+  // feed state per tab key
   final Map<String, _PagedFeed> _feeds = {
-    for (final k in _tabs.keys) k: _PagedFeed(tab: k)
+    for (final k in _tabs.keys) k: _PagedFeed(tab: k),
   };
 
-  // Keys for each category chip ("All", "Entertainment", "Sports")
+  // we keep keys so we can scroll selected chip into view
   final List<GlobalKey> _chipKeys =
       List.generate(_tabs.length, (_) => GlobalKey());
 
+  // network / lifecycle state
   bool _offline = false;
   bool _isForeground = true;
 
+  // sorting
   _SortMode _sortMode = _SortMode.latest;
 
-  // Inline search row visibility (Row 3). Toggled by header Search CTA.
+  // search row visibility
   bool _showHeaderSearch = false;
 
-  // timers / subs
+  // timers / streams
   StreamSubscription? _connSub;
   Timer? _searchDebounce;
   Timer? _autoRefresh;
@@ -162,25 +183,31 @@ class _HomeScreenState extends State<HomeScreen>
   String get _currentTabKey => _tabs.keys.elementAt(_tab.index);
   _PagedFeed get _currentFeed => _feeds[_currentTabKey]!;
 
+  /* ──────────────────────────────────────────────────────────────────────
+   * init / dispose / lifecycle
+   * ────────────────────────────────────────────────────────────────────── */
   @override
   void initState() {
     super.initState();
 
-    // warm initial feeds
+    // Preload all tab feeds (cached data appears instantly if available).
     for (final f in _feeds.values) {
       unawaited(f.load(reset: true));
     }
 
     _tab.addListener(_onTabChanged);
+
     WidgetsBinding.instance.addObserver(this);
 
-    // connectivity watcher
+    // Connectivity watcher.
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
       final hasNetwork = _hasNetworkFrom(event);
       if (!mounted) return;
       final wasOffline = _offline;
 
-      setState(() => _offline = !hasNetwork);
+      setState(() {
+        _offline = !hasNetwork;
+      });
 
       if (hasNetwork) {
         unawaited(_currentFeed.load(reset: false));
@@ -189,22 +216,30 @@ class _HomeScreenState extends State<HomeScreen>
         _teardownWebSocket();
       }
 
-      if (hasNetwork && wasOffline) _wsBackoffSecs = 2;
+      // When we come back online, reset WS backoff.
+      if (hasNetwork && wasOffline) {
+        _wsBackoffSecs = 2;
+      }
     });
 
-    // initial connectivity bootstrap
+    // Initial connectivity bootstrap.
     () async {
       final initial = await Connectivity().checkConnectivity();
       final hasNetwork = _hasNetworkFrom(initial);
       if (!mounted) return;
-      setState(() => _offline = !hasNetwork);
-      if (hasNetwork) _ensureWebSocket();
+      setState(() {
+        _offline = !hasNetwork;
+      });
+      if (hasNetwork) {
+        _ensureWebSocket();
+      }
     }();
 
-    // silent periodic refresh
+    // Silent periodic refresh.
     _autoRefresh =
         Timer.periodic(_kAutoRefreshEvery, (_) => _tickAutoRefresh());
 
+    // Debounced local search.
     _search.addListener(_onSearchChanged);
   }
 
@@ -238,20 +273,25 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _isForeground = (state == AppLifecycleState.resumed);
+
     if (_isForeground && mounted && !_offline) {
+      // We just came back to foreground and we're online:
       unawaited(_currentFeed.load(reset: false));
       _ensureWebSocket();
     } else if (!_isForeground) {
+      // We're backgrounding:
       _teardownWebSocket();
     }
   }
 
-  /* ────────────────────────────────────────────────────────────────────────
-     Realtime WS
-     ─────────────────────────────────────────────────────────────────────── */
+  /* ──────────────────────────────────────────────────────────────────────
+   * Realtime WebSocket handling
+   * ────────────────────────────────────────────────────────────────────── */
+
   String _buildWsUrl() {
     final base = kApiBaseUrl;
     final u = Uri.parse(base);
+
     final scheme = (u.scheme == 'https') ? 'wss' : 'ws';
     final basePath = (u.path.isEmpty || u.path == '/') ? '' : u.path;
     final fullPath = '$basePath/v1/realtime/ws';
@@ -267,16 +307,21 @@ class _HomeScreenState extends State<HomeScreen>
   void _ensureWebSocket() {
     if (!mounted) return;
     if (_offline || !_isForeground) return;
-    if (_ws != null) return;
+    if (_ws != null) return; // already connected
 
     final url = _buildWsUrl();
+
     try {
       _ws = WebSocketChannel.connect(Uri.parse(url));
       _wsSub = _ws!.stream.listen(
         (data) {
+          // Any "content updated" ping should trigger a debounced refresh.
           try {
             final obj = json.decode(data.toString());
-            if (obj is Map && obj['type'] == 'ping') return;
+            if (obj is Map && obj['type'] == 'ping') {
+              // ignore keep-alive pings
+              return;
+            }
           } catch (_) {}
           _scheduleRealtimeRefresh();
         },
@@ -284,7 +329,7 @@ class _HomeScreenState extends State<HomeScreen>
         onError: (_) => _onWsClosed(),
         cancelOnError: true,
       );
-      _wsBackoffSecs = 2;
+      _wsBackoffSecs = 2; // reset backoff on success
     } catch (_) {
       _onWsClosed();
     }
@@ -298,6 +343,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (_offline || !_isForeground) return;
 
+    // Try to reconnect with exponential backoff.
     _wsReconnectTimer?.cancel();
     _wsReconnectTimer =
         Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
@@ -307,8 +353,10 @@ class _HomeScreenState extends State<HomeScreen>
   void _teardownWebSocket() {
     _wsReconnectTimer?.cancel();
     _wsReconnectTimer = null;
+
     _wsSub?.cancel();
     _wsSub = null;
+
     _ws?.sink.close(ws_status.normalClosure);
     _ws = null;
   }
@@ -318,16 +366,19 @@ class _HomeScreenState extends State<HomeScreen>
     _realtimeDebounceTimer = Timer(_kRealtimeDebounce, () {
       if (!mounted) return;
       if (_offline) return;
-      if (_search.text.isNotEmpty) return;
+      if (_search.text.isNotEmpty) return; // don't clobber search view
       unawaited(_currentFeed.load(reset: false));
     });
   }
 
-  /* ────────────────────────────────────────────────────────────────────────
-     Helpers
-     ─────────────────────────────────────────────────────────────────────── */
+  /* ──────────────────────────────────────────────────────────────────────
+   * Internal helpers
+   * ────────────────────────────────────────────────────────────────────── */
+
   bool _hasNetworkFrom(dynamic event) {
-    if (event is ConnectivityResult) return event != ConnectivityResult.none;
+    if (event is ConnectivityResult) {
+      return event != ConnectivityResult.none;
+    }
     if (event is List<ConnectivityResult>) {
       return event.any((r) => r != ConnectivityResult.none);
     }
@@ -345,7 +396,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (tabIndex < 0 || tabIndex >= _chipKeys.length) return;
 
-    // Post-frame so layout is complete and chip has context/size.
+    // We wait one frame so layout is finalized.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = _chipKeys[tabIndex].currentContext;
@@ -361,10 +412,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onTabChanged() {
-    if (mounted) {
-      setState(() {});
-      _ensureChipVisible(_tab.index);
-    }
+    if (!mounted) return;
+    setState(() {});
+    _ensureChipVisible(_tab.index);
   }
 
   Future<void> _refreshManually() async {
@@ -374,18 +424,17 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onTabTap(int i) {
-    if (i >= 0 && i < _tab.length) {
-      _tab.animateTo(i);
-      unawaited(_feeds[_tabs.keys.elementAt(i)]!.load(reset: false));
-      _ensureChipVisible(i);
-    }
+    if (i < 0 || i >= _tab.length) return;
+    _tab.animateTo(i);
+    unawaited(_feeds[_tabs.keys.elementAt(i)]!.load(reset: false));
+    _ensureChipVisible(i);
   }
 
   void _tickAutoRefresh() {
     if (!mounted) return;
     if (_offline) return;
     if (!_isForeground) return;
-    if (_search.text.isNotEmpty) return;
+    if (_search.text.isNotEmpty) return; // don't auto-refresh while searching
     unawaited(_currentFeed.load(reset: false));
   }
 
@@ -403,41 +452,41 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _showSortSheet(BuildContext sheetContext) async {
-    final choice = await showModalBottomSheet<_SortMode>(
+    final picked = await showModalBottomSheet<_SortMode>(
       context: sheetContext,
       showDragHandle: true,
       backgroundColor: Theme.of(sheetContext).colorScheme.surface,
       builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        final textColor = Theme.of(ctx).colorScheme.onSurface;
-        final subColor = Theme.of(ctx).colorScheme.onSurfaceVariant;
+        final theme = Theme.of(ctx);
+        final isDark = theme.brightness == Brightness.dark;
+        final onSurface = theme.colorScheme.onSurface;
+        final onSurfaceVar = theme.colorScheme.onSurfaceVariant;
 
-        Widget tile({
+        Widget option({
           required _SortMode mode,
           required IconData icon,
           required String title,
           required String subtitle,
         }) {
           final selected = (_sortMode == mode);
+          final iconColor = selected
+              ? const Color(0xFFdc2626)
+              : (isDark ? Colors.white : Colors.black87);
+
           return ListTile(
-            leading: Icon(
-              icon,
-              color: selected
-                  ? const Color(0xFFdc2626)
-                  : (isDark ? Colors.white : Colors.black87),
-            ),
+            leading: Icon(icon, color: iconColor),
             title: Text(
               title,
               style: TextStyle(
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                color: textColor,
+                color: onSurface,
               ),
             ),
             subtitle: Text(
               subtitle,
               style: TextStyle(
                 fontSize: 13,
-                color: subColor,
+                color: onSurfaceVar,
               ),
             ),
             trailing: selected
@@ -451,25 +500,25 @@ class _HomeScreenState extends State<HomeScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              tile(
+              option(
                 mode: _SortMode.latest,
                 icon: Icons.access_time_rounded,
                 title: 'Latest first',
                 subtitle: 'Newest published stories first',
               ),
-              tile(
+              option(
                 mode: _SortMode.trending,
                 icon: Icons.local_fire_department_rounded,
                 title: 'Trending now',
                 subtitle: 'What’s getting attention',
               ),
-              tile(
+              option(
                 mode: _SortMode.views,
                 icon: Icons.visibility_rounded,
                 title: 'Most viewed',
                 subtitle: 'Top stories by views',
               ),
-              tile(
+              option(
                 mode: _SortMode.editorsPick,
                 icon: Icons.star_rounded,
                 title: 'Editor’s pick',
@@ -483,21 +532,19 @@ class _HomeScreenState extends State<HomeScreen>
     );
 
     if (!mounted) return;
-    if (choice != null && choice != _sortMode) {
+    if (picked != null && picked != _sortMode) {
       setState(() {
-        _sortMode = choice;
+        _sortMode = picked;
       });
     }
   }
 
-  /* ────────────────────────────────────────────────────────────────────────
-     Toggle inline search row (Row 3) via header 🔍
-     ─────────────────────────────────────────────────────────────────────── */
+  // Toggle inline search row (Row 3) when header Search is tapped.
   void _toggleHeaderSearch() {
     setState(() {
       _showHeaderSearch = !_showHeaderSearch;
 
-      // if we're hiding it, also clear input + keyboard focus
+      // If hiding the row, also clear the text and dismiss keyboard.
       if (!_showHeaderSearch) {
         _search.clear();
         FocusScope.of(context).unfocus();
@@ -505,13 +552,13 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  /* ────────────────────────────────────────────────────────────────────────
-     UI BUILD
-     ─────────────────────────────────────────────────────────────────────── */
+  /* ──────────────────────────────────────────────────────────────────────
+   * build()
+   * ────────────────────────────────────────────────────────────────────── */
   @override
   Widget build(BuildContext context) {
     try {
-      return _buildSimpleLayout(context);
+      return _buildScaffold(context);
     } catch (err, stack) {
       debugPrint('HomeScreen build ERROR: $err\n$stack');
       return _HomeCrashedView(
@@ -521,23 +568,22 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Widget _buildSimpleLayout(BuildContext context) {
+  Widget _buildScaffold(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
+    final bgColor = isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
 
-    // breakpoint for compact vs wide layout
+    // Responsive breakpoint
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
 
-    // should Row 3 (search bar row) currently be visible?
-    final bool showSearchRow = widget.showSearchBar || _showHeaderSearch;
+    // Should Row 3 currently be visible?
+    final showSearchRow = widget.showSearchBar || _showHeaderSearch;
 
     return Scaffold(
       backgroundColor: bgColor,
 
-      // Row 1: Frosted header
+      /* ───────── Header (Row 1) ───────── */
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(64),
         child: ClipRRect(
@@ -562,14 +608,14 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
                 border: const Border(
                   bottom: BorderSide(
-                    color: Color(0x0FFFFFFF),
+                    color: Color(0x0FFFFFFF), // ~6% white hairline
                     width: 1,
                   ),
                 ),
               ),
               child: Row(
                 children: [
-                  const _ModernBrandLogo(),
+                  const _BrandLogo(),
                   const Spacer(),
 
                   if (isWide) ...[
@@ -640,16 +686,17 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
 
+      /* ───────── Body ───────── */
       body: Column(
         children: [
-          // Offline banner (shows ABOVE the category chips)
+          // Offline banner (sits ABOVE filters row)
           if (_offline)
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: OfflineBanner(),
             ),
 
-          // Row 2: category chips + sort button
+          // Row 2: category chips + sort pill
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
@@ -661,14 +708,14 @@ class _HomeScreenState extends State<HomeScreen>
             onSortTap: (ctx) => _showSortSheet(ctx),
           ),
 
-          // Row 3 (conditional): inline search bar
+          // Row 3: inline search bar (only when visible)
           if (showSearchRow)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: SearchBarInput(
                 controller: _search,
                 onExitSearch: () {
-                  // hide + clear when user taps X
+                  // Called when the little "X" is tapped.
                   setState(() {
                     _search.clear();
                     FocusScope.of(context).unfocus();
@@ -678,14 +725,14 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
 
-          // Body grid for the current tab
+          // Feed content (TabBarView)
           Expanded(
             child: TabBarView(
               controller: _tab,
-              children: _tabs.keys.map((key) {
-                final feed = _feeds[key]!;
+              children: _tabs.keys.map((tabKey) {
+                final feed = _feeds[tabKey]!;
                 return _FeedList(
-                  key: PageStorageKey('feed-$key'),
+                  key: PageStorageKey('feed-$tabKey'),
                   feed: feed,
                   searchText: _search,
                   offline: _offline,
@@ -701,8 +748,10 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Filters row (Row 2 under header)
-   ───────────────────────────────────────────────────────────────────────── */
+ * Filters row under header (Row 2)
+ *  - Horizontal chips for All / Entertainment / Sports
+ *  - Sort pill on the right
+ * ───────────────────────────────────────────────────────────────────────── */
 class _FiltersRow extends StatelessWidget {
   const _FiltersRow({
     required this.activeIndex,
@@ -724,11 +773,12 @@ class _FiltersRow extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final void Function(BuildContext ctx) onSortTap;
 
-  static const accent = Color(0xFFdc2626);
+  static const _accent = Color(0xFFdc2626);
 
   @override
   Widget build(BuildContext context) {
-    Widget inactiveChip(String label, VoidCallback onTap) {
+    // Chip for inactive tab.
+    Widget _chipInactive(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,
@@ -738,7 +788,7 @@ class _FiltersRow extends StatelessWidget {
             color: Colors.transparent,
             borderRadius: BorderRadius.circular(999),
             border: Border.all(
-              color: accent.withOpacity(0.4),
+              color: _accent.withOpacity(0.4),
               width: 1,
             ),
           ),
@@ -746,23 +796,53 @@ class _FiltersRow extends StatelessWidget {
             label,
             style: const TextStyle(
               fontSize: 13,
-              fontWeight: FontWeight.w500,
               height: 1.2,
-              color: accent,
+              fontWeight: FontWeight.w500,
+              color: _accent,
             ),
           ),
         ),
       );
     }
 
-    // selected chip and unselected chip share border radius
-    Widget buildTabChip(int index, String label, Key itemKey) {
-      final sel = (activeIndex == index);
+    // Chip for active tab.
+    Widget _chipActive(String label, VoidCallback onTap, Key? k) {
+      return InkWell(
+        key: k,
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: _accent,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: _accent,
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _accent.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: const Text(
+            'placeholder', // replaced below
+          ),
+        ),
+      );
+    }
 
-      if (!sel) {
+    // We can't keep "placeholder" text above; so build final versions here.
+    Widget _buildTabChip(int index, String label, Key itemKey) {
+      final selected = (activeIndex == index);
+
+      if (!selected) {
         return Container(
           key: itemKey,
-          child: inactiveChip(label, () => onSelect(index)),
+          child: _chipInactive(label, () => onSelect(index)),
         );
       }
 
@@ -773,47 +853,80 @@ class _FiltersRow extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: accent,
+            color: _accent,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: accent, width: 1),
+            border: Border.all(color: _accent, width: 1),
             boxShadow: [
               BoxShadow(
-                color: accent.withOpacity(0.4),
+                color: _accent.withOpacity(0.4),
                 blurRadius: 20,
                 offset: const Offset(0, 10),
               ),
             ],
           ),
           child: const Text(
+            '', // replaced below
+          ),
+        ),
+      );
+    }
+
+    // To avoid the placeholder hack, let's just inline the content:
+    Widget _tabChipFinal(int index, String label, Key itemKey) {
+      final selected = (activeIndex == index);
+
+      final bgColor = selected ? _accent : Colors.transparent;
+      final textColor = selected ? Colors.white : _accent;
+      final borderClr = selected ? _accent : _accent.withOpacity(0.4);
+      final fontWeight = selected ? FontWeight.w600 : FontWeight.w500;
+
+      return InkWell(
+        key: itemKey,
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => onSelect(index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: borderClr, width: 1),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: _accent.withOpacity(0.4),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
+                    ),
+                  ]
+                : const <BoxShadow>[],
+          ),
+          child: Text(
             label,
             style: TextStyle(
               fontSize: 13,
-              fontWeight: FontWeight.w600,
               height: 1.2,
-              color: Colors.white,
+              fontWeight: fontWeight,
+              color: textColor,
             ),
           ),
         ),
       );
     }
 
-    Widget sortButton() {
-      IconData sortIcon;
-      switch (sortMode) {
+    IconData _iconForSort(_SortMode mode) {
+      switch (mode) {
         case _SortMode.latest:
-          sortIcon = Icons.access_time_rounded;
-          break;
+          return Icons.access_time_rounded;
         case _SortMode.trending:
-          sortIcon = Icons.local_fire_department_rounded;
-          break;
+          return Icons.local_fire_department_rounded;
         case _SortMode.views:
-          sortIcon = Icons.visibility_rounded;
-          break;
+          return Icons.visibility_rounded;
         case _SortMode.editorsPick:
-          sortIcon = Icons.star_rounded;
-          break;
+          return Icons.star_rounded;
       }
+    }
 
+    Widget _sortButton() {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => onSortTap(context),
@@ -824,36 +937,35 @@ class _FiltersRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(999),
             border: Border.all(
               width: 1,
-              color: accent.withOpacity(0.4),
+              color: _accent.withOpacity(0.4),
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                sortIcon,
+                _iconForSort(sortMode),
                 size: 16,
-                color: accent,
+                color: _accent,
               ),
               const SizedBox(width: 6),
-              const Text(
-                '', // placeholder to keep const structure below lint?
-              ),
-              Text(
-                sortLabel,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  height: 1.2,
-                  color: accent,
+              Flexible(
+                child: Text(
+                  sortLabel,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.2,
+                    fontWeight: FontWeight.w500,
+                    color: _accent,
+                  ),
                 ),
               ),
               const SizedBox(width: 2),
               const Icon(
                 Icons.arrow_drop_down_rounded,
                 size: 18,
-                color: accent,
+                color: _accent,
               ),
             ],
           ),
@@ -877,25 +989,25 @@ class _FiltersRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // scrollable chips
+          // Horizontal scroll row of chips.
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  buildTabChip(0, 'All', chipKeys[0]),
+                  _tabChipFinal(0, 'All', chipKeys[0]),
                   const SizedBox(width: 8),
-                  buildTabChip(1, 'Entertainment', chipKeys[1]),
+                  _tabChipFinal(1, 'Entertainment', chipKeys[1]),
                   const SizedBox(width: 8),
-                  buildTabChip(2, 'Sports', chipKeys[2]),
+                  _tabChipFinal(2, 'Sports', chipKeys[2]),
                 ],
               ),
             ),
           ),
           const SizedBox(width: 12),
-          // sort pill
-          sortButton(),
+          // Sort pill.
+          _sortButton(),
         ],
       ),
     );
@@ -903,8 +1015,12 @@ class _FiltersRow extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Feed list
-   ───────────────────────────────────────────────────────────────────────── */
+ * Feed list / grid per tab
+ *   - Shows SkeletonCard grid while first load
+ *   - Shows ErrorView if we got an error and have no data
+ *   - Shows cards grid with client-side sort + search
+ *   - Handles "saved" badge overlay in the corner of saved stories
+ * ───────────────────────────────────────────────────────────────────────── */
 class _FeedList extends StatefulWidget {
   const _FeedList({
     super.key,
@@ -930,6 +1046,7 @@ class _FeedListState extends State<_FeedList>
   @override
   bool get wantKeepAlive => true;
 
+  // Pick a grid layout depending on width and text scale.
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
     if (width < 520) {
@@ -942,18 +1059,21 @@ class _FeedListState extends State<_FeedList>
       estCols = 4;
     }
 
+    // Constrain max card width so tiles look consistent.
     double maxTileW = width / estCols;
     maxTileW = maxTileW.clamp(320.0, 480.0);
 
+    // Base aspect ratio guesses by column count.
     double baseRatio;
     if (estCols == 1) {
       baseRatio = 0.88;
     } else if (estCols == 2) {
       baseRatio = 0.95;
     } else {
-      baseRatio = 1.00;
+      baseRatio = 1.0;
     }
 
+    // Larger text means taller cards, so lower the ratio.
     final scaleForHeight = textScale.clamp(1.0, 1.4);
     final effectiveRatio = baseRatio / scaleForHeight;
 
@@ -965,6 +1085,7 @@ class _FeedListState extends State<_FeedList>
     );
   }
 
+  // Helpers to implement sorting modes.
   double _trendingScore(Story s) {
     try {
       final dyn = (s as dynamic);
@@ -998,6 +1119,7 @@ class _FeedListState extends State<_FeedList>
   List<Story> _applySortMode(List<Story> input) {
     switch (widget.sortMode) {
       case _SortMode.latest:
+        // Already newest-first from _PagedFeed
         return input;
       case _SortMode.trending:
         final list = [...input];
@@ -1013,17 +1135,18 @@ class _FeedListState extends State<_FeedList>
         return list;
       case _SortMode.editorsPick:
         final picks = input.where(_isEditorsPick).toList();
-        if (picks.isNotEmpty) return picks;
-        return input;
+        return picks.isNotEmpty ? picks : input;
     }
   }
 
-  Widget _savedBadgeWrapper({
+  // Adds a red "saved" badge on top of the StoryCard if this story is saved.
+  Widget _withSavedBadge({
     required Story story,
     required List<Story> allStories,
     required int index,
   }) {
     final isSaved = SavedStore.instance.isSaved(story.id);
+
     final card = StoryCard(
       story: story,
       allStories: allStories,
@@ -1044,7 +1167,10 @@ class _FeedListState extends State<_FeedList>
             decoration: BoxDecoration(
               color: _accent,
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: _accent, width: 1),
+              border: Border.all(
+                color: _accent,
+                width: 1,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: _accent.withOpacity(0.4),
@@ -1082,18 +1208,19 @@ class _FeedListState extends State<_FeedList>
                 final textScale = MediaQuery.textScaleFactorOf(context);
                 final gridDelegate = _gridDelegateFor(w, textScale);
 
-                const horizontalPad = 12.0;
+                // Safe padding math
+                const hPad = 12.0;
                 const topPad = 8.0;
-                final bottomSafe = MediaQuery.viewPaddingOf(context).bottom;
-                final bottomPad = 28.0 + bottomSafe;
+                final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+                final bottomPad = 28.0 + bottomInset;
 
-                // 1) loading state (skeleton cards grid)
+                // 1. Initial load → skeleton grid
                 if (feed.isInitialLoading) {
                   return GridView.builder(
                     padding: EdgeInsets.fromLTRB(
-                      horizontalPad,
+                      hPad,
                       topPad,
-                      horizontalPad,
+                      hPad,
                       bottomPad,
                     ),
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -1104,13 +1231,13 @@ class _FeedListState extends State<_FeedList>
                   );
                 }
 
-                // 2) total failure + empty list
+                // 2. Hard failure w/ no cached data
                 if (feed.hasError && feed.items.isEmpty) {
                   return ListView(
                     padding: EdgeInsets.fromLTRB(
-                      horizontalPad,
+                      hPad,
                       24,
-                      horizontalPad,
+                      hPad,
                       bottomPad,
                     ),
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -1124,27 +1251,28 @@ class _FeedListState extends State<_FeedList>
                   );
                 }
 
-                // 3) apply search + sort
+                // 3. Apply local search + sort
                 final q = widget.searchText.text.trim().toLowerCase();
+
                 final baseList = (q.isEmpty)
                     ? feed.items
-                    : feed.items
-                        .where((s) =>
-                            s.title.toLowerCase().contains(q) ||
-                            (s.summary ?? '').toLowerCase().contains(q))
-                        .toList();
+                    : feed.items.where((s) {
+                        final title = s.title.toLowerCase();
+                        final summary = (s.summary ?? '').toLowerCase();
+                        return title.contains(q) || summary.contains(q);
+                      }).toList();
 
                 final displayList = _applySortMode(baseList);
 
                 if (displayList.isEmpty) {
                   final msg = widget.offline
                       ? "You're offline and no results match your search."
-                      : "No matching items.";
+                      : 'No matching items.';
                   return ListView(
                     padding: EdgeInsets.fromLTRB(
-                      horizontalPad,
+                      hPad,
                       24,
-                      horizontalPad,
+                      hPad,
                       bottomPad,
                     ),
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -1154,38 +1282,21 @@ class _FeedListState extends State<_FeedList>
                   );
                 }
 
-                // 4) normal grid
-                const showLoadMore = false;
-
+                // 4. Normal grid (no "Load more" button in this revision)
                 return GridView.builder(
                   padding: EdgeInsets.fromLTRB(
-                    horizontalPad,
+                    hPad,
                     topPad,
-                    horizontalPad,
+                    hPad,
                     bottomPad,
                   ),
                   physics: const AlwaysScrollableScrollPhysics(),
                   cacheExtent: 2000,
                   gridDelegate: gridDelegate,
-                  itemCount: displayList.length + (showLoadMore ? 1 : 0),
+                  itemCount: displayList.length,
                   itemBuilder: (_, i) {
-                    if (showLoadMore && i == displayList.length) {
-                      return Center(
-                        child: feed.isLoadingMore
-                            ? const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 16),
-                                child: CircularProgressIndicator(),
-                              )
-                            : OutlinedButton.icon(
-                                onPressed: feed.loadMore,
-                                icon: const Icon(Icons.expand_more_rounded),
-                                label: const Text('Load more'),
-                              ),
-                      );
-                    }
-
                     final story = displayList[i];
-                    return _savedBadgeWrapper(
+                    return _withSavedBadge(
                       story: story,
                       allStories: displayList,
                       index: i,
@@ -1202,10 +1313,16 @@ class _FeedListState extends State<_FeedList>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Feed paging model
-   ───────────────────────────────────────────────────────────────────────── */
+ * Paged feed model:
+ *  - Holds items for a given tab (e.g. "all", "entertainment", "sports")
+ *  - Knows if it's loading / error
+ *  - Loads cached data first (FeedDiskCache), then fetches fresh
+ *  - Tracks a "since" cursor for incremental updates
+ *  - Keeps newest items first
+ * ───────────────────────────────────────────────────────────────────────── */
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
+
   final String tab;
 
   final List<Story> _items = [];
@@ -1213,7 +1330,7 @@ class _PagedFeed extends ChangeNotifier {
   bool _loadingMore = false;
   bool _hasError = false;
   String? _errorMessage;
-  bool _canLoadMore = false;
+  bool _canLoadMore = false; // future-proofing
 
   List<Story> get items => List.unmodifiable(_items);
   bool get isInitialLoading => _initialLoading;
@@ -1222,7 +1339,9 @@ class _PagedFeed extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get canLoadMore => _canLoadMore;
 
-  DateTime? _eff(Story s) => s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
+  // "Effective timestamp" (normalizedAt > publishedAt > releaseDate)
+  DateTime? _eff(Story s) =>
+      s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
   DateTime? _sinceCursor;
 
@@ -1235,35 +1354,51 @@ class _PagedFeed extends ChangeNotifier {
       _sinceCursor = null;
       _items.clear();
 
+      // Try disk cache to show *something* instantly.
       final cached = await FeedDiskCache.load(tab);
       if (cached.isNotEmpty) {
         _items.addAll(cached);
         _sortNewestFirst(_items);
-        for (final s in cached) FeedCache.put(s);
+
+        for (final s in cached) {
+          FeedCache.put(s);
+        }
+
         _initialLoading = false;
         notifyListeners();
       } else {
+        // Still notify so UI flips to skeleton state.
         notifyListeners();
       }
     }
-    try {
-      final list = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
+    try {
+      final fresh = await fetchFeed(
+        tab: tab,
+        since: _sinceCursor,
+        limit: 40,
+      );
+
+      // Merge by ID.
       final byId = {for (final s in _items) s.id: s};
-      for (final s in list) {
+      for (final s in fresh) {
         byId[s.id] = s;
         FeedCache.put(s);
       }
+
       _items
         ..clear()
         ..addAll(byId.values);
 
       _sortNewestFirst(_items);
 
-      final dates = _items.map(_eff).whereType<DateTime>();
-      _sinceCursor = dates.isEmpty
+      // Update cursor to newest timestamp in list.
+      final allDates = _items.map(_eff).whereType<DateTime>();
+      _sinceCursor = allDates.isEmpty
           ? null
-          : dates.reduce((a, b) => a.isAfter(b) ? a : b);
+          : allDates.reduce(
+              (a, b) => a.isAfter(b) ? a : b,
+            );
 
       _hasError = false;
       _errorMessage = null;
@@ -1292,21 +1427,26 @@ class _PagedFeed extends ChangeNotifier {
     list.sort((a, b) {
       final da = _eff(a);
       final db = _eff(b);
+
+      // Fall back to ID sort (desc) if timestamps tie / missing.
       if (da == null && db == null) {
         return b.id.compareTo(a.id);
       }
       if (da == null) return 1;
       if (db == null) return -1;
-      final cmp = db.compareTo(da); // newest first
+
+      final cmp = db.compareTo(da); // newer first
       if (cmp != 0) return cmp;
+
       return b.id.compareTo(a.id);
     });
   }
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Header icon button (square pill)
-   ───────────────────────────────────────────────────────────────────────── */
+ * HeaderIconButton
+ * Square-ish pill buttons in the header bar ("Search", "Menu", etc.)
+ * ───────────────────────────────────────────────────────────────────────── */
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
     required this.icon,
@@ -1318,13 +1458,18 @@ class _HeaderIconButton extends StatelessWidget {
   final VoidCallback? onTap;
   final String tooltip;
 
+  static const _accent = Color(0xFFdc2626);
+
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     final bg = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : Colors.black.withOpacity(0.06);
-    final borderColor = const Color(0xFFdc2626).withOpacity(0.3);
+
+    final borderColor = _accent.withOpacity(0.3);
     final iconColor = isDark ? Colors.white : Colors.black87;
 
     return Tooltip(
@@ -1356,10 +1501,12 @@ class _HeaderIconButton extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Brand logo in header
-   ───────────────────────────────────────────────────────────────────────── */
-class _ModernBrandLogo extends StatelessWidget {
-  const _ModernBrandLogo();
+ * Brand logo blob in header (red square with 🎬 + text "CinePulse")
+ * ───────────────────────────────────────────────────────────────────────── */
+class _BrandLogo extends StatelessWidget {
+  const _BrandLogo();
+
+  static const _accent = Color(0xFFdc2626);
 
   @override
   Widget build(BuildContext context) {
@@ -1370,11 +1517,11 @@ class _ModernBrandLogo extends StatelessWidget {
           width: 28,
           height: 28,
           decoration: BoxDecoration(
-            color: const Color(0xFFdc2626),
+            color: _accent,
             borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFdc2626).withOpacity(0.4),
+                color: _accent.withOpacity(0.4),
                 blurRadius: 20,
                 offset: const Offset(0, 10),
               ),
@@ -1386,7 +1533,7 @@ class _ModernBrandLogo extends StatelessWidget {
               style: TextStyle(
                 fontSize: 16,
                 height: 1,
-                color: Colors.white, // text is on solid red, keep white
+                color: Colors.white,
               ),
             ),
           ),
@@ -1398,7 +1545,7 @@ class _ModernBrandLogo extends StatelessWidget {
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: primaryTextColor(context), // theme-aware text color
+            color: primaryTextColor(context),
           ),
         ),
       ],
@@ -1407,8 +1554,8 @@ class _ModernBrandLogo extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   Crash fallback (dev only)
-   ───────────────────────────────────────────────────────────────────────── */
+ * Crash fallback UI for dev / debugging.
+ * ───────────────────────────────────────────────────────────────────────── */
 class _HomeCrashedView extends StatelessWidget {
   const _HomeCrashedView({
     required this.error,
