@@ -11,6 +11,7 @@
 // and pull-to-refresh (which just re-runs local filter/sort).
 
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
