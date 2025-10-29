@@ -4,11 +4,58 @@
 //
 // It owns:
 //  • Tab pages (Home / Discover / Saved / Alerts) via an IndexedStack
-//  • The global right-side drawer (AppDrawer)
+//  • The global right-side drawer ("Menu")
 //  • The bottom nav on phones only (<768px width)
 //  • Deep link handling for /s/<id> → StoryDetailsScreen
 //
-// Drawer spec:
+// ─────────────────────────────────────────────────────────────────────
+// CURRENT NAV / HEADER MODEL (FINAL SPEC)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Each top-level screen draws its OWN frosted header bar with:
+//   - CinePulse brand at left
+//   - A row of square "capsule" icon buttons at right
+//   - Those buttons (Home / Discover / Saved / Alerts / Search / Refresh / Menu)
+//     call back into RootShell so tabs can switch and drawer can open.
+//   - Which icons appear and what order depends on the screen + breakpoint.
+//
+// HOME SCREEN (wide ≥768px):
+//   [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
+//
+// HOME SCREEN (compact <768px):
+//   [Search] [Refresh] [Menu]
+//
+// Clicking "Search" in the Home header should expand a dedicated search row
+// under the category chips. Bottom nav "Search" (index 1) does the same.
+// HomeScreen handles its own internal toggle for header-click, BUT RootShell
+// still controls `showSearchBar` when you tap the bottom nav Search tab.
+//
+// SAVED SCREEN (wide):
+//   [Home] [Discover] [Alerts] [Search] [Refresh] [Menu]
+//
+// SAVED SCREEN (compact):
+//   [Search] [Refresh] [Menu]
+//
+// Row under header in Saved:
+//   • left side: All / Entertainment / Sports chips (same red chip style as Home)
+//   • also includes sort / export / clear actions in that row
+//
+// ALERTS SCREEN (wide):
+//   [Home] [Discover] [Saved] [Refresh] [Menu]
+//
+// ALERTS SCREEN (compact):
+//   [Refresh] [Menu]
+//
+// Row under header in Alerts:
+//   • LEFT  : All / Entertainment / Sports (red chips like Home)
+//   • RIGHT : "Mark all read" pill
+//     (Refresh is NOT here; it's in the header).
+//
+// We expose navigation callbacks from RootShell and inject them into
+// HomeScreen, SavedScreen, AlertsScreen so their headers can call back.
+//
+// ─────────────────────────────────────────────────────────────────────
+// DRAWER ("Menu"):
 //
 // HEADER
 //   CinePulse brand block
@@ -24,32 +71,35 @@
 //   Theme               (> opens _openThemePicker sheet)
 //
 // SHARE & SUPPORT
-//   Share CinePulse     (> share / copy link)
-//   Report an issue     (> email)
+//   Share CinePulse     (copy/share link)
+//   Report an issue     (mailto or similar)
 //
 // SETTINGS
-//   App language        (> _openAppLanguageSettings() bottom sheet)
-//   Subscription        (> _openSubscriptionSettings() bottom sheet)
-//   Sign in             (> _openAccountSettings() bottom sheet)
+//   App language        (> bottom sheet)
+//   Subscription        (> bottom sheet "coming soon")
+//   Sign in             (> bottom sheet "coming soon")
 //
 // ABOUT & LEGAL
-//   About CinePulse     (uses versionLabel, ex: "Version 0.1.0 · Early access")
+//   About CinePulse     (shows app version label, e.g. "Version 0.1.0 · Early access")
 //   Privacy Policy
 //   Terms of Use
 //
-// RootShell is responsible for:
-//   • reading prefs from SharedPreferences
-//        - feed lang ('english' | 'hindi' | 'mixed' ...)
-//        - content type ('all' | 'read' | 'video' | 'audio')
-//   • exposing callbacks that the header icons and drawer rows call
-//   • rendering a consistent frosted header in each screen via those callbacks
-//   • responsive layout (bottom nav only under 768px width)
+// RootShell is also responsible for reading/saving prefs for:
+//   - feed language (for drawer header summary)
+//   - content type (all/read/video/audio)
+//   - UI language for the app chrome
 //
-// SavedScreen and AlertsScreen now both expect navigation callbacks so their
-// headers can render the same nav icon pills (Home / Discover / Saved / Alerts / Menu)
-// that HomeScreen has. We provide those here.
+// ─────────────────────────────────────────────────────────────────────
+// BOTTOM NAV (phones only <768px):
 //
-
+//   0 = Home
+//   1 = Search   (still Home tab underneath, but with the search row shown)
+//   2 = Saved
+//   3 = Alerts
+//
+// When user taps Search here, we keep pageIndex=Home but flip an internal
+// `_showSearchBar = true`, then HomeScreen receives showSearchBar=true.
+//
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
@@ -70,13 +120,13 @@ import 'features/alerts/alerts_screen.dart';
 import 'widgets/app_drawer.dart';
 
 const String _kAppVersion = '0.1.0';
-const String _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed'
+
+const String _kLangPrefKey = 'cp.lang'; // 'english' | 'hindi' | 'mixed' | etc
 const String _kContentTypePrefKey =
     'cp.contentType'; // 'all' | 'read' | 'video' | 'audio'
 
 /* ────────────────────────────────────────────────────────────────────────────
- * CATEGORY PREFS
- * Drives "Categories".
+ * CATEGORY PREFS (for drawer "Categories")
  * ────────────────────────────────────────────────────────────────────────────*/
 class CategoryPrefs extends ChangeNotifier {
   CategoryPrefs._internal();
@@ -88,14 +138,12 @@ class CategoryPrefs extends ChangeNotifier {
   static const String keyTravel = 'travel';
   static const String keyFashion = 'fashion';
 
-  // Default feed is "All" (which basically equals "Entertainment" for now)
+  // Default feed selection = "All".
   final Set<String> _selected = {keyAll};
 
   Set<String> get selected => Set.unmodifiable(_selected);
-
   bool isSelected(String k) => _selected.contains(k);
 
-  /// Apply new selection from the bottom sheet.
   void applySelection(Set<String> incoming) {
     _selected
       ..clear()
@@ -104,10 +152,7 @@ class CategoryPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Human-friendly summary for UI surfaces:
-  ///  "All"
-  ///  "Entertainment"
-  ///  "Entertainment +2"
+  /// Human label for drawer header ("Entertainment +2", etc.)
   String summary() {
     if (_selected.contains(keyAll)) return 'All';
 
@@ -132,9 +177,8 @@ class CategoryPrefs extends ChangeNotifier {
     return '${pretty.first} +${pretty.length - 1}';
   }
 
-  /// Guardrails so state never becomes illegal.
   void _sanitize() {
-    // If "all" and others are both set → collapse to just "all".
+    // If "all" and others both set → collapse to just "all".
     if (_selected.contains(keyAll) && _selected.length > 1) {
       _selected
         ..clear()
@@ -149,8 +193,7 @@ class CategoryPrefs extends ChangeNotifier {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * CONTENT TYPE PREFS
- * Drives "Content type".
+ * CONTENT TYPE PREFS (drawer "Content type")
  * 'all' | 'read' | 'video' | 'audio'
  * ────────────────────────────────────────────────────────────────────────────*/
 class ContentTypePrefs extends ChangeNotifier {
@@ -163,7 +206,6 @@ class ContentTypePrefs extends ChangeNotifier {
   static const String typeAudio = 'audio';
 
   String _selected = typeAll;
-
   String get selected => _selected;
 
   void setSelected(String v) {
@@ -191,6 +233,7 @@ class ContentTypePrefs extends ChangeNotifier {
  * ────────────────────────────────────────────────────────────────────────────*/
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
+
   @override
   State<RootShell> createState() => _RootShellState();
 }
@@ -198,29 +241,36 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  // Which tab is visible in the IndexedStack:
+  // Which tab is visible underneath:
   // 0 = Home, 1 = Discover, 2 = Saved, 3 = Alerts
   int _pageIndex = 0;
 
-  // Which item is highlighted in the bottom nav:
-  // 0 = Home, 1 = Search (Home with inline search bar),
-  // 2 = Saved, 3 = Alerts
+  // Which item is highlighted in the bottom nav (phones only):
+  // 0 = Home
+  // 1 = Search (Home w/ search row visible)
+  // 2 = Saved
+  // 3 = Alerts
   int _navIndex = 0;
 
-  // Whether HomeScreen should show its inline search bar (Search tab behavior)
+  // Whether HomeScreen should render its "expanded search row".
+  // - true when bottom nav "Search" is active
+  // - false otherwise
+  //
+  // HomeScreen ALSO has its own internal toggle for when the user taps
+  // its header Search icon. Its logic will OR this with our showSearchBar.
   bool _showSearchBar = false;
 
-  // feed language / for drawer header summary
-  // 'english' | 'hindi' | 'mixed' | etc.
+  // feed language (for drawer summary: "Entertainment · English")
+  // 'english' | 'hindi' | 'mixed' | ...
   String _currentLang = 'mixed';
 
-  // App UI language for CinePulse chrome ("App language" setting).
+  // CinePulse UI chrome language (drawer "App language")
   String _appUiLanguageCode = 'english_ui';
 
-  // Content type ('all' | 'read' | 'video' | 'audio')
+  // Content type filter ('all' | 'read' | 'video' | 'audio')
   String _currentContentType = ContentTypePrefs.typeAll;
 
-  // Deep link handling (/s/<id>)
+  // Deep link (/s/<id>) support
   String? _pendingDeepLinkId;
   bool _deepLinkHandled = false;
 
@@ -231,13 +281,14 @@ class _RootShellState extends State<RootShell> {
     _loadLangPref();
     _loadContentTypePref();
 
-    // After first frame, try to open the story deep link if any.
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _tryOpenPendingDeepLink(),
-    );
+    // after first frame, try to open the deep link story if any
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _tryOpenPendingDeepLink();
+    });
   }
 
-  /// Read language preference so drawer header text is correct.
+  /* ─────────────────── prefs bootstrap ─────────────────── */
+
   Future<void> _loadLangPref() async {
     final sp = await SharedPreferences.getInstance();
     final stored = sp.getString(_kLangPrefKey);
@@ -249,7 +300,6 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /// Read content type preference so the sheet starts highlighted correctly.
   Future<void> _loadContentTypePref() async {
     final sp = await SharedPreferences.getInstance();
     final stored = sp.getString(_kContentTypePrefKey);
@@ -262,10 +312,6 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /// Convert feed lang code → friendly string for the drawer header.
-  /// english → "English"
-  /// hindi   → "Hindi"
-  /// mixed   → "Mixed language"
   String _langHeaderSummary(String code) {
     switch (code) {
       case 'english':
@@ -277,21 +323,19 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ───────────────────── Deep link handling ───────────────────── */
+  /* ─────────────────── deep link /s/<id> ─────────────────── */
 
-  /// Grab /s/<id> from initial URL (web deep links).
   void _captureInitialDeepLink() {
-    final frag = Uri.base.fragment; // on web could be "#/s/abcdef"
+    // On web, can arrive as either path "/s/xyz" or hash "#/s/xyz".
+    final frag = Uri.base.fragment;
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
+
     final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
     if (match != null) {
       _pendingDeepLinkId = match.group(2);
     }
   }
 
-  /// Try to resolve the pending story:
-  /// 1. Poll FeedCache briefly
-  /// 2. Fallback to fetchStory()
   Future<void> _tryOpenPendingDeepLink() async {
     if (_deepLinkHandled || _pendingDeepLinkId == null) return;
 
@@ -299,7 +343,8 @@ class _RootShellState extends State<RootShell> {
     const tick = Duration(milliseconds: 200);
     final started = DateTime.now();
 
-    // Poll cache first (gives feed a chance to warm up)
+    // 1. Poll FeedCache for a short window so HomeScreen
+    //    has a chance to warm things.
     while (mounted && DateTime.now().difference(started) < maxWait) {
       final Story? cached = FeedCache.get(_pendingDeepLinkId!);
       if (cached != null) {
@@ -309,7 +354,7 @@ class _RootShellState extends State<RootShell> {
       await Future<void>.delayed(tick);
     }
 
-    // Fallback to network
+    // 2. Fallback: fetchStory() directly.
     try {
       final s = await fetchStory(_pendingDeepLinkId!);
       if (!mounted) return;
@@ -317,20 +362,23 @@ class _RootShellState extends State<RootShell> {
       await _openDetails(s);
       return;
     } catch (_) {
-      // ignore failures
+      // ignore network failures; just show the normal UI
     }
   }
 
-  /// Push StoryDetailsScreen on top of RootShell.
-  /// Make sure Home tab is active beneath.
   Future<void> _openDetails(Story s) async {
     _deepLinkHandled = true;
 
+    // Make sure Home tab is showing underneath the detail sheet.
     if (_pageIndex != 0) {
-      setState(() => _pageIndex = 0);
+      setState(() {
+        _pageIndex = 0;
+        _navIndex = 0;
+        _showSearchBar = false;
+      });
     }
 
-    // tiny delay so Scaffold/Navigator are stable
+    // tiny delay so Navigator is definitely mounted
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!mounted) return;
 
@@ -339,13 +387,13 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /* ───────────────────── Header / nav callbacks ─────────────────────
+  /* ─────────────────── header / nav callbacks ───────────────────
    *
-   * These are passed down into HomeScreen, SavedScreen, AlertsScreen
-   * so their frosted headers and icon pills behave consistently.
+   * These go down into the screens so that their header icon pills
+   * can switch tabs or open the drawer.
    */
 
-  // "Home" / main feed
+  // Home tab
   void _openHome() {
     setState(() {
       _pageIndex = 0;
@@ -354,22 +402,17 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  // "Discover" icon
+  // Discover tab
   void _openDiscover() {
     setState(() {
       _pageIndex = 1;
-      // If Search was highlighted in bottom nav, drop back to Home highlight.
+      // if user had bottom-nav "Search" highlighted, go back to Home highlight
       _navIndex = (_navIndex == 1) ? 0 : _navIndex;
       _showSearchBar = false;
     });
   }
 
-  // "Menu" icon
-  void _openEndDrawer() {
-    _scaffoldKey.currentState?.openEndDrawer();
-  }
-
-  // "Saved" icon
+  // Saved tab
   void _openSaved() {
     setState(() {
       _pageIndex = 2;
@@ -378,7 +421,7 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  // "Alerts" icon
+  // Alerts tab
   void _openAlerts() {
     setState(() {
       _pageIndex = 3;
@@ -387,17 +430,21 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  /* ───────────────────────── Bottom nav taps ─────────────────────────
+  // Global drawer ("Menu")
+  void _openEndDrawer() {
+    _scaffoldKey.currentState?.openEndDrawer();
+  }
+
+  /* ─────────────────── bottom nav taps (phones) ───────────────────
    *
-   * Bottom nav items:
-   *   0 = Home
-   *   1 = Search (still Home page, but showSearchBar=true)
-   *   2 = Saved
-   *   3 = Alerts
+   * 0 = Home tab (normal feed)
+   * 1 = Search (Home tab, but with search row visible)
+   * 2 = Saved
+   * 3 = Alerts
    */
   void _onDestinationSelected(int i) {
     if (i == 1) {
-      // "Search": highlight Search, keep Home tab visible, show inline search bar
+      // "Search" (mobile): keep pageIndex=Home, but flip showSearchBar on
       setState(() {
         _pageIndex = 0;
         _navIndex = 1;
@@ -415,19 +462,11 @@ class _RootShellState extends State<RootShell> {
     });
   }
 
-  /* ───────────────────────── PICKER SHEETS ─────────────────────────
-   *
-   * Each of these is triggered from the drawer rows.
-   * We close the drawer first (Navigator.pop(drawerContext)) so
-   * the sheet isn't stacked on top of an open Drawer.
-   */
+  /* ─────────────────── drawer sheet helpers ─────────────────── */
 
-  // THEME
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final current = AppSettings.instance.themeMode;
-
-    // close drawer first
-    Navigator.pop(drawerContext);
+    Navigator.pop(drawerContext); // close drawer first
 
     final picked = await showModalBottomSheet<ThemeMode>(
       context: context,
@@ -441,9 +480,8 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  // CATEGORIES ("Categories")
   Future<void> _openCategoriesPicker(BuildContext drawerContext) async {
-    Navigator.pop(drawerContext);
+    Navigator.pop(drawerContext); // close drawer
 
     final picked = await showModalBottomSheet<Set<String>>(
       context: context,
@@ -460,38 +498,31 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  // CONTENT TYPE ("Content type" = All / Read / Video / Audio)
   Future<void> _openContentTypePicker(BuildContext drawerContext) async {
-    Navigator.pop(drawerContext);
+    Navigator.pop(drawerContext); // close drawer
 
     final picked = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
-      isScrollControlled: true, // match Categories bottom sheet behavior
+      isScrollControlled: true,
       builder: (_) => _ContentTypePicker(current: _currentContentType),
     );
 
     if (picked != null && picked.isNotEmpty) {
-      // Save locally
       if (!mounted) return;
       setState(() {
         _currentContentType = picked;
       });
 
-      // Update global prefs singleton
       ContentTypePrefs.instance.setSelected(picked);
 
-      // Persist for next launch
       final sp = await SharedPreferences.getInstance();
       await sp.setString(_kContentTypePrefKey, picked);
     }
   }
 
-  // SETTINGS → "App language"
-  //
-  // We'll open a dedicated sheet that lists CinePulse UI languages.
   Future<void> _openAppLanguageSettings(BuildContext drawerContext) async {
-    Navigator.pop(drawerContext);
+    Navigator.pop(drawerContext); // close drawer
 
     final picked = await showModalBottomSheet<String>(
       context: context,
@@ -508,7 +539,6 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  // SETTINGS → "Subscription"
   Future<void> _openSubscriptionSettings() async {
     await _showComingSoonSheet(
       title: 'Subscription',
@@ -517,7 +547,6 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  // SETTINGS → "Sign in"
   Future<void> _openAccountSettings() async {
     await _showComingSoonSheet(
       title: 'Sign in',
@@ -526,7 +555,6 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  // Generic "coming soon" bottom sheet used by Subscription / Sign in.
   Future<void> _showComingSoonSheet({
     required String title,
     required String message,
@@ -582,12 +610,8 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
-  /* ───────────────────────── Responsive helpers ─────────────────────────
-   *
-   * "compact" = phone-ish width.
-   * On compact we show bottom nav.
-   * On ≥768px we hide bottom nav (desktop vibe).
-   */
+  /* ─────────────────── responsive helpers ─────────────────── */
+
   bool _isCompact(BuildContext context) =>
       MediaQuery.of(context).size.width < 768;
 
@@ -596,45 +620,45 @@ class _RootShellState extends State<RootShell> {
     final compact = _isCompact(context);
     final showBottomNav = compact;
 
-    // Drawer header status line, e.g. "Entertainment · English"
+    // Drawer header line, e.g. "Entertainment · English"
     final categorySummary = CategoryPrefs.instance.summary();
     final langSummary = _langHeaderSummary(_currentLang);
     final feedStatusLine = '$categorySummary · $langSummary';
 
-    // Content type pill under "Content type" row in drawer
+    // "Content type" pill text in drawer
     final contentTypeLabel = ContentTypePrefs.instance.summary();
 
-    // About row text, e.g. "Version 0.1.0 · Early access"
+    // About footer text in drawer
     final versionLabel = 'Version $_kAppVersion · Early access';
 
     return WillPopScope(
       onWillPop: () async {
-        // Android back button behavior:
-        // If something (like StoryDetailsScreen) is pushed above RootShell,
-        // pop that first instead of closing the entire shell.
+        // Android back:
+        // if StoryDetailsScreen (or anything else) is pushed,
+        // pop that first instead of leaving the whole shell.
         final canPop = Navigator.of(context).canPop();
-        if (canPop) Navigator.of(context).maybePop();
+        if (canPop) {
+          Navigator.of(context).maybePop();
+        }
         return !canPop;
       },
       child: Scaffold(
         key: _scaffoldKey,
 
-        // We don't use a left drawer in this design.
         drawer: null,
         drawerEnableOpenDragGesture: false,
 
-        // Right-side drawer ("Menu")
+        // We use ONLY an endDrawer (right side) for "Menu".
         endDrawerEnableOpenDragGesture: false,
         endDrawer: Builder(
           builder: (drawerCtx) {
             return AppDrawer(
-              // required stuff:
               onClose: () => Navigator.of(drawerCtx).pop(),
               feedStatusLine: feedStatusLine,
               versionLabel: versionLabel,
               contentTypeLabel: contentTypeLabel,
 
-              // let HomeScreen etc refresh if prefs change
+              // So if user changes filters, Home etc can rebuild
               onFiltersChanged: () => setState(() {}),
 
               // CONTENT & FILTERS
@@ -655,7 +679,7 @@ class _RootShellState extends State<RootShell> {
                 _openAccountSettings();
               },
 
-              // SHARE / LEGAL links
+              // SHARE / LEGAL
               appShareUrl: 'https://cinepulse.netlify.app',
               privacyUrl: 'https://example.com/privacy', // TODO real link
               termsUrl: 'https://example.com/terms', // TODO real link
@@ -663,10 +687,10 @@ class _RootShellState extends State<RootShell> {
           },
         ),
 
-        // Main body: active tab page, width-clamped on desktop
-        //
-        // We wrap the IndexedStack host in a SafeArea with top:true and bottom:false
-        // so our custom headers do not sit under the system status bar on phones.
+        // BODY:
+        // SafeArea(top:true,bottom:false) so our custom headers don't overlap
+        // the OS status bar, but we still allow content under the phone's
+        // bottom gesture area (since we draw our own frosted nav there).
         body: SafeArea(
           top: true,
           bottom: false,
@@ -693,7 +717,7 @@ class _RootShellState extends State<RootShell> {
           ),
         ),
 
-        // Frosted bottom nav only on compact / phone
+        // FROSTED BOTTOM NAV (phones only)
         bottomNavigationBar: showBottomNav
             ? CineBottomNavBar(
                 currentIndex: _navIndex,
@@ -705,8 +729,11 @@ class _RootShellState extends State<RootShell> {
   }
 }
 
-/* Small host widget to pass callbacks into HomeScreen without wrappers above.
-   We find the ancestor _RootShellState so we can call its methods. */
+/* ─────────────────── Home tab host ───────────────────
+ *
+ * Helper widget so we can grab _RootShellState via context and pass
+ * its callbacks / flags into HomeScreen cleanly.
+ */
 class _HomeTabHost extends StatelessWidget {
   const _HomeTabHost();
 
@@ -714,21 +741,27 @@ class _HomeTabHost extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.findAncestorStateOfType<_RootShellState>()!;
     return HomeScreen(
+      // showSearchBar: true means "render the expanded search row".
+      // state._showSearchBar flips on when bottom nav "Search" is active.
       showSearchBar: state._showSearchBar,
+
+      // menu button in header
       onMenuPressed: state._openEndDrawer,
+
+      // header refresh callback (HomeScreen will call this after manual refresh)
+      onHeaderRefresh: () {
+        // no-op for now, but keeping this hook
+      },
+
+      // Pills in Home header:
       onOpenDiscover: state._openDiscover,
       onOpenSaved: state._openSaved,
       onOpenAlerts: state._openAlerts,
-      onHeaderRefresh: () {},
     );
   }
 }
 
-/* ───────────────────────── THEME PICKER SHEET ─────────────────────────
- *
- * Bottom sheet for Theme.
- * "System / Light / Dark"
- */
+/* ───────────────────────── THEME PICKER SHEET ───────────────────────── */
 class _ThemePicker extends StatelessWidget {
   const _ThemePicker({required this.current});
   final ThemeMode current;
@@ -784,11 +817,7 @@ class _ThemePicker extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── CATEGORY PICKER SHEET ─────────────────────────
- *
- * Bottom sheet for "Categories".
- * Lets user pick All / Entertainment / Sports / Travel / Fashion.
- */
+/* ───────────────────────── CATEGORY PICKER SHEET ───────────────────────── */
 class _CategoryPicker extends StatefulWidget {
   const _CategoryPicker({required this.initial});
   final Set<String> initial;
@@ -819,9 +848,9 @@ class _CategoryPickerState extends State<_CategoryPicker> {
       } else {
         _local.add(key);
       }
-      // as soon as you pick a specific vertical, drop "All"
+      // choose anything → drop "all"
       _local.remove(all);
-      // but never allow empty
+      // never allow empty
       if (_local.isEmpty) {
         _local.add(all);
       }
@@ -910,7 +939,8 @@ class _CategoryPickerState extends State<_CategoryPicker> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Pick what you want in your feed. Right now we mostly cover Entertainment.',
+              'Pick what you want in your feed. '
+              'Right now we mostly cover Entertainment.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -974,17 +1004,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
   }
 }
 
-/* ───────────────────────── CONTENT TYPE PICKER SHEET ─────────────────────────
- *
- * Bottom sheet for "Content type".
- * Radio pick:
- *   all   → "All / Everything"
- *   read  → "Read / Text / captions"
- *   video → "Video / Clips, trailers, interviews"
- *   audio → "Audio / Pod bites (coming soon)"
- *
- * Returns the picked string on "Apply".
- */
+/* ───────────────────────── CONTENT TYPE PICKER SHEET ───────────────────────── */
 class _ContentTypePicker extends StatefulWidget {
   const _ContentTypePicker({required this.current});
   final String current;
@@ -1104,7 +1124,6 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
                   ),
                 ),
                 onPressed: () {
-                  // Close sheet and return chosen content type.
                   Navigator.pop(context, _localType);
                 },
               ),
@@ -1116,22 +1135,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
   }
 }
 
-/* ───────────────────────── APP LANGUAGE SHEET ─────────────────────────
- *
- * Bottom sheet for "App language".
- * Lists CinePulse UI languages (not feed languages).
- * We show 7 options:
- *
- *  english_ui   English / English
- *  hindi_ui     हिन्दी / Hindi
- *  bengali_ui   বাংলা / Bengali
- *  marathi_ui   मराठी / Marathi
- *  telugu_ui    తెలుగు / Telugu
- *  tamil_ui     தமிழ் / Tamil
- *  gujarati_ui  ગુજરાતી / Gujarati
- *
- * Returns the picked code on "Apply".
- */
+/* ───────────────────────── APP LANGUAGE SHEET ───────────────────────── */
 class _AppLanguageSheet extends StatefulWidget {
   const _AppLanguageSheet({required this.currentCode});
   final String currentCode;
@@ -1172,6 +1176,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
     ThemeData theme,
   ) {
     final selected = (lang.code == _localCode);
+
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: () => _pick(lang.code),
@@ -1233,8 +1238,9 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Change the CinePulse UI language. Headlines and story text '
-              'still follow your Categories / Content type settings.',
+              'Change the CinePulse UI language.\n'
+              'Headlines and story text still follow your '
+              'Categories / Content type settings.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -1280,12 +1286,10 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
   }
 }
 
-/* ───────────────────────── DISCOVER PLACEHOLDER ─────────────────────────
- *
- * Simple placeholder until we actually build Discover.
- */
+/* ───────────────────────── DISCOVER PLACEHOLDER ───────────────────────── */
 class _DiscoverPlaceholder extends StatelessWidget {
   const _DiscoverPlaceholder();
+
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -1300,10 +1304,10 @@ class _DiscoverPlaceholder extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── RESPONSIVE WIDTH ─────────────────────────
+/* ───────────────────────── RESPONSIVE WIDTH WRAPPER ─────────────────────────
  *
  * On desktop/tablet we clamp max width to ~1300px so the feed grid doesn't
- * stretch into silly long rows. On phones we just fill the width normally.
+ * stretch into ultra-wide 1-row galleries. On phones we just fill width.
  */
 class _ResponsiveWidth extends StatelessWidget {
   const _ResponsiveWidth({super.key, required this.child});
@@ -1311,26 +1315,29 @@ class _ResponsiveWidth extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, c) {
-      final w = c.maxWidth;
-      if (w < 768) return child;
+    return LayoutBuilder(
+      builder: (context, c) {
+        final w = c.maxWidth;
+        if (w < 768) return child;
 
-      const maxW = 1300.0;
-      return Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: maxW),
-          child: child,
-        ),
-      );
-    });
+        const maxW = 1300.0;
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: maxW),
+            child: child,
+          ),
+        );
+      },
+    );
   }
 }
 
 /* ───────────────────────── CINE BOTTOM NAV BAR ─────────────────────────
  *
- * Frosted/blurred bottom nav for phones:
+ * Frosted/blurred bottom nav for compact screens (<768px):
+ *
  *   0 = Home
- *   1 = Search (Home + inline search bar)
+ *   1 = Search  (Home with search row expanded)
  *   2 = Saved
  *   3 = Alerts
  */
@@ -1443,11 +1450,12 @@ class _NavItemSpec {
     required this.icon,
     required this.label,
   });
+
   final IconData icon;
   final String label;
 }
 
-/// Single button in the bottom nav ("Home", "Search", ...) with red glow when active.
+/// Single bottom-nav button ("Home", "Search", etc.) with red glow when active.
 class _NavButton extends StatelessWidget {
   const _NavButton({
     required this.icon,
@@ -1489,7 +1497,7 @@ class _NavButton extends StatelessWidget {
               offset: const Offset(0, 10),
             ),
           ]
-        : <BoxShadow>[];
+        : const <BoxShadow>[];
 
     return InkWell(
       borderRadius: BorderRadius.circular(8),
