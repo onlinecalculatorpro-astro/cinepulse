@@ -66,6 +66,7 @@ import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/skeleton_card.dart';
 import '../../widgets/search_bar.dart'; // shared SearchBarInput
+import '../../theme/theme_colors.dart'; // theme-aware text colors
 import '../story/story_card.dart';
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -783,9 +784,9 @@ class _FiltersRow extends StatelessWidget {
               ),
             ],
           ),
-          child: Text(
+          child: const Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               height: 1.2,
@@ -835,6 +836,9 @@ class _FiltersRow extends StatelessWidget {
                 color: accent,
               ),
               const SizedBox(width: 6),
+              const Text(
+                '', // placeholder to keep const structure below lint?
+              ),
               Text(
                 sortLabel,
                 overflow: TextOverflow.ellipsis,
@@ -1382,19 +1386,19 @@ class _ModernBrandLogo extends StatelessWidget {
               style: TextStyle(
                 fontSize: 16,
                 height: 1,
-                color: Colors.white,
+                color: Colors.white, // text is on solid red, keep white
               ),
             ),
           ),
         ),
         const SizedBox(width: 8),
-        const Text(
+        Text(
           'CinePulse',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: Colors.white,
+            color: primaryTextColor(context), // theme-aware text color
           ),
         ),
       ],
