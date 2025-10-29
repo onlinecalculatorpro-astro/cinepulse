@@ -13,6 +13,11 @@
 // - Body reserves extra bottom space so CTA row never overlaps the title
 //   even with large text scale.
 //
+// THEME NOTE:
+//   We no longer hardcode Colors.white for text. Instead, text color comes
+//   from theme_colors.dart so it's readable in BOTH dark mode (white-on-dark)
+//   and light mode (near-black-on-light).
+//
 // Overall tile height is still influenced by childAspectRatio in home_screen.dart.
 
 import 'dart:math' as math;
@@ -31,6 +36,7 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
+import '../../theme/theme_colors.dart'; // <-- dynamic text colors
 import 'story_pager.dart'; // StoryPagerScreen
 import 'story_image_url.dart'; // resolveStoryImageUrl
 
@@ -397,7 +403,7 @@ class _StoryCardState extends State<StoryCard> {
                                         fontSize: 14,
                                         height: 1.4,
                                         fontWeight: FontWeight.w600,
-                                        color: Colors.white,
+                                        color: primaryTextColor(context),
                                       ),
                                     ),
                                   ],
@@ -661,10 +667,10 @@ class _MetaLine extends StatelessWidget {
               timestampText!,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 height: 1.3,
-                color: Colors.white,
+                color: secondaryTextColor(context),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -707,7 +713,7 @@ class _SourceLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // "Source:" dimmer (~45% white). Domain brighter (~65%) semi-bold.
+    // "Source:" dimmer. Domain slightly stronger.
     return RichText(
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -718,7 +724,7 @@ class _SourceLine extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               height: 1.3,
-              color: Colors.white.withOpacity(0.45),
+              color: faintTextColor(context),
               fontWeight: FontWeight.w400,
             ),
           ),
@@ -727,7 +733,7 @@ class _SourceLine extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               height: 1.3,
-              color: Colors.white.withOpacity(0.65),
+              color: secondaryTextColor(context),
               fontWeight: FontWeight.w500,
             ),
           ),
