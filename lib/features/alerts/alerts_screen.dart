@@ -51,6 +51,7 @@ import '../../core/models.dart';
 import '../../widgets/search_bar.dart';
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
+import '../../theme_colors.dart';
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({
@@ -616,9 +617,9 @@ class _AlertsToolbarRow extends StatelessWidget {
               ),
             ],
           ),
-          child: Text(
-            label,
-            style: const TextStyle(
+          child: const Text(
+            'placeholder', // replaced per-chip below via chip()
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               height: 1.2,
@@ -630,9 +631,38 @@ class _AlertsToolbarRow extends StatelessWidget {
     }
 
     Widget chip(int idx, String label) {
-      return (idx == activeIndex)
-          ? activeChip(label, () => onCategoryTap(idx))
-          : inactiveChip(label, () => onCategoryTap(idx));
+      if (idx == activeIndex) {
+        return InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () => onCategoryTap(idx),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _accent,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: _accent, width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: _accent.withOpacity(0.4),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.2,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        );
+      } else {
+        return inactiveChip(label, () => onCategoryTap(idx));
+      }
     }
 
     Widget markAllReadPill() {
@@ -785,7 +815,9 @@ class _HeaderIconButton extends StatelessWidget {
     final Color bg = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : Colors.black.withOpacity(0.06);
-    final Color fg = isDark ? Colors.white : Colors.black87;
+
+    // icon color now adapts using theme_colors.dart
+    final Color fg = primaryTextColor(context);
 
     return Tooltip(
       message: tooltip,
@@ -849,13 +881,13 @@ class _ModernBrandLogo extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        const Text(
+        Text(
           'CinePulse',
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: Colors.white,
+            color: primaryTextColor(context), // was hardcoded white
           ),
         ),
       ],
