@@ -1,20 +1,41 @@
 // lib/features/alerts/alerts_screen.dart
 //
 // ALERTS TAB
-// - Header icons follow global CTA order:
-//   Home • Search • Saved • (no Alerts here) • Discover • Refresh • Menu
-//   Search toggles a local inline search row (row 3), same behavior idea
-//   as Home/Saved.
-// - Row 2 under header now matches Saved/Home style:
-//   • LEFT  : category chips [All / Entertainment / Sports]
-//   • RIGHT : "Mark all read" pill
-// - Refresh icon moved to header (not in row 2 anymore).
-// - Count line ("3 new alerts") under row 2.
-// - Row 3 (if Search active): full-width SearchBarInput that filters alerts.
-// - Grid sizing / skeleton / empty / pull-to-refresh kept.
+// ----------------------------------------------------------------------
+// Header rules (matches global CTA model):
 //
-// We hide the "Alerts" CTA in the header because we're already on Alerts.
+// WIDE (≥768px):
+//   [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
+//   - We DO NOT show an "Alerts" CTA here because we're already on Alerts.
 //
+// COMPACT (<768px):
+//   [Search] [Refresh] [Menu]
+//   - We skip Home / Saved / Discover in compact header because
+//     bottom nav on mobile already covers Home / Discover / Saved / Alerts.
+//
+// Search CTA behavior:
+//   - Tapping Search in the header toggles a dedicated inline search row
+//     (Row 3 below the chips and count line), *inside Alerts tab only*.
+//   - Closing that row clears the query.
+//
+// Body layout below header:
+//
+//   Row 2: AlertsToolbarRow
+//          LEFT  = category chips [ All / Entertainment / Sports ]
+//          RIGHT = "Mark all read" pill
+//
+//   Row 2.5: Count line, e.g. "3 new alerts"
+//
+//   Row 3 (conditional): SearchBarInput if header Search is toggled
+//          - Filters the visible alerts list locally
+//
+//   Body: pull-to-refresh + grid of unread alerts
+//
+// Other notes:
+//   • "Mark all read" advances lastSeen, clears current list.
+//   • Refresh icon lives in header, not in Row 2.
+//   • Grid sizing math matches Home and Saved so StoryCard tiles line up.
+// ----------------------------------------------------------------------
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -53,9 +74,9 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   // When user last "marked all read" (UTC).
   DateTime _lastSeenUtc =
-      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true); // first run
+      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true); // first run ever
 
-  // Stories that are new since _lastSeenUtc.
+  // Stories newer than _lastSeenUtc.
   List<Story> _alerts = [];
 
   bool _loading = true;
@@ -63,10 +84,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   bool get _hasAlerts => _alerts.isNotEmpty;
 
-  // which category chip is active (0=All,1=Entertainment,2=Sports)
+  // category chip visual state (0=All,1=Entertainment,2=Sports)
   int _activeCatIndex = 0;
 
-  // search row toggle + controller
+  // header search toggle + controller
   bool _showSearchRow = false;
   final _searchCtl = TextEditingController();
   Timer? _debounce;
@@ -152,8 +173,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
     await _saveLastSeen(now);
     if (!mounted) return;
     setState(() {
-        _lastSeenUtc = now;
-        _alerts.clear();
+      _lastSeenUtc = now;
+      _alerts.clear();
     });
   }
 
@@ -177,10 +198,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
     setState(() {
       _activeCatIndex = i;
     });
-    // (Future: filter by tab here)
+    // (future: actually filter alerts by category here)
   }
 
-  /* grid sizing identical to Home/Saved */
+  /* ───────────────────────── Grid sizing helper ─────────────────────────
+   * SAME math as Home/Saved, so StoryCard tiles align across tabs.
+   */
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
     if (width < 520) {
@@ -216,7 +239,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
     );
   }
 
-  /* Count line helper */
+  /* ───────────────────────── Label helpers ───────────────────────── */
+
   String _countLabel() {
     if (_loading) return 'Checking…';
     if (_error != null) return 'Couldn’t refresh';
@@ -226,7 +250,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return '$total new alerts';
   }
 
-  // Apply search filter for the grid.
   List<Story> _filteredAlerts() {
     final q = _searchCtl.text.trim().toLowerCase();
     if (q.isEmpty) return _alerts;
@@ -237,7 +260,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     }).toList();
   }
 
-  /* ───────────────────────── UI build ───────────────────────── */
+  /* ───────────────────────── UI BUILD ───────────────────────── */
 
   @override
   Widget build(BuildContext context) {
@@ -252,7 +275,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return Scaffold(
       backgroundColor: bgColor,
 
-      /* ───────── Frosted header ───────── */
+      /* ───────── Row 1: Frosted CinePulse header bar ───────── */
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(64),
         child: ClipRRect(
@@ -287,8 +310,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   const _ModernBrandLogo(),
                   const Spacer(),
 
-                  // Wide/desktop header CTAs, in order:
-                  // Home • Search • Saved • (no Alerts here) • Discover • Refresh • Menu
+                  // WIDE (≥768px) CTA order:
+                  // [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
                   if (isWide) ...[
                     _HeaderIconButton(
                       tooltip: 'Home',
@@ -326,13 +349,37 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       onTap: _load,
                     ),
                     const SizedBox(width: 8),
+
+                    _HeaderIconButton(
+                      tooltip: 'Menu',
+                      icon: Icons.menu_rounded,
+                      onTap: widget.onOpenMenu,
+                    ),
                   ],
 
-                  _HeaderIconButton(
-                    tooltip: 'Menu',
-                    icon: Icons.menu_rounded,
-                    onTap: widget.onOpenMenu,
-                  ),
+                  // COMPACT (<768px) CTA order:
+                  // [Search] [Refresh] [Menu]
+                  if (!isWide) ...[
+                    _HeaderIconButton(
+                      tooltip: 'Search',
+                      icon: Icons.search_rounded,
+                      onTap: _toggleSearchRow,
+                    ),
+                    const SizedBox(width: 8),
+
+                    _HeaderIconButton(
+                      tooltip: 'Refresh',
+                      icon: Icons.refresh_rounded,
+                      onTap: _load,
+                    ),
+                    const SizedBox(width: 8),
+
+                    _HeaderIconButton(
+                      tooltip: 'Menu',
+                      icon: Icons.menu_rounded,
+                      onTap: widget.onOpenMenu,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -340,11 +387,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
         ),
       ),
 
-      /* ───────── Body ───────── */
+      /* ───────── Body content ───────── */
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row 2 toolbar: category chips (left) + mark all read (right)
+          // Row 2: category chips (All / Entertainment / Sports) + Mark all read
           _AlertsToolbarRow(
             activeIndex: _activeCatIndex,
             onCategoryTap: _setCategory,
@@ -353,7 +400,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
             onMarkAllRead: _markAllRead,
           ),
 
-          // Count line ("3 new alerts")
+          // Row 2.5: count label ("3 new alerts")
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
@@ -364,7 +411,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
             ),
           ),
 
-          // Row 3: inline search bar (if header Search is active)
+          // Row 3: inline search (only if header Search is toggled)
           if (_showSearchRow)
             Padding(
               padding:
@@ -381,7 +428,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
               ),
             ),
 
-          // main grid / states wrapped in pull-to-refresh
+          // Main alert grid / loading / empty states,
+          // wrapped in pull-to-refresh.
           Expanded(
             child: RefreshIndicator.adaptive(
               onRefresh: _load,
@@ -487,11 +535,15 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 }
 
-/* ───────────────────────── Alerts toolbar row ─────────────────────────
+/* ───────────────────────── Row 2 under header ─────────────────────────
  *
- * Row 2 under header.
- * LEFT  : category chip pills (All / Entertainment / Sports)
- * RIGHT : "Mark all read" pill (red outline style)
+ * _AlertsToolbarRow:
+ *    LEFT  : category chips (All / Entertainment / Sports)
+ *    RIGHT : "Mark all read" pill
+ *
+ * "Mark all read":
+ *    - Red outline pill.
+ *    - Disabled if no alerts or currently loading.
  */
 class _AlertsToolbarRow extends StatelessWidget {
   const _AlertsToolbarRow({
@@ -516,7 +568,7 @@ class _AlertsToolbarRow extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    Widget _inactiveChip(String label, VoidCallback onTap) {
+    Widget inactiveChip(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,
@@ -543,7 +595,7 @@ class _AlertsToolbarRow extends StatelessWidget {
       );
     }
 
-    Widget _activeChip(String label, VoidCallback onTap) {
+    Widget activeChip(String label, VoidCallback onTap) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,
@@ -574,19 +626,18 @@ class _AlertsToolbarRow extends StatelessWidget {
       );
     }
 
-    Widget _chip(int idx, String label) {
+    Widget chip(int idx, String label) {
       return (idx == activeIndex)
-          ? _activeChip(label, () => onCategoryTap(idx))
-          : _inactiveChip(label, () => onCategoryTap(idx));
+          ? activeChip(label, () => onCategoryTap(idx))
+          : inactiveChip(label, () => onCategoryTap(idx));
     }
 
-    Widget _markAllReadPill() {
+    Widget markAllReadPill() {
       final enabled = hasAlerts && !loading;
 
       final borderColor =
           enabled ? _accent.withOpacity(0.4) : _accent.withOpacity(0.15);
-      final textColor =
-          enabled ? _accent : _accent.withOpacity(0.4);
+      final textColor = enabled ? _accent : _accent.withOpacity(0.4);
 
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -642,18 +693,18 @@ class _AlertsToolbarRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // LEFT: category chips (scrollable if needed)
+          // LEFT: category chips (scroll if narrow)
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  _chip(0, 'All'),
+                  chip(0, 'All'),
                   const SizedBox(width: 8),
-                  _chip(1, 'Entertainment'),
+                  chip(1, 'Entertainment'),
                   const SizedBox(width: 8),
-                  _chip(2, 'Sports'),
+                  chip(2, 'Sports'),
                 ],
               ),
             ),
@@ -661,8 +712,8 @@ class _AlertsToolbarRow extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // RIGHT: Mark all read pill
-          _markAllReadPill(),
+          // RIGHT: mark all read pill
+          markAllReadPill(),
         ],
       ),
     );
