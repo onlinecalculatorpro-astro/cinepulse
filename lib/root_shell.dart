@@ -21,7 +21,7 @@
 // Drawer
 // -----------------------------------------------------------------------------
 // Surfaces: Categories, Content type, Theme, App language, Subscription, Account
-// Shows header summary like: "Entertainment · English" and content type.
+// Shows header summary like: "<CategoriesSummary> · <LanguageSummary>"
 //
 // Deep links
 // -----------------------------------------------------------------------------
@@ -44,15 +44,23 @@ import 'core/api.dart' show fetchStory;
 import 'core/cache.dart'; // FeedCache
 import 'core/models.dart';
 import 'core/utils.dart'; // fadeRoute()
+
+// NEW: shared category state + helpers (single source of truth)
+import 'core/category_prefs.dart';
+
+// Feature tabs
 import 'features/alerts/alerts_screen.dart';
 import 'features/discover/discover_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/saved/saved_screen.dart';
 import 'features/story/story_details.dart';
+
+// Theme helpers
 import 'theme/theme_colors.dart'; // tokens & helpers
+
+// Drawer + shared picker sheets
 import 'widgets/app_drawer.dart';
-// NEW: shared picker sheets
-import 'widgets/picker_sheets.dart';
+import 'widgets/picker_sheets.dart'; // ThemePickerSheet, CategoryPickerSheet, ContentTypePickerSheet
 
 const String _kAppVersion = '0.1.0';
 
@@ -62,71 +70,7 @@ const String _kContentTypePrefKey =
     'cp.contentType'; // 'all' | 'read' | 'video' | 'audio'
 
 /* ──────────────────────────────────────────────────────────────────────────
- * CATEGORY PREFS
- * ───────────────────────────────────────────────────────────────────────── */
-class CategoryPrefs extends ChangeNotifier {
-  CategoryPrefs._internal();
-  static final CategoryPrefs instance = CategoryPrefs._internal();
-
-  static const keyAll = 'all';
-  static const keyEntertainment = 'entertainment';
-  static const keySports = 'sports';
-  static const keyTravel = 'travel';
-  static const keyFashion = 'fashion';
-
-  // default = All
-  final Set<String> _selected = {keyAll};
-
-  Set<String> get selected => Set.unmodifiable(_selected);
-  bool isSelected(String k) => _selected.contains(k);
-
-  void applySelection(Set<String> incoming) {
-    _selected
-      ..clear()
-      ..addAll(incoming);
-    _normalize();
-    notifyListeners();
-  }
-
-  String summary() {
-    if (_selected.contains(keyAll)) return 'All';
-
-    final labels = _selected.map((k) {
-      switch (k) {
-        case keyEntertainment:
-          return 'Entertainment';
-        case keySports:
-          return 'Sports';
-        case keyTravel:
-          return 'Travel';
-        case keyFashion:
-          return 'Fashion';
-        default:
-          return k;
-      }
-    }).toList()
-      ..sort();
-
-    if (labels.isEmpty) return 'All';
-    if (labels.length == 1) return labels.first;
-    return '${labels.first} +${labels.length - 1}';
-  }
-
-  void _normalize() {
-    if (_selected.contains(keyAll) && _selected.length > 1) {
-      _selected
-        ..clear()
-        ..add(keyAll);
-      return;
-    }
-    if (_selected.isEmpty) {
-      _selected.add(keyAll);
-    }
-  }
-}
-
-/* ──────────────────────────────────────────────────────────────────────────
- * CONTENT TYPE PREFS
+ * CONTENT TYPE PREFS (kept local; can extract later like CategoryPrefs)
  * 'all' | 'read' | 'video' | 'audio'
  * ───────────────────────────────────────────────────────────────────────── */
 class ContentTypePrefs extends ChangeNotifier {
@@ -365,7 +309,8 @@ class _RootShellState extends State<RootShell> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => CategoryPickerSheet(initial: CategoryPrefs.instance.selected),
+      builder: (_) =>
+          CategoryPickerSheet(initial: CategoryPrefs.instance.selected),
     );
 
     if (picked != null && picked.isNotEmpty) {
@@ -412,14 +357,16 @@ class _RootShellState extends State<RootShell> {
   Future<void> _openSubscriptionSettings() async {
     await _showComingSoonSheet(
       title: 'Subscription',
-      message: 'Remove ads & unlock extras. This will show our plans / paywall.',
+      message:
+          'Remove ads & unlock extras. This will show our plans / paywall.',
     );
   }
 
   Future<void> _openAccountSettings() async {
     await _showComingSoonSheet(
       title: 'Sign in',
-      message: 'Sign in to sync your saved stories and alerts across devices.',
+      message:
+          'Sign in to sync your saved stories and alerts across devices.',
     );
   }
 
