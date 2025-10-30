@@ -9,7 +9,7 @@
 //
 // Row 2  : AppToolbar (chips + Sort pill; theme-safe)
 // Row 2.5: Count line ("24 results")
-// Row 3  : Inline SearchBarInput (toggled by header Search)
+// Row 3  : Inline SearchBarInput (toggled by header Search; AnimatedSize)
 // Body   : RefreshIndicator + responsive grid of StoryCard
 // Notes  : Chips map to API tabs: all / entertainment / sports.
 //          Sort applied client-side. Search filters locally.
@@ -18,7 +18,6 @@
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../core/api.dart';
@@ -461,21 +460,28 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             ),
           ),
 
-          // Row 3: inline search
-          if (_showSearchRow)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: SearchBarInput(
-                controller: _query,
-                onExitSearch: () {
-                  setState(() {
-                    _query.clear();
-                    _showSearchRow = false;
-                  });
-                  FocusScope.of(context).unfocus();
-                },
-              ),
-            ),
+          // Row 3: inline search (animated)
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: _showSearchRow
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: SearchBarInput(
+                      controller: _query,
+                      autofocus: true,
+                      onExitSearch: () {
+                        setState(() {
+                          _query.clear();
+                          _showSearchRow = false;
+                        });
+                        FocusScope.of(context).unfocus();
+                      },
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
 
           // Grid / states
           Expanded(
