@@ -1,40 +1,15 @@
 // lib/widgets/search_bar.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show LogicalKeyboardKey, LogicalKeySet; // ESC key + keyset
+import 'package:flutter/services.dart'
+    show LogicalKeyboardKey, LogicalKeySet; // ESC key + keyset
+import '../theme/theme_colors.dart'; // neutralPillBg, outlineHairline, primaryTextColor
 
-/// CinePulse inline search field.
+/// CinePulse inline search field (Row 3 in tabs).
 ///
-/// Used in Home / Discover / Saved / Alerts as the "Row 3" inline search bar.
-///
-/// Behavior
-/// --------
-/// - Leading 🔍 icon (static).
-/// - Editable text bound to [controller].
-/// - Trailing ✕ button:
-///     • If [onExitSearch] is provided, tapping ✕ calls that callback
-///       (tabs use this to hide the search row, clear input, and unfocus).
-///     • Otherwise we just clear the text and unfocus.
-/// - Border glows red when focused to match the global accent.
-///
-/// Visual
-/// ------
-/// - Frosted-ish pill look shared across the app:
-///     • 8px radius
-///     • subtle translucent background
-///     • 1px outline (accent when focused)
-/// - Height = 40px
-///
-/// Lifecycle
-/// ---------
-/// - Owns a FocusNode to:
-///     • update the border color on focus
-///     • close the keyboard on exit
-/// - Listens to [controller] and rebuilds to keep UI in sync.
-///
-/// Extras
-/// ------
-/// - ESC closes/clears (desktop/web): if [onExitSearch] is set we call it,
-///   else we just clear & unfocus.
+/// • Leading 🔍 icon
+/// • Editable text bound to [controller]
+/// • Trailing ✕ that clears or calls [onExitSearch]
+/// • Focus/ink colors come from Theme.colorScheme.primary (no hard-coded colors)
 class SearchBarInput extends StatefulWidget {
   const SearchBarInput({
     super.key,
@@ -52,8 +27,6 @@ class SearchBarInput extends StatefulWidget {
 }
 
 class _SearchBarInputState extends State<SearchBarInput> {
-  static const _accent = Color(0xFFdc2626);
-
   late final FocusNode _focusNode;
 
   @override
@@ -97,21 +70,23 @@ class _SearchBarInputState extends State<SearchBarInput> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    // Outline color = accent when focused, subtle hairline otherwise.
-    final Color outlineColor = _focusNode.hasFocus
-        ? _accent
-        : (isDark ? Colors.white.withOpacity(0.15) : Colors.black.withOpacity(0.2));
+    // Accent = brand primary; everything derives from ColorScheme.
+    final accent = cs.primary;
 
-    // Background matches the pill buttons in headers / bottom nav.
-    final Color bgColor =
-        isDark ? const Color(0xFF0f172a).withOpacity(0.7) : theme.colorScheme.surface.withOpacity(0.6);
+    // Outline: accent when focused, subtle hairline otherwise.
+    final Color outlineColor =
+        _focusNode.hasFocus ? accent : outlineHairline(context);
 
-    final Color textColor = isDark ? Colors.white : Colors.black87;
-    final Color hintColor = isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.5);
+    // Shared pill background for neutral surfaces.
+    final Color bgColor = neutralPillBg(context);
 
-    // Keybindings: ESC to clear/exit (non-const map to avoid web const issues).
+    final Color textColor = primaryTextColor(context);
+    final Color hintColor = textColor.withOpacity(isDark ? 0.6 : 0.55);
+
+    // ESC to clear/exit.
     return Shortcuts(
       shortcuts: <ShortcutActivator, Intent>{
         LogicalKeySet(LogicalKeyboardKey.escape): const DismissIntent(),
@@ -139,11 +114,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
             ),
             child: Row(
               children: [
-                Icon(
-                  Icons.search_rounded,
-                  size: 18,
-                  color: _accent,
-                ),
+                Icon(Icons.search_rounded, size: 18, color: accent),
                 const SizedBox(width: 8),
 
                 // Editable text
@@ -155,9 +126,9 @@ class _SearchBarInputState extends State<SearchBarInput> {
                     autocorrect: false,
                     enableSuggestions: false,
                     maxLines: 1,
-                    cursorColor: _accent,
+                    cursorColor: accent,
                     onTapOutside: (_) => FocusScope.of(context).unfocus(),
-                    style: TextStyle(
+                    style: theme.textTheme.bodyMedium?.copyWith(
                       fontSize: 14,
                       height: 1.3,
                       color: textColor,
@@ -167,7 +138,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                       isCollapsed: true,
                       border: InputBorder.none,
                       hintText: widget.hintText,
-                      hintStyle: TextStyle(
+                      hintStyle: theme.textTheme.bodyMedium?.copyWith(
                         fontSize: 14,
                         height: 1.3,
                         color: hintColor,
@@ -190,22 +161,18 @@ class _SearchBarInputState extends State<SearchBarInput> {
                       width: 24,
                       height: 24,
                       decoration: BoxDecoration(
-                        color: _accent.withOpacity(0.12),
+                        color: accent.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: _accent.withOpacity(0.4), width: 1),
+                        border: Border.all(color: accent.withOpacity(0.4), width: 1),
                         boxShadow: [
                           BoxShadow(
-                            color: _accent.withOpacity(0.4),
-                            blurRadius: 20,
+                            color: accent.withOpacity(0.35),
+                            blurRadius: 18,
                             offset: const Offset(0, 10),
                           ),
                         ],
                       ),
-                      child: Icon(
-                        Icons.close_rounded,
-                        size: 16,
-                        color: _accent,
-                      ),
+                      child: Icon(Icons.close_rounded, size: 16, color: accent),
                     ),
                   ),
                 ),
