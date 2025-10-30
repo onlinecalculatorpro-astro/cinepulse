@@ -68,7 +68,7 @@ import '../../core/api.dart';            // fetchFeed(), kApiBaseUrl
 import '../../core/cache.dart';          // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
 import '../../core/utils.dart';          // fadeRoute(), deepLinkForStoryId()
-import '../../theme/theme_colors.dart';  // brand + text helpers (outlineHairline, neutralPillBg)
+import '../../theme/theme_colors.dart';  // brand + text helpers
 import '../../widgets/app_toolbar.dart'; // ✅ shared toolbar row
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
@@ -475,7 +475,7 @@ class _HomeScreenState extends State<HomeScreen>
 
         return SafeArea(
           child: Column(
-            mainAxisSize: MainSize.min,
+            mainAxisSize: MainAxisSize.min,
             children: [
               option(
                 mode: _SortMode.latest,
@@ -905,8 +905,7 @@ class _FeedListState extends State<_FeedList>
                 // 1. Initial load → skeleton grid
                 if (feed.isInitialLoading) {
                   return GridView.builder(
-                    padding:
-                        EdgeInsets.fromLTRB(hPad, topPad, hPad, bottomPad),
+                    padding: EdgeInsets.fromLTRB(hPad, topPad, hPad, bottomPad),
                     physics: const AlwaysScrollableScrollPhysics(),
                     cacheExtent: 1800,
                     gridDelegate: gridDelegate,
@@ -918,8 +917,7 @@ class _FeedListState extends State<_FeedList>
                 // 2. Hard failure w/ no cached data
                 if (feed.hasError && feed.items.isEmpty) {
                   return ListView(
-                    padding:
-                        EdgeInsets.fromLTRB(hPad, 24, hPad, bottomPad),
+                    padding: EdgeInsets.fromLTRB(hPad, 24, hPad, bottomPad),
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
                       ErrorView(
@@ -948,8 +946,7 @@ class _FeedListState extends State<_FeedList>
                       ? "You're offline and no results match your search."
                       : 'No matching items.';
                   return ListView(
-                    padding:
-                        EdgeInsets.fromLTRB(hPad, 24, hPad, bottomPad),
+                    padding: EdgeInsets.fromLTRB(hPad, 24, hPad, bottomPad),
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [Center(child: Text(msg))],
                   );
