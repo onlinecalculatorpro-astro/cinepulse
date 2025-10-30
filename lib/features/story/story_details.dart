@@ -1,22 +1,12 @@
 // lib/features/story/story_details.dart
 //
-// This version does JUST TWO visual syncs with StoryCard:
+// Visual sync with StoryCard:
+//  • Meta line: [Kind] <timestamp> +Xm  (kind colors via ColorScheme,
+//    freshness uses Brand.freshRed)
+//  • CTA row: [Watch/Read] [🔖] [📤] — primary button uses scheme.primary,
+//    save/share are square pills using neutralPillBg + outlineHairline.
 //
-// 1. Meta line under the title now matches _MetaLine from story_card.dart:
-//      [Release] 27 Oct 2025, 3:30 PM +6m
-//
-// 2. The CTA row now matches StoryCard bottom CTA row style:
-//      [▶ Watch] [🔖] [📤]
-//    (red Watch/Read pill button, then square Save + Share boxes,
-//     all left-aligned, and no Spacer pushing Save to the far right)
-//
-// All other features/logic (hero header, inline player, share logic,
-// saved/bookmark logic in the AppBar actions, source attribution text, etc.)
-// stay the same.
-//
-// THEME NOTE:
-// We now import theme_colors.dart and ONLY update text color usage to be
-// light/dark safe where it was previously hardcoded white.
+// All logic (hero, inline player, share, saved) retained.
 
 import 'dart:math' as math;
 
@@ -28,12 +18,13 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart'; // deepLinkForStoryId, storyVideoUrl
-import '../../core/cache.dart'; // SavedStore
+import '../../core/api.dart';            // deepLinkForStoryId, storyVideoUrl
+import '../../core/cache.dart';          // SavedStore
 import '../../core/models.dart';
 import '../../widgets/smart_video_player.dart';
-import '../../theme/theme_colors.dart'; // <-- theme-aware text colors
-import 'story_image_url.dart'; // resolveStoryImageUrl
+import '../../theme/theme_colors.dart';  // primaryTextColor, secondaryTextColor, neutralPillBg, outlineHairline
+import '../../theme/app_theme.dart' show Brand; // Brand.freshRed
+import 'story_image_url.dart';           // resolveStoryImageUrl
 
 class StoryDetailsScreen extends StatefulWidget {
   const StoryDetailsScreen({
@@ -50,7 +41,6 @@ class StoryDetailsScreen extends StatefulWidget {
 }
 
 class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
-  // inline video player state (lives in the header hero)
   bool _showPlayer = false;
   final _heroPlayerKey = GlobalKey();
 
@@ -67,7 +57,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return u;
   }
 
-  /// Prefer inline playable URL over article URL.
   Uri? get _primaryUrl => _videoUrl ?? _canonicalUrl;
 
   bool get _hasVideo => _videoUrl != null;
@@ -86,10 +75,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
   String _shareText() {
-    // prefer our deep link
     final deep = deepLinkForStoryId(widget.story.id).toString();
     if (deep.isNotEmpty) return deep;
-    // fallback to upstream link
     final link = _primaryUrl?.toString();
     return (link != null && link.isNotEmpty) ? link : widget.story.title;
   }
@@ -139,8 +126,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   void _openPlayerInHeader() {
     if (!_hasVideo) return;
     setState(() => _showPlayer = true);
-
-    // after mounting player, make sure header is visible
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _heroPlayerKey.currentContext;
       if (ctx != null) {
@@ -165,14 +150,12 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
   /* ---------------- Source attribution helpers ---------------- */
 
-  // remove leading "rss:" or "rss " or "rss-" etc.
   String _cleanupSourcePiece(String s) {
     var out = s.trim();
     out = out.replaceFirst(RegExp(r'^\s*rss[:\s-]+', caseSensitive: false), '');
     return out.trim();
   }
 
-  // Build "YouTube / BollywoodHungama.com" style attribution for footer
   String _sourceAttribution(Story s) {
     final aRaw = (s.source ?? '').trim();
     final bRaw = (s.sourceDomain ?? '').trim();
@@ -181,12 +164,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final b = _cleanupSourcePiece(bRaw);
 
     if (a.isNotEmpty && b.isNotEmpty) {
-      // Avoid duplicating if they basically match each other
       final al = a.toLowerCase();
       final bl = b.toLowerCase();
-      if (bl.contains(al) || al.contains(bl)) {
-        return a.isNotEmpty ? a : b;
-      }
+      if (bl.contains(al) || al.contains(bl)) return a.isNotEmpty ? a : b;
       return '$a / $b';
     }
     if (a.isNotEmpty) return a;
@@ -194,30 +174,25 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return '';
   }
 
-  /* ---------------- Formatting helpers (copied from StoryCard logic) ----- */
+  /* ---------------- Formatting helpers (shared with StoryCard) ----- */
 
   static const List<String> _mon = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
 
-  // "27 Oct 2025, 3:30 PM"
   String _formatMetaTimestamp(DateTime dt) {
     final d = dt.toLocal();
     final day = d.day;
     final m = _mon[d.month - 1];
     final y = d.year;
-
     var h = d.hour % 12;
     if (h == 0) h = 12;
-
     final mm = d.minute.toString().padLeft(2, '0');
     final ap = d.hour >= 12 ? 'PM' : 'AM';
-
     return '$day $m $y, $h:$mm $ap';
   }
 
-  // "+6m", "+2h", "+1d"
   String _formatGapShort(Duration d) {
     final abs = d.isNegative ? -d : d;
     if (abs.inMinutes < 60) return '+${abs.inMinutes}m';
@@ -225,7 +200,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return '+${abs.inDays}d';
   }
 
-  // 'release' -> 'Release', 'news' -> 'News', etc
   String _kindDisplay(String k) {
     final lower = k.toLowerCase();
     if (lower == 'ott') return 'OTT';
@@ -244,7 +218,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     final isPhone = screenW < 600;
     final hasPrimary = _primaryUrl != null;
 
-    // hero height logic (~16:9, capped, expands if inline player is visible)
     final desired16x9 = screenW * 9.0 / 16.0;
     final maxHeightCap = isPhone ? 340.0 : 400.0;
     final baseHeroHeight = math.min(desired16x9, maxHeightCap);
@@ -253,10 +226,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
         ? (desired16x9 + (isPhone ? 96.0 : 120.0))
         : baseHeroHeight;
 
-    // cleaned attribution footer string
     final attribution = _sourceAttribution(widget.story);
 
-    // ----- meta line data (mirrors StoryCard) -----------------
     final story = widget.story;
     final kindRaw = story.kind.toLowerCase();
     final String kindLabel = _kindDisplay(kindRaw);
@@ -275,7 +246,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
         freshnessText = _formatGapShort(diff);
       }
     }
-    // ----------------------------------------------------------
 
     return Scaffold(
       body: CustomScrollView(
@@ -348,7 +318,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
-                  // bottom padding so bottom nav bar doesn't hide footer/CTA
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -365,7 +334,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // meta line
+                      // meta line (theme-aware)
                       _MetaLine(
                         kindRaw: kindRaw,
                         kindLabel: kindLabel,
@@ -375,7 +344,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 16),
 
-                      // summary
                       if ((widget.story.summary ?? '').isNotEmpty)
                         Text(
                           widget.story.summary!,
@@ -386,7 +354,6 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           ),
                         ),
 
-                      // optional facets
                       if (widget.story.languages.isNotEmpty ||
                           widget.story.genres.isNotEmpty) ...[
                         const SizedBox(height: 16),
@@ -410,11 +377,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
 
                       const SizedBox(height: 20),
 
-                      // CTA row
+                      // CTA row (left-aligned; matches card)
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Big red Watch/Read button
                           Semantics(
                             button: true,
                             label: _ctaLabel,
@@ -432,8 +398,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                       }
                                     : null,
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFFdc2626),
-                                  foregroundColor: Colors.white,
+                                  backgroundColor: cs.primary,
+                                  foregroundColor: cs.onPrimary,
                                   elevation: 0,
                                   minimumSize: const Size(0, 36),
                                   padding: const EdgeInsets.symmetric(
@@ -442,7 +408,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(6),
                                     side: BorderSide(
-                                      color: Colors.white.withOpacity(0.08),
+                                      color: outlineHairline(context),
                                       width: 1,
                                     ),
                                   ),
@@ -453,14 +419,15 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                   ),
                                 ),
                                 icon: _isWatchCta
-                                    ? const Icon(
+                                    ? Icon(
                                         Icons.play_arrow_rounded,
                                         size: 20,
-                                        color: Colors.white,
+                                        color: cs.onPrimary,
                                       )
-                                    : const _Emoji(
+                                    : _Emoji(
                                         emoji: '📖',
                                         size: 16,
+                                        color: cs.onPrimary,
                                       ),
                                 label: Text(_ctaLabel),
                               ),
@@ -479,10 +446,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                 tooltip: saved ? 'Saved' : 'Save',
                                 onTap: () => SavedStore.instance
                                     .toggle(widget.story.id),
-                                icon: const _Emoji(
-                                  emoji: '🔖',
-                                  size: 16,
-                                ),
+                                icon: const _Emoji(emoji: '🔖', size: 16),
                               );
                             },
                           ),
@@ -493,15 +457,11 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           _ActionIconBox(
                             tooltip: 'Share',
                             onTap: () => _share(context),
-                            icon: const _Emoji(
-                              emoji: '📤',
-                              size: 16,
-                            ),
+                            icon: const _Emoji(emoji: '📤', size: 16),
                           ),
                         ],
                       ),
 
-                      // legal / source attribution footer
                       if (attribution.isNotEmpty) ...[
                         const SizedBox(height: 24),
                         Text(
@@ -651,7 +611,7 @@ class _HeaderHero extends StatelessWidget {
   }
 }
 
-/* ---------------- Facet chip (kept for completeness) ---------------- */
+/* ---------------- Facet chip ---------------- */
 
 class _Facet extends StatelessWidget {
   const _Facet({required this.label, required this.value});
@@ -711,74 +671,45 @@ class _SampleIcon extends StatelessWidget {
       iconColor = const Color(0xFFC377F2);
     }
 
-    return Icon(
-      iconData,
-      size: 60,
-      color: iconColor.withOpacity(0.9),
-    );
+    return Icon(iconData, size: 60, color: iconColor.withOpacity(0.9));
   }
 }
 
-/* ---------------- SAME helpers from StoryCard ---------------- */
+/* ---------------- Kind pill colors (theme-driven) ---------------- */
 
 class _KindStyle {
   final Color bg;
   final Color border;
   final Color text;
-  const _KindStyle({
-    required this.bg,
-    required this.border,
-    required this.text,
-  });
+  const _KindStyle({required this.bg, required this.border, required this.text});
 }
 
-// Pick badge colors by kind (Release red, News blue, etc).
-_KindStyle _styleForKind(String rawKind) {
+// Match StoryCard: release→error, news→primary, ott→tertiary, trailer→secondary, else onSurfaceVariant
+_KindStyle _styleForKind(BuildContext ctx, String rawKind) {
+  final cs = Theme.of(ctx).colorScheme;
   final k = rawKind.toLowerCase().trim();
 
-  const red = Color(0xFFdc2626);
-  const blue = Color(0xFF3b82f6);
-  const purple = Color(0xFF8b5cf6);
-  const amber = Color(0xFFFACC15);
-  const gray = Color(0xFF94a3b8);
-
+  Color base;
   if (k.contains('release')) {
-    return _KindStyle(
-      bg: red.withOpacity(0.16),
-      border: red.withOpacity(0.4),
-      text: red,
-    );
-  }
-  if (k.contains('news')) {
-    return _KindStyle(
-      bg: blue.withOpacity(0.16),
-      border: blue.withOpacity(0.4),
-      text: blue,
-    );
-  }
-  if (k.contains('ott')) {
-    return _KindStyle(
-      bg: purple.withOpacity(0.16),
-      border: purple.withOpacity(0.4),
-      text: purple,
-    );
-  }
-  if (k.contains('trailer')) {
-    return _KindStyle(
-      bg: amber.withOpacity(0.16),
-      border: amber.withOpacity(0.4),
-      text: amber,
-    );
+    base = cs.error;
+  } else if (k.contains('news')) {
+    base = cs.primary;
+  } else if (k.contains('ott')) {
+    base = cs.tertiary;
+  } else if (k.contains('trailer')) {
+    base = cs.secondary;
+  } else {
+    base = cs.onSurfaceVariant;
   }
 
   return _KindStyle(
-    bg: gray.withOpacity(0.16),
-    border: gray.withOpacity(0.4),
-    text: gray,
+    bg: base.withOpacity(0.16),
+    border: base.withOpacity(0.40),
+    text: base,
   );
 }
 
-// Meta line row, mostly same as StoryCard but now theme-aware text color
+// Meta line (freshness uses Brand.freshRed)
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
     required this.kindRaw,
@@ -794,8 +725,7 @@ class _MetaLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = const Color(0xFFdc2626);
-    final style = _styleForKind(kindRaw);
+    final style = _styleForKind(context, kindRaw);
 
     final pill = kindLabel.isNotEmpty
         ? Container(
@@ -803,10 +733,7 @@ class _MetaLine extends StatelessWidget {
             decoration: BoxDecoration(
               color: style.bg,
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: style.border,
-                width: 1,
-              ),
+              border: Border.all(color: style.border, width: 1),
             ),
             child: Text(
               kindLabel,
@@ -844,10 +771,10 @@ class _MetaLine extends StatelessWidget {
             freshnessText!,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 12,
               height: 1.3,
-              color: accent,
+              color: Brand.freshRed, // single source of truth
               fontWeight: FontWeight.w500,
             ),
           );
@@ -866,11 +793,13 @@ class _MetaLine extends StatelessWidget {
   }
 }
 
-// Emoji text helper
+/* ---------------- Emoji + ActionIconBox (theme helpers) ---------------- */
+
 class _Emoji extends StatelessWidget {
-  const _Emoji({required this.emoji, this.size = 16});
+  const _Emoji({required this.emoji, this.size = 16, this.color});
   final String emoji;
   final double size;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -880,6 +809,7 @@ class _Emoji extends StatelessWidget {
       style: TextStyle(
         fontSize: size,
         height: 1,
+        color: color,
         fontFamily: null,
         fontFamilyFallback: const [
           'Apple Color Emoji',
@@ -892,7 +822,6 @@ class _Emoji extends StatelessWidget {
   }
 }
 
-// Square Save / Share boxes, identical to StoryCard
 class _ActionIconBox extends StatelessWidget {
   final Widget icon;
   final VoidCallback onTap;
@@ -906,22 +835,14 @@ class _ActionIconBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : Colors.black.withOpacity(0.06);
-
-    final borderColor =
-        isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.12);
-
     return Tooltip(
       message: tooltip,
       waitDuration: const Duration(milliseconds: 400),
       child: Material(
-        color: bgColor,
+        color: neutralPillBg(context),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
+          side: BorderSide(color: outlineHairline(context), width: 1),
         ),
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
@@ -937,10 +858,9 @@ class _ActionIconBox extends StatelessWidget {
   }
 }
 
-/* ---------------- back-compat for ingestedAt from StoryCard ------------- */
+/* ---------------- back-compat for ingestedAt ---------------- */
 
 extension _StoryCompat on Story {
-  // Handle older payloads where "ingestedAt" might be nested.
   DateTime? get ingestedAtCompat {
     try {
       final dyn = (this as dynamic);
