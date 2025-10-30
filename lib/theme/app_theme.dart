@@ -1,29 +1,33 @@
 // lib/theme/app_theme.dart
 import 'package:flutter/material.dart';
 
-/// Brand tokens
+/// ─────────────────────────── Brand tokens ───────────────────────────
 class Brand {
-  // Shared
-  static const Color primary  = Color(0xFF4DA8FF); // CinePulse blue
-  static const Color freshRed = Color(0xFFFF4D6A); // freshness only
+  // Accent
+  static const Color primary = Color(0xFF4DA8FF); // CinePulse blue
+  static const Color freshRed = Color(0xFFFF4D6A); // “freshness +Xm” only
 
   // Dark surfaces
-  static const Color darkBgStart    = Color(0xFF0D1117);
-  static const Color darkBgEnd      = Color(0xFF111827);
-  static const Color darkCardTop    = Color(0xFF1A2333);
+  static const Color darkBgStart = Color(0xFF0D1117);
+  static const Color darkBgEnd = Color(0xFF111827);
+  static const Color darkCardTop = Color(0xFF1A2333);
   static const Color darkCardBottom = Color(0xFF111927);
-  static const Color outlineDark    = Color(0x14FFFFFF); // ~8% white
+  static const Color ctaBgDark = Color(0xFF1F2A3B);
+  static const Color outlineDark = Color(0x14FFFFFF); // ~8% white hairline
 
   // Light surfaces
-  static const Color lightBg      = Color(0xFFF7FAFC);
-  static const Color lightCard    = Color(0xFFFFFFFF);
+  static const Color lightBg = Color(0xFFF7FAFC);
+  static const Color lightCard = Color(0xFFFFFFFF);
   static const Color outlineLight = Color(0xFFE5E7EB);
 }
 
+/// Central theme builder for CinePulse.
+/// Primary (blue) drives pills, chips, buttons, etc.
+/// Freshness red is used only for the "+Xm" timestamp highlights.
 class AppTheme {
-  /* ------------------------------- DARK THEME ------------------------------ */
+  /* ───────────────────────────── DARK THEME ───────────────────────────── */
   static ThemeData get dark {
-    final scheme = const ColorScheme.dark(
+    final base = ColorScheme.dark(
       primary: Brand.primary,
       secondary: Brand.primary,
       surface: Brand.darkCardBottom,
@@ -33,8 +37,11 @@ class AppTheme {
       onBackground: Colors.white,
       error: Brand.freshRed,
     ).copyWith(
+      // Better hairlines + containers for cards
       outlineVariant: Brand.outlineDark,
       surfaceContainerHighest: Brand.darkCardTop,
+      // Keep scrim/shadow predictable for overlays/gradients
+      scrim: Colors.black,
     );
 
     final rounded10 = RoundedRectangleBorder(
@@ -43,10 +50,15 @@ class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
-      colorScheme: scheme,
+      colorScheme: base,
       scaffoldBackgroundColor: Brand.darkBgEnd,
       cardColor: Brand.darkCardTop,
-      dividerTheme: DividerThemeData(color: scheme.outlineVariant, thickness: 1),
+      shadowColor: Colors.black, // used by StoryCard glow
+      dividerTheme: DividerThemeData(
+        color: base.outlineVariant,
+        thickness: 1,
+        space: 0,
+      ),
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
@@ -54,10 +66,10 @@ class AppTheme {
         centerTitle: false,
       ),
 
-      // CTAs → blue
+      // Buttons (CTAs → blue)
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: scheme.primary,
+          backgroundColor: base.primary,
           foregroundColor: Colors.white,
           elevation: 0,
           shape: rounded10,
@@ -65,92 +77,98 @@ class AppTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: scheme.primary,
+          backgroundColor: base.primary,
           foregroundColor: Colors.white,
           shape: rounded10,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: scheme.primary,
-          side: BorderSide(color: scheme.primary),
+          foregroundColor: base.primary,
+          side: BorderSide(color: base.primary),
           shape: rounded10,
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
-          foregroundColor: MaterialStatePropertyAll(scheme.onSurface),
-          overlayColor: MaterialStatePropertyAll(scheme.primary.withOpacity(.08)),
+          foregroundColor: MaterialStatePropertyAll(base.onSurface),
+          overlayColor:
+              MaterialStatePropertyAll(base.primary.withOpacity(.08)),
         ),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: scheme.primary, foregroundColor: Colors.white,
+        backgroundColor: base.primary,
+        foregroundColor: Colors.white,
       ),
 
-      // Selection controls
+      // Toggles
       switchTheme: SwitchThemeData(
-        thumbColor: MaterialStatePropertyAll(scheme.primary),
+        thumbColor: MaterialStatePropertyAll(base.primary),
         trackColor: MaterialStateProperty.resolveWith(
           (s) => s.contains(MaterialState.selected)
-              ? scheme.primary.withOpacity(.35)
+              ? base.primary.withOpacity(.35)
               : Colors.white24,
         ),
       ),
       checkboxTheme: CheckboxThemeData(
-        fillColor: MaterialStatePropertyAll(scheme.primary),
+        fillColor: MaterialStatePropertyAll(base.primary),
       ),
       radioTheme: RadioThemeData(
-        fillColor: MaterialStatePropertyAll(scheme.primary),
+        fillColor: MaterialStatePropertyAll(base.primary),
       ),
 
-      // Chips & segmented
+      // Chips & Segmented
       chipTheme: ChipThemeData(
         backgroundColor: Brand.darkCardBottom,
-        selectedColor: scheme.primary.withOpacity(.18),
-        side: BorderSide(color: scheme.primary.withOpacity(.45)),
+        selectedColor: base.primary.withOpacity(.18),
+        side: BorderSide(color: base.primary.withOpacity(.45)),
         labelStyle: const TextStyle(color: Colors.white),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
           side: MaterialStatePropertyAll(
-            BorderSide(color: scheme.primary.withOpacity(.45)),
+            BorderSide(color: base.primary.withOpacity(.45)),
           ),
           backgroundColor: MaterialStateProperty.resolveWith(
             (s) => s.contains(MaterialState.selected)
-                ? scheme.primary.withOpacity(.18)
+                ? base.primary.withOpacity(.18)
                 : Colors.transparent,
           ),
-          foregroundColor: MaterialStatePropertyAll(Colors.white),
+          foregroundColor: const MaterialStatePropertyAll(Colors.white),
           shape: MaterialStatePropertyAll(rounded10),
         ),
       ),
 
-      progressIndicatorTheme: ProgressIndicatorThemeData(color: scheme.primary),
+      progressIndicatorTheme:
+          ProgressIndicatorThemeData(color: base.primary),
 
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
         backgroundColor: Colors.transparent,
-        selectedItemColor: scheme.primary,
+        selectedItemColor: base.primary,
         unselectedItemColor: Colors.white.withOpacity(0.75),
         type: BottomNavigationBarType.fixed,
       ),
 
-      dividerColor: scheme.outlineVariant,
+      dividerColor: base.outlineVariant,
     );
   }
 
-  /* ------------------------------- LIGHT THEME ----------------------------- */
+  /* ───────────────────────────── LIGHT THEME ──────────────────────────── */
   static ThemeData get light {
-    final scheme = const ColorScheme.light(
+    final base = ColorScheme.light(
       primary: Brand.primary,
       secondary: Brand.primary,
       surface: Brand.lightCard,
       background: Brand.lightBg,
       onPrimary: Colors.white,
-      onSurface: Color(0xFF111827),
-      onBackground: Color(0xFF111827),
+      onSurface: const Color(0xFF111827),
+      onBackground: const Color(0xFF111827),
       error: Brand.freshRed,
-    ).copyWith(outlineVariant: Brand.outlineLight);
+    ).copyWith(
+      outlineVariant: Brand.outlineLight,
+      scrim: Colors.black,
+    );
 
     final rounded10 = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(10),
@@ -158,21 +176,26 @@ class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
-      colorScheme: scheme,
+      colorScheme: base,
       scaffoldBackgroundColor: Brand.lightBg,
       cardColor: Brand.lightCard,
-      dividerTheme: DividerThemeData(color: scheme.outlineVariant, thickness: 1),
+      shadowColor: Colors.black,
+      dividerTheme: DividerThemeData(
+        color: base.outlineVariant,
+        thickness: 1,
+        space: 0,
+      ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
-        foregroundColor: scheme.onSurface,
+        foregroundColor: base.onSurface,
         elevation: 0,
         centerTitle: false,
       ),
 
-      // CTAs → blue
+      // Buttons (CTAs → blue)
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: scheme.primary,
+          backgroundColor: base.primary,
           foregroundColor: Colors.white,
           elevation: 0,
           shape: rounded10,
@@ -180,77 +203,80 @@ class AppTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: scheme.primary,
+          backgroundColor: base.primary,
           foregroundColor: Colors.white,
           shape: rounded10,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: scheme.primary,
-          side: BorderSide(color: scheme.primary),
+          foregroundColor: base.primary,
+          side: BorderSide(color: base.primary),
           shape: rounded10,
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
-          foregroundColor: MaterialStatePropertyAll(scheme.onSurface),
-          overlayColor: MaterialStatePropertyAll(scheme.primary.withOpacity(.08)),
+          foregroundColor: MaterialStatePropertyAll(base.onSurface),
+          overlayColor:
+              MaterialStatePropertyAll(base.primary.withOpacity(.08)),
         ),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        backgroundColor: scheme.primary, foregroundColor: Colors.white,
+        backgroundColor: base.primary,
+        foregroundColor: Colors.white,
       ),
 
-      // Selection controls
+      // Toggles
       switchTheme: SwitchThemeData(
-        thumbColor: MaterialStatePropertyAll(scheme.primary),
+        thumbColor: MaterialStatePropertyAll(base.primary),
         trackColor: MaterialStateProperty.resolveWith(
           (s) => s.contains(MaterialState.selected)
-              ? scheme.primary.withOpacity(.25)
+              ? base.primary.withOpacity(.25)
               : Colors.black12,
         ),
       ),
       checkboxTheme: CheckboxThemeData(
-        fillColor: MaterialStatePropertyAll(scheme.primary),
+        fillColor: MaterialStatePropertyAll(base.primary),
       ),
       radioTheme: RadioThemeData(
-        fillColor: MaterialStatePropertyAll(scheme.primary),
+        fillColor: MaterialStatePropertyAll(base.primary),
       ),
 
-      // Chips & segmented
+      // Chips & Segmented
       chipTheme: ChipThemeData(
-        backgroundColor: scheme.surface,
-        selectedColor: scheme.primary.withOpacity(.12),
-        side: BorderSide(color: scheme.primary.withOpacity(.35)),
-        labelStyle: TextStyle(color: scheme.onSurface),
+        backgroundColor: base.surface,
+        selectedColor: base.primary.withOpacity(.12),
+        side: BorderSide(color: base.primary.withOpacity(.35)),
+        labelStyle: TextStyle(color: base.onSurface),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
         style: ButtonStyle(
           side: MaterialStatePropertyAll(
-            BorderSide(color: scheme.primary.withOpacity(.35)),
+            BorderSide(color: base.primary.withOpacity(.35)),
           ),
           backgroundColor: MaterialStateProperty.resolveWith(
             (s) => s.contains(MaterialState.selected)
-                ? scheme.primary.withOpacity(.12)
+                ? base.primary.withOpacity(.12)
                 : Colors.transparent,
           ),
-          foregroundColor: MaterialStatePropertyAll(scheme.onSurface),
+          foregroundColor: MaterialStatePropertyAll(base.onSurface),
           shape: MaterialStatePropertyAll(rounded10),
         ),
       ),
 
-      progressIndicatorTheme: ProgressIndicatorThemeData(color: scheme.primary),
+      progressIndicatorTheme:
+          ProgressIndicatorThemeData(color: base.primary),
 
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
         backgroundColor: Colors.transparent,
-        selectedItemColor: scheme.primary,
-        unselectedItemColor: scheme.onSurface.withOpacity(0.65),
+        selectedItemColor: base.primary,
+        unselectedItemColor: base.onSurface.withOpacity(0.65),
         type: BottomNavigationBarType.fixed,
       ),
 
-      dividerColor: scheme.outlineVariant,
+      dividerColor: base.outlineVariant,
     );
   }
 }
