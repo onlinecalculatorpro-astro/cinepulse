@@ -34,8 +34,8 @@
 //      [36x36 rounded square badge w/ emoji]
 //      [Title + optional subline]
 //      [chevron]
-//   - Badge is 8px radius, subtle red border + glow,
-//     dark translucent bg in dark mode, light translucent bg in light mode.
+//   - Badge is 8px radius, subtle primary border, very soft glow.
+//   - Use theme colors (ColorScheme.primary / onSurface / outlineVariant).
 // • Section headers are all-caps, 12px, ~60% opacity.
 // • Each row has a 1px divider at the bottom (onSurface @6%).
 //
@@ -133,8 +133,6 @@ class AppDrawer extends StatefulWidget {
 }
 
 class _AppDrawerState extends State<AppDrawer> {
-  static const _accent = Color(0xFFdc2626);
-
   /* ────────────────────────── tiny text helpers ────────────────────────── */
 
   TextStyle _titleStyle(ColorScheme cs) {
@@ -180,12 +178,15 @@ class _AppDrawerState extends State<AppDrawer> {
     );
   }
 
-  /// 36x36 rounded square icon badge.
+  /// 36x36 rounded square icon badge (theme-aware).
   Widget _badge(String emojiChar) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+
     final bg = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
-        : Colors.black.withOpacity(0.06);
+        : cs.surfaceVariant.withOpacity(0.5);
 
     return Container(
       width: 36,
@@ -194,14 +195,15 @@ class _AppDrawerState extends State<AppDrawer> {
         color: bg,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: _accent.withOpacity(0.4),
+          color: cs.primary.withOpacity(0.35),
           width: 1,
         ),
+        // Softer, less "glowy"
         boxShadow: [
           BoxShadow(
-            color: _accent.withOpacity(0.4),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+            color: cs.primary.withOpacity(0.18),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -339,8 +341,7 @@ class _AppDrawerState extends State<AppDrawer> {
     return _drawerRow(
       emoji: '🛠️',
       title: 'Report an issue',
-      subtitle:
-          'Tell us if something is broken or fake. We’ll remove it.',
+      subtitle: 'Tell us if something is broken or fake. We’ll remove it.',
       isValueLine: false,
       onTap: _reportIssue,
     );
@@ -384,7 +385,7 @@ class _AppDrawerState extends State<AppDrawer> {
       title: 'About CinePulse',
       subtitle: widget.versionLabel,
       isValueLine: false,
-      onTap: widget.onClose, // could open a future "About" screen
+      onTap: widget.onClose, // placeholder for future About screen
     );
   }
 
@@ -415,15 +416,13 @@ class _AppDrawerState extends State<AppDrawer> {
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.06)
-        : cs.onSurface.withOpacity(0.06);
+    final borderColor = cs.onSurface.withOpacity(0.06);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
       decoration: BoxDecoration(
         color: isDark
-            ? const Color(0xFF1e2537).withOpacity(0.15)
+            ? const Color(0xFF1e2537).withOpacity(0.12)
             : cs.surface.withOpacity(0.05),
         border: Border(
           bottom: BorderSide(color: borderColor, width: 1),
@@ -432,33 +431,27 @@ class _AppDrawerState extends State<AppDrawer> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // CinePulse badge
+          // CinePulse badge (subtle, theme-primary accent)
           Container(
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFFdc2626),
-                  Color(0xFFef4444),
-                ],
-              ),
+              color: cs.primary.withOpacity(0.16),
               borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: cs.primary.withOpacity(0.45),
+                width: 1,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFdc2626).withOpacity(0.3),
+                  color: cs.primary.withOpacity(0.18),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
               ],
             ),
             alignment: Alignment.center,
-            child: const Text(
-              '🎬',
-              style: TextStyle(fontSize: 20, height: 1),
-            ),
+            child: const Text('🎬', style: TextStyle(fontSize: 20, height: 1)),
           ),
 
           const SizedBox(width: 12),
@@ -469,11 +462,8 @@ class _AppDrawerState extends State<AppDrawer> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 ShaderMask(
-                  shaderCallback: (bounds) => const LinearGradient(
-                    colors: [
-                      Color(0xFFdc2626),
-                      Color(0xFFef4444),
-                    ],
+                  shaderCallback: (bounds) => LinearGradient(
+                    colors: [cs.primary, cs.primary.withOpacity(0.8)],
                   ).createShader(bounds),
                   child: Text(
                     'CinePulse',
@@ -558,10 +548,7 @@ class _AppDrawerState extends State<AppDrawer> {
 
   Future<void> _openExternal(String? url) async {
     if (url == null || url.isEmpty) return;
-    await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.platformDefault,
-    );
+    await launchUrl(Uri.parse(url), mode: LaunchMode.platformDefault);
   }
 
   /* ────────────────────────── build ────────────────────────── */
