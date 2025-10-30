@@ -12,45 +12,24 @@
 // -----------------------------------------------------------------------------
 // COMPACT (<768px width)
 //   - Frosted bottom nav with 4 icons: Home / Discover / Saved / Alerts
-//   - Each tab's header only shows utility CTAs:
-//        [Search] [Refresh] [Menu]
-//     (No cross-nav pills in headers; bottom nav already handles navigation.)
+//   - Each tab's header only shows utility CTAs: [Search] [Refresh] [Menu]
 //
 // WIDE (≥768px width)
 //   - NO bottom nav.
-//   - Each tab's header shows cross-nav CTA pills so you can hop tabs.
-//     Rules per tab header:
-//       Home:     [Search] [Saved] [Alerts]   [Discover] [Refresh] [Menu]
-//       Discover: [Home]   [Search] [Saved]   [Alerts]   [Refresh] [Menu]
-//       Saved:    [Home]   [Search] [Alerts]  [Discover] [Refresh] [Menu]
-//       Alerts:   [Home]   [Search] [Saved]   [Discover] [Refresh] [Menu]
-//     (each tab omits itself)
-//
-// RootShell passes callbacks like `_openDiscover()` / `_openSaved()` etc.
-// so headers in those screens can jump tabs or open the Menu drawer.
+//   - Each tab's header shows cross-nav CTA pills (omitting itself).
 //
 // Drawer
 // -----------------------------------------------------------------------------
-// The drawer surfaces:
-//   • Feed filters (Categories, Content type)
-//   • Theme (light/dark/system)
-//   • App language UI picker
-//   • Stubbed Subscription / Account settings
-//
-// We also summarize feed state in the drawer header, e.g.:
-//   "Entertainment · English"
-// plus "Content type: Video", etc.
+// Surfaces: Categories, Content type, Theme, App language, Subscription, Account
+// Shows header summary like: "Entertainment · English" and content type.
 //
 // Deep links
 // -----------------------------------------------------------------------------
-// On first launch, RootShell checks the current URL (web) for `/s/<id>`,
-// tries to resolve that story, and pushes StoryDetailsScreen over Home.
+// On first launch, checks current URL for "/s/<id>" and opens details.
 //
 // Responsive width
 // -----------------------------------------------------------------------------
-// On wide screens we center content in a max ~1300px column via _ResponsiveWidth.
-// On phones we just fill the screen.
-//
+// On wide screens we center content in max ~1300px column.
 
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
@@ -82,10 +61,6 @@ const String _kContentTypePrefKey =
 
 /* ──────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS
- *
- * Drawer "Categories" picker feeds into this singleton.
- * We treat "All" as the default.
- * For now: All / Entertainment / Sports / Travel / Fashion
  * ───────────────────────────────────────────────────────────────────────── */
 class CategoryPrefs extends ChangeNotifier {
   CategoryPrefs._internal();
@@ -111,7 +86,6 @@ class CategoryPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Human-readable summary for drawer header ("Entertainment +2", etc.)
   String summary() {
     if (_selected.contains(keyAll)) return 'All';
 
@@ -137,14 +111,12 @@ class CategoryPrefs extends ChangeNotifier {
   }
 
   void _normalize() {
-    // If you pick "All" and anything else, collapse to just "All".
     if (_selected.contains(keyAll) && _selected.length > 1) {
       _selected
         ..clear()
         ..add(keyAll);
       return;
     }
-    // Never allow empty.
     if (_selected.isEmpty) {
       _selected.add(keyAll);
     }
@@ -153,8 +125,6 @@ class CategoryPrefs extends ChangeNotifier {
 
 /* ──────────────────────────────────────────────────────────────────────────
  * CONTENT TYPE PREFS
- *
- * Drawer "Content type" picker.
  * 'all' | 'read' | 'video' | 'audio'
  * ───────────────────────────────────────────────────────────────────────── */
 class ContentTypePrefs extends ChangeNotifier {
@@ -190,14 +160,6 @@ class ContentTypePrefs extends ChangeNotifier {
 
 /* ──────────────────────────────────────────────────────────────────────────
  * RootShell
- *
- * Lives directly below MaterialApp.
- * Owns:
- *  - IndexedStack with the 4 tabs
- *  - Frosted bottom nav (phones)
- *  - Global endDrawer ("Menu")
- *  - Cross-tab nav callbacks for wide headers
- *  - Deep link bootstrap (/s/<id>)
  * ───────────────────────────────────────────────────────────────────────── */
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
@@ -219,12 +181,10 @@ class _RootShellState extends State<RootShell> {
   // Bottom nav highlight (compact layouts only).
   int _navIndex = 0;
 
-  // Feed language preference for drawer header summary (e.g. "English", "Hindi", etc.)
-  // This is *content language*, not UI chrome language.
+  // Feed language preference (content language)
   String _currentLang = 'mixed';
 
-  // UI chrome language code for the app chrome (drawer "App language")
-  // e.g. 'english_ui', 'hindi_ui', etc.
+  // UI chrome language code (drawer "App language")
   String _appUiLanguageCode = 'english_ui';
 
   // Content type pref ('all' | 'read' | 'video' | 'audio')
@@ -237,12 +197,10 @@ class _RootShellState extends State<RootShell> {
   @override
   void initState() {
     super.initState();
-
     _captureInitialDeepLink();
     _loadLangPref();
     _loadContentTypePref();
 
-    // After first frame, attempt to open deep link story details.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _openPendingDeepLinkIfAny();
     });
@@ -284,15 +242,11 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ───────────────────────── deep link (/s/<id>) ─────────────────────────
-   *
-   * Web can boot at "/s/<id>" or "#/s/<id>".
-   * We capture that ID, then (after init) try to open StoryDetailsScreen.
-   */
+  /* ───────────────────────── deep link (/s/<id>) ───────────────────────── */
+
   void _captureInitialDeepLink() {
     final frag = Uri.base.fragment;
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
-
     final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
     if (match != null) {
       _pendingDeepLinkId = match.group(2);
@@ -306,7 +260,6 @@ class _RootShellState extends State<RootShell> {
     const pollEvery = Duration(milliseconds: 200);
     final started = DateTime.now();
 
-    // First, poll FeedCache for a moment, since Home may have already fetched.
     while (mounted && DateTime.now().difference(started) < maxWait) {
       final Story? cached = FeedCache.get(_pendingDeepLinkId!);
       if (cached != null) {
@@ -316,21 +269,19 @@ class _RootShellState extends State<RootShell> {
       await Future<void>.delayed(pollEvery);
     }
 
-    // Otherwise fetch story directly.
     try {
       final story = await fetchStory(_pendingDeepLinkId!);
       if (!mounted) return;
       FeedCache.put(story);
       await _openStoryDetails(story);
     } catch (_) {
-      // If lookup fails, we just fall through to regular Home UI.
+      // ignore (fall back to Home)
     }
   }
 
   Future<void> _openStoryDetails(Story s) async {
     _deepLinkHandled = true;
 
-    // Ensure Home tab is showing in the background under details.
     if (_pageIndex != 0) {
       setState(() {
         _pageIndex = 0;
@@ -338,22 +289,15 @@ class _RootShellState extends State<RootShell> {
       });
     }
 
-    // Small delay so Navigator is stable.
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!mounted) return;
 
     Navigator.of(context).push(
-      fadeRoute(
-        StoryDetailsScreen(story: s),
-      ),
+      fadeRoute(StoryDetailsScreen(story: s)),
     );
   }
 
-  /* ───────────────────────── tab nav helpers ─────────────────────────
-   *
-   * These are passed into tab screens so their headers (in wide layout)
-   * can jump tabs or open the drawer.
-   */
+  /* ───────────────────────── tab nav helpers ───────────────────────── */
 
   void _openHome() {
     setState(() {
@@ -387,8 +331,6 @@ class _RootShellState extends State<RootShell> {
     _scaffoldKey.currentState?.openEndDrawer();
   }
 
-  // Bottom nav taps (compact layouts only).
-  // 0=Home,1=Discover,2=Saved,3=Alerts
   void _onBottomNavTap(int i) {
     setState(() {
       _navIndex = i;
@@ -400,8 +342,6 @@ class _RootShellState extends State<RootShell> {
 
   Future<void> _openThemePicker(BuildContext drawerContext) async {
     final currentThemeMode = AppSettings.instance.themeMode;
-
-    // Close the drawer first (it's an endDrawer).
     Navigator.pop(drawerContext);
 
     final picked = await showModalBottomSheet<ThemeMode>(
@@ -412,9 +352,7 @@ class _RootShellState extends State<RootShell> {
 
     if (picked != null) {
       await AppSettings.instance.setThemeMode(picked);
-      if (mounted) {
-        setState(() {});
-      }
+      if (mounted) setState(() {});
     }
   }
 
@@ -425,16 +363,12 @@ class _RootShellState extends State<RootShell> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => _CategoryPicker(
-        initial: CategoryPrefs.instance.selected,
-      ),
+      builder: (_) => _CategoryPicker(initial: CategoryPrefs.instance.selected),
     );
 
     if (picked != null && picked.isNotEmpty) {
       CategoryPrefs.instance.applySelection(picked);
-      if (mounted) {
-        setState(() {});
-      }
+      if (mounted) setState(() {});
     }
   }
 
@@ -450,12 +384,8 @@ class _RootShellState extends State<RootShell> {
 
     if (picked != null && picked.isNotEmpty) {
       if (!mounted) return;
-      setState(() {
-        _currentContentType = picked;
-      });
-
+      setState(() => _currentContentType = picked);
       ContentTypePrefs.instance.setSelected(picked);
-
       final sp = await SharedPreferences.getInstance();
       await sp.setString(_kContentTypePrefKey, picked);
     }
@@ -473,25 +403,21 @@ class _RootShellState extends State<RootShell> {
 
     if (picked != null && picked.isNotEmpty) {
       if (!mounted) return;
-      setState(() {
-        _appUiLanguageCode = picked;
-      });
+      setState(() => _appUiLanguageCode = picked);
     }
   }
 
   Future<void> _openSubscriptionSettings() async {
     await _showComingSoonSheet(
       title: 'Subscription',
-      message:
-          'Remove ads & unlock extras. This will show our plans / paywall.',
+      message: 'Remove ads & unlock extras. This will show our plans / paywall.',
     );
   }
 
   Future<void> _openAccountSettings() async {
     await _showComingSoonSheet(
       title: 'Sign in',
-      message:
-          'Sign in to sync your saved stories and alerts across devices.',
+      message: 'Sign in to sync your saved stories and alerts across devices.',
     );
   }
 
@@ -536,9 +462,7 @@ class _RootShellState extends State<RootShell> {
                     style: FilledButton.styleFrom(
                       backgroundColor: scheme.primary,
                       foregroundColor: Colors.white,
-                      textStyle: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     onPressed: () => Navigator.pop(ctx),
                   ),
@@ -562,22 +486,15 @@ class _RootShellState extends State<RootShell> {
     final isCompact = _isCompactLayout(context);
     final showBottomNav = isCompact;
 
-    // Drawer header summary line, e.g. "Entertainment · English"
     final categorySummary = CategoryPrefs.instance.summary();
     final langSummary = _langHeaderSummary(_currentLang);
     final feedStatusLine = '$categorySummary · $langSummary';
 
-    // Drawer "Content type" summary ("Video", "Read", etc.)
     final contentTypeSummary = ContentTypePrefs.instance.summary();
-
-    // Drawer footer version label
     final versionLabel = 'Version $_kAppVersion · Early access';
 
     return WillPopScope(
       onWillPop: () async {
-        // Android back:
-        // If something (like StoryDetailsScreen) is pushed above us,
-        // pop that instead of exiting the app.
         final nav = Navigator.of(context);
         final canPop = nav.canPop();
         if (canPop) {
@@ -591,7 +508,7 @@ class _RootShellState extends State<RootShell> {
         drawer: null,
         drawerEnableOpenDragGesture: false,
 
-        // We only expose a right-side drawer.
+        // Right-side drawer only.
         endDrawerEnableOpenDragGesture: false,
         endDrawer: Builder(
           builder: (drawerCtx) {
@@ -602,7 +519,7 @@ class _RootShellState extends State<RootShell> {
               versionLabel: versionLabel,
               contentTypeLabel: contentTypeSummary,
 
-              // Notify RootShell so it can refresh views after filters/theme changes.
+              // Refresh RootShell after filters/theme changes.
               onFiltersChanged: () => setState(() {}),
 
               // FILTERS
@@ -631,11 +548,7 @@ class _RootShellState extends State<RootShell> {
           },
         ),
 
-        // BODY:
-        //
-        // SafeArea(top:true,bottom:false):
-        //  - top:true keeps our frosted headers from clashing with status bar.
-        //  - bottom:false lets the custom frosted bottom nav hug the bottom.
+        // BODY
         body: SafeArea(
           top: true,
           bottom: false,
@@ -686,12 +599,7 @@ class _RootShellState extends State<RootShell> {
   }
 }
 
-/* ───────────────────────── HOME TAB HOST ─────────────────────────
- *
- * Small adapter so HomeScreen can access RootShell callbacks cleanly.
- * HomeScreen now manages its own inline search bar visibility;
- * RootShell does not force it anymore.
- */
+/* ───────────────────────── HOME TAB HOST ───────────────────────── */
 class _HomeTabHost extends StatelessWidget {
   const _HomeTabHost();
 
@@ -699,16 +607,11 @@ class _HomeTabHost extends StatelessWidget {
   Widget build(BuildContext context) {
     final shell = context.findAncestorStateOfType<_RootShellState>()!;
     return HomeScreen(
-      // Legacy prop (RootShell used to drive inline search). We keep false.
-      showSearchBar: false,
-
-      // Actions for header buttons in HomeScreen.
+      showSearchBar: false, // RootShell no longer drives inline search
       onMenuPressed: shell._openEndDrawer,
       onHeaderRefresh: () {
-        // Hook after manual refresh; currently no-op for RootShell.
+        // optional hook
       },
-
-      // Wide header nav pills
       onOpenDiscover: shell._openDiscover,
       onOpenSaved: shell._openSaved,
       onOpenAlerts: shell._openAlerts,
@@ -716,11 +619,7 @@ class _HomeTabHost extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── DISCOVER TAB HOST ─────────────────────────
- *
- * DiscoverScreen doesn't need the legacy `showSearchBar` prop,
- * but it still needs cross-nav + drawer callbacks for wide headers.
- */
+/* ───────────────────────── DISCOVER TAB HOST ───────────────────────── */
 class _DiscoverTabHost extends StatelessWidget {
   const _DiscoverTabHost({
     required this.onOpenHome,
@@ -832,14 +731,8 @@ class _CategoryPickerState extends State<_CategoryPicker> {
       } else {
         _local.add(key);
       }
-
-      // If you choose any specific category, drop 'All'.
       _local.remove(allKey);
-
-      // Never allow empty.
-      if (_local.isEmpty) {
-        _local.add(allKey);
-      }
+      if (_local.isEmpty) _local.add(allKey);
     }
 
     setState(() {});
@@ -876,9 +769,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
             Icon(
               icon,
               size: 20,
-              color: active
-                  ? scheme.primary
-                  : scheme.onSurfaceVariant,
+              color: active ? scheme.primary : scheme.onSurfaceVariant,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -888,8 +779,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
                   Text(
                     title,
                     style: theme.textTheme.bodyLarge?.copyWith(
-                      fontWeight:
-                          active ? FontWeight.w600 : FontWeight.w500,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w500,
                     ),
                   ),
                   Text(
@@ -977,13 +867,9 @@ class _CategoryPickerState extends State<_CategoryPicker> {
                 style: FilledButton.styleFrom(
                   backgroundColor: scheme.primary,
                   foregroundColor: Colors.white,
-                  textStyle: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                onPressed: () {
-                  Navigator.pop(context, _local);
-                },
+                onPressed: () => Navigator.pop(context, _local),
               ),
             ),
           ],
@@ -1011,11 +897,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
     _localType = widget.current;
   }
 
-  void _pick(String v) {
-    setState(() {
-      _localType = v;
-    });
-  }
+  void _pick(String v) => setState(() => _localType = v);
 
   Widget _typeTile({
     required String value,
@@ -1110,13 +992,9 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
                 style: FilledButton.styleFrom(
                   backgroundColor: scheme.primary,
                   foregroundColor: Colors.white,
-                  textStyle: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                onPressed: () {
-                  Navigator.pop(context, _localType);
-                },
+                onPressed: () => Navigator.pop(context, _localType),
               ),
             ),
           ],
@@ -1126,11 +1004,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
   }
 }
 
-/* ───────────────────────── APP LANGUAGE SHEET ─────────────────────────
- *
- * Lets user pick the UI language for chrome/menus. Content language is
- * handled separately via feed prefs.
- */
+/* ───────────────────────── APP LANGUAGE SHEET ───────────────────────── */
 class _AppLanguageSheet extends StatefulWidget {
   const _AppLanguageSheet({required this.currentCode});
   final String currentCode;
@@ -1158,11 +1032,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
     _localCode = widget.currentCode;
   }
 
-  void _pick(String code) {
-    setState(() {
-      _localCode = code;
-    });
-  }
+  void _pick(String code) => setState(() => _localCode = code);
 
   Widget _langRow(
     ({String code, String primary, String secondary}) lang,
@@ -1186,8 +1056,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
                   Text(
                     lang.primary,
                     style: theme.textTheme.bodyLarge?.copyWith(
-                      fontWeight:
-                          selected ? FontWeight.w600 : FontWeight.w500,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                     ),
                   ),
                   if (lang.secondary != lang.primary)
@@ -1263,13 +1132,9 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
                 style: FilledButton.styleFrom(
                   backgroundColor: theme.colorScheme.primary,
                   foregroundColor: Colors.white,
-                  textStyle: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-                onPressed: () {
-                  Navigator.pop(context, _localCode);
-                },
+                onPressed: () => Navigator.pop(context, _localCode),
               ),
             ),
           ],
@@ -1279,11 +1144,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
   }
 }
 
-/* ───────────────────────── RESPONSIVE WIDTH WRAPPER ─────────────────────────
- *
- * On desktop/tablet we clamp body width (~1300px) so the feed grid
- * doesn't stretch into an ultra-wide single row. On phones we just fill.
- */
+/* ───────────────────────── RESPONSIVE WIDTH WRAPPER ───────────────────────── */
 class _ResponsiveWidth extends StatelessWidget {
   const _ResponsiveWidth({super.key, required this.child});
   final Widget child;
@@ -1293,9 +1154,7 @@ class _ResponsiveWidth extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, box) {
         final w = box.maxWidth;
-        if (w < 768) {
-          return child;
-        }
+        if (w < 768) return child;
 
         const maxW = 1300.0;
         return Center(
@@ -1304,20 +1163,11 @@ class _ResponsiveWidth extends StatelessWidget {
             child: child,
           ),
         );
-      },
-    );
+    });
   }
 }
 
-/* ───────────────────────── CINE BOTTOM NAV BAR ─────────────────────────
- *
- * Frosted / blurred bottom nav for compact screens (<768px width).
- * Order:
- *   0 = Home
- *   1 = Discover
- *   2 = Saved
- *   3 = Alerts
- */
+/* ───────────────────────── CINE BOTTOM NAV BAR ───────────────────────── */
 class CineBottomNavBar extends StatelessWidget {
   const CineBottomNavBar({
     super.key,
@@ -1349,22 +1199,10 @@ class CineBottomNavBar extends StatelessWidget {
         : Colors.black.withOpacity(0.06);
 
     final navItems = <_NavItemSpec>[
-      const _NavItemSpec(
-        icon: Icons.home_rounded,
-        label: 'Home',
-      ),
-      const _NavItemSpec(
-        icon: Icons.explore_rounded,
-        label: 'Discover',
-      ),
-      const _NavItemSpec(
-        icon: Icons.bookmark_rounded,
-        label: 'Saved',
-      ),
-      const _NavItemSpec(
-        icon: Icons.notifications_rounded,
-        label: 'Alerts',
-      ),
+      const _NavItemSpec(icon: Icons.home_rounded, label: 'Home'),
+      const _NavItemSpec(icon: Icons.explore_rounded, label: 'Discover'),
+      const _NavItemSpec(icon: Icons.bookmark_rounded, label: 'Saved'),
+      const _NavItemSpec(icon: Icons.notifications_rounded, label: 'Alerts'),
     ];
 
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
@@ -1380,10 +1218,7 @@ class CineBottomNavBar extends StatelessWidget {
               colors: gradientColors,
             ),
             border: Border(
-              top: BorderSide(
-                color: borderColor,
-                width: 1,
-              ),
+              top: BorderSide(color: borderColor, width: 1),
             ),
             boxShadow: [
               BoxShadow(
@@ -1421,17 +1256,12 @@ class CineBottomNavBar extends StatelessWidget {
 }
 
 class _NavItemSpec {
-  const _NavItemSpec({
-    required this.icon,
-    required this.label,
-  });
-
+  const _NavItemSpec({required this.icon, required this.label});
   final IconData icon;
   final String label;
 }
 
 /// A single pill in the bottom nav ("Home", "Discover", etc.).
-/// Primary glow + accent when active.
 class _NavButton extends StatelessWidget {
   const _NavButton({
     required this.icon,
@@ -1451,9 +1281,8 @@ class _NavButton extends StatelessWidget {
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
-    final inactiveBg = isDark
-        ? const Color(0xFF0f172a).withOpacity(0.7)
-        : Colors.black.withOpacity(0.06);
+    final inactiveBg =
+        isDark ? const Color(0xFF0f172a).withOpacity(0.7) : Colors.black.withOpacity(0.06);
     final inactiveBorder = scheme.primary.withOpacity(0.30);
     final inactiveText = primaryTextColor(context);
 
@@ -1487,17 +1316,10 @@ class _NavButton extends StatelessWidget {
             decoration: BoxDecoration(
               color: bg,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: borderColor,
-                width: 1,
-              ),
+              border: Border.all(color: borderColor, width: 1),
               boxShadow: glow,
             ),
-            child: Icon(
-              icon,
-              size: 20,
-              color: fg,
-            ),
+            child: Icon(icon, size: 20, color: fg),
           ),
           const SizedBox(height: 6),
           Text(
