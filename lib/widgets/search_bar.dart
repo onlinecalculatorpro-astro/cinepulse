@@ -1,4 +1,6 @@
+// lib/widgets/search_bar.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey, LogicalKeySet; // for ESC key
 
 /// CinePulse inline search field.
 ///
@@ -120,10 +122,10 @@ class _SearchBarInputState extends State<SearchBarInput> {
     final Color hintColor =
         isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.5);
 
-    // Keybindings: ESC to clear/exit.
+    // Keybindings: ESC to clear/exit (use LogicalKeySet so the map can be const).
     return Shortcuts(
-      shortcuts: const <ShortcutActivator, Intent>{
-        SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+      shortcuts: const <LogicalKeySet, Intent>{
+        LogicalKeySet(LogicalKeyboardKey.escape): DismissIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -148,7 +150,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
             ),
             child: Row(
               children: [
-                Icon(
+                const Icon(
                   Icons.search_rounded,
                   size: 18,
                   color: _accent,
@@ -213,15 +215,10 @@ class _SearchBarInputState extends State<SearchBarInput> {
                           ),
                         ],
                       ),
-                      child: const Center(
-                        // NOTE: not "const Icon(..., color: _accent)" because _accent isn't const
-                        child: Icon(
-                          Icons.close_rounded,
-                          size: 16,
-                          // color set by parent Container overlay tint; leave default white/ink
-                          // If you prefer solid accent:
-                          // color: _accent,
-                        ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        size: 16,
+                        color: _accent,
                       ),
                     ),
                   ),
