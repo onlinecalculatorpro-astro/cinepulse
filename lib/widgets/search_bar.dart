@@ -32,12 +32,10 @@ class _SearchBarInputState extends State<SearchBarInput> {
   @override
   void initState() {
     super.initState();
-    _focusNode = FocusNode();
-    _focusNode.addListener(_syncUI);
+    _focusNode = FocusNode()..addListener(_syncUI);
     widget.controller.addListener(_syncUI);
 
     if (widget.autofocus) {
-      // Let the frame build before requesting focus (avoids jumps).
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _focusNode.requestFocus();
       });
@@ -79,11 +77,10 @@ class _SearchBarInputState extends State<SearchBarInput> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    final accent = cs.primary;
-    final textCol = primaryTextColor(context);
-    final hintCol = textCol.withOpacity(0.6);
-
-    final outlineCol = _focusNode.hasFocus ? accent : outlineHairline(context);
+    final accent   = cs.primary;
+    final textCol  = primaryTextColor(context);
+    final hintCol  = textCol.withOpacity(0.60);
+    final outline  = _focusNode.hasFocus ? accent : outlineHairline(context);
 
     // ESC closes the search bar.
     return Shortcuts(
@@ -99,74 +96,88 @@ class _SearchBarInputState extends State<SearchBarInput> {
         },
         child: Focus(
           focusNode: _focusNode,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOut,
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: neutralPillBg(context),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: outlineCol, width: 1),
-            ),
-            child: Row(
-              children: [
-                // 🔍
-                Icon(Icons.search_rounded, size: 18, color: cs.onSurfaceVariant),
-                const SizedBox(width: 8),
+          child: Semantics(
+            textField: true,
+            label: 'Search',
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOut,
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: neutralPillBg(context),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: outline, width: 1),
+              ),
+              child: Row(
+                children: [
+                  // 🔍 (theme-primary to stand out)
+                  Icon(Icons.search_rounded, size: 18, color: accent),
+                  const SizedBox(width: 8),
 
-                // Text field (expands)
-                Expanded(
-                  child: TextField(
-                    controller: widget.controller,
-                    focusNode: _focusNode,
-                    autofocus: widget.autofocus,
-                    textInputAction: TextInputAction.search,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    maxLines: 1,
-                    cursorColor: accent,
-                    onTapOutside: (_) => FocusScope.of(context).unfocus(),
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontSize: 14,
-                      height: 1.35,
-                      color: textCol,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    decoration: InputDecoration(
-                      isCollapsed: true,
-                      border: InputBorder.none,
-                      hintText: widget.hintText,
-                      hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                  // Text field (expands)
+                  Expanded(
+                    child: TextField(
+                      controller: widget.controller,
+                      focusNode: _focusNode,
+                      autofocus: widget.autofocus,
+                      textInputAction: TextInputAction.search,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      maxLines: 1,
+                      cursorColor: accent,
+                      onSubmitted: (_) => FocusScope.of(context).unfocus(),
+                      onTapOutside: (_) => FocusScope.of(context).unfocus(),
+                      style: theme.textTheme.bodyMedium?.copyWith(
                         fontSize: 14,
                         height: 1.35,
-                        color: hintCol,
-                        fontWeight: FontWeight.w400,
+                        color: textCol,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      decoration: InputDecoration(
+                        isCollapsed: true,
+                        border: InputBorder.none,
+                        hintText: widget.hintText,
+                        hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                          fontSize: 14,
+                          height: 1.35,
+                          color: hintCol,
+                          fontWeight: FontWeight.w400,
+                        ),
                       ),
                     ),
                   ),
-                ),
 
-                const SizedBox(width: 8),
+                  const SizedBox(width: 8),
 
-                // ✕ (close)
-                Tooltip(message: 'Close search', waitDuration: const Duration(milliseconds: 400), child:
-                  InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: _exit,
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: neutralPillBg(context),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: outlineHairline(context), width: 1),
+                  // ✕ (close) — primary-tinted pill so it remains visible on all themes
+                  Tooltip(
+                    message: 'Close search',
+                    waitDuration: const Duration(milliseconds: 400),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _exit,
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: cs.primary.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: cs.primary.withOpacity(0.40), width: 1),
+                          boxShadow: [
+                            BoxShadow(
+                              color: cs.primary.withOpacity(0.30),
+                              blurRadius: 14,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: Icon(Icons.close_rounded, size: 16, color: cs.primary),
                       ),
-                      child: Icon(Icons.close_rounded, size: 16, color: cs.onSurfaceVariant),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
