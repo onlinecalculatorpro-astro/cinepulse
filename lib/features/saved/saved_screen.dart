@@ -6,8 +6,7 @@
 // WIDE (≥768px):    [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
 // COMPACT (<768px): [Search] [Refresh] [Menu]
 // Search toggles an inline bar INSIDE Saved (Row 3).
-// Row 2  = shared AppToolbar (chips + sort pill; theme-safe colors)
-// Row 2b = Saved-only actions (Export / Clear)
+// Row 2  = shared AppToolbar (chips + Sort pill + actions: Export / Clear)
 // Row 2.5 = "N items" (for current chip + search result)
 // Body   = grid of StoryCard.
 // ----------------------------------------------------------------------
@@ -23,7 +22,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../core/cache.dart';            // SavedStore, SavedSort, FeedCache
 import '../../core/models.dart';
 import '../../theme/theme_colors.dart';    // primaryTextColor, neutralPillBg, outlineHairline
-import '../../widgets/app_toolbar.dart';   // ✅ shared toolbar row
+import '../../widgets/app_toolbar.dart';   // AppToolbar, AppToolbarAction
 import '../../widgets/search_bar.dart';    // SearchBarInput
 import '../story/story_card.dart';
 
@@ -352,7 +351,7 @@ class _SavedScreenState extends State<SavedScreen> {
           body: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Row 2: ✅ shared toolbar (chips + sort pill with neutral text)
+              // Row 2: ✅ shared toolbar (chips + Sort + actions on the SAME row)
               AppToolbar(
                 tabs: _tabs,
                 activeIndex: _activeCatIndex,
@@ -361,28 +360,18 @@ class _SavedScreenState extends State<SavedScreen> {
                 sortLabel: (_sort == SavedSort.recent) ? 'Recent' : 'Title',
                 sortIcon: (_sort == SavedSort.recent) ? Icons.history : Icons.sort_by_alpha,
                 onSortTap: () => _showSortSheet(context),
-              ),
-
-              // Row 2b: Saved-only actions (right-aligned; same surface bg, no extra border)
-              Container(
-                color: cs.surface,
-                padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-                child: Row(
-                  children: [
-                    const Spacer(),
-                    _HeaderIconButton(
-                      icon: Icons.ios_share,
-                      tooltip: 'Export saved',
-                      onTap: () => _export(context),
-                    ),
-                    const SizedBox(width: 8),
-                    _HeaderIconButton(
-                      icon: Icons.delete_outline,
-                      tooltip: 'Clear all',
-                      onTap: () => _clearAll(context),
-                    ),
-                  ],
-                ),
+                actions: [
+                  AppToolbarAction(
+                    icon: Icons.ios_share,
+                    tooltip: 'Export saved',
+                    onTap: () => _export(context),
+                  ),
+                  AppToolbarAction(
+                    icon: Icons.delete_outline,
+                    tooltip: 'Clear all',
+                    onTap: () => _clearAll(context),
+                  ),
+                ],
               ),
 
               // Row 2.5: count (for current chip/search result)
@@ -426,7 +415,6 @@ class _SavedScreenState extends State<SavedScreen> {
                     final bottomPad = 28.0 + bottomSafe;
 
                     if (filtered.isEmpty) {
-                      // Empty because nothing saved OR no match.
                       final isSearching = _query.text.trim().isNotEmpty || _activeCatIndex != 0;
                       return ListView(
                         padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
