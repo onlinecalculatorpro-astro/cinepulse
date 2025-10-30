@@ -80,8 +80,6 @@ const String _kLangPrefKey = 'cp.lang'; // feed language: 'english' | 'hindi' | 
 const String _kContentTypePrefKey =
     'cp.contentType'; // 'all' | 'read' | 'video' | 'audio'
 
-const _accent = Color(0xFFdc2626);
-
 /* ──────────────────────────────────────────────────────────────────────────
  * CATEGORY PREFS
  *
@@ -506,6 +504,7 @@ class _RootShellState extends State<RootShell> {
       showDragHandle: true,
       builder: (ctx) {
         final theme = Theme.of(ctx);
+        final scheme = theme.colorScheme;
         return SafeArea(
           top: false,
           child: Padding(
@@ -525,7 +524,7 @@ class _RootShellState extends State<RootShell> {
                 Text(
                   message,
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                    color: scheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -535,7 +534,7 @@ class _RootShellState extends State<RootShell> {
                     icon: const Icon(Icons.check_rounded),
                     label: const Text('OK'),
                     style: FilledButton.styleFrom(
-                      backgroundColor: _accent,
+                      backgroundColor: scheme.primary,
                       foregroundColor: Colors.white,
                       textStyle: const TextStyle(
                         fontWeight: FontWeight.w600,
@@ -855,6 +854,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
     required String desc,
   }) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final active = _checked(catKey);
 
     return InkWell(
@@ -877,8 +877,8 @@ class _CategoryPickerState extends State<_CategoryPicker> {
               icon,
               size: 20,
               color: active
-                  ? _accent
-                  : theme.colorScheme.onSurfaceVariant,
+                  ? scheme.primary
+                  : scheme.onSurfaceVariant,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -895,7 +895,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
                   Text(
                     desc,
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ),
                 ],
@@ -910,6 +910,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
 
     return SafeArea(
       top: false,
@@ -930,7 +931,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
             Text(
               'Pick what you want in your feed. We mostly cover Entertainment right now.',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: scheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
@@ -974,7 +975,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
                 icon: const Icon(Icons.check_rounded),
                 label: const Text('Apply'),
                 style: FilledButton.styleFrom(
-                  backgroundColor: _accent,
+                  backgroundColor: scheme.primary,
                   foregroundColor: Colors.white,
                   textStyle: const TextStyle(
                     fontWeight: FontWeight.w600,
@@ -1022,6 +1023,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
     required String desc,
   }) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final selected = (_localType == value);
 
     return RadioListTile<String>(
@@ -1040,7 +1042,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
           Text(
             desc,
             style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+              color: scheme.onSurfaceVariant,
             ),
           ),
         ],
@@ -1051,6 +1053,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
 
     return SafeArea(
       top: false,
@@ -1071,7 +1074,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
             Text(
               'Choose what format you prefer first.',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: scheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
@@ -1105,7 +1108,7 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
                 icon: const Icon(Icons.check_rounded),
                 label: const Text('Apply'),
                 style: FilledButton.styleFrom(
-                  backgroundColor: _accent,
+                  backgroundColor: scheme.primary,
                   foregroundColor: Colors.white,
                   textStyle: const TextStyle(
                     fontWeight: FontWeight.w600,
@@ -1165,6 +1168,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
     ({String code, String primary, String secondary}) lang,
     ThemeData theme,
   ) {
+    final scheme = theme.colorScheme;
     final selected = (lang.code == _localCode);
 
     return InkWell(
@@ -1190,16 +1194,16 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
                     Text(
                       lang.secondary,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+                        color: scheme.onSurfaceVariant,
                       ),
                     ),
                 ],
               ),
             ),
             if (selected)
-              const Icon(
+              Icon(
                 Icons.check_rounded,
-                color: _accent,
+                color: scheme.primary,
               ),
           ],
         ),
@@ -1257,7 +1261,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
                 icon: const Icon(Icons.check_rounded),
                 label: const Text('Apply'),
                 style: FilledButton.styleFrom(
-                  backgroundColor: _accent,
+                  backgroundColor: theme.colorScheme.primary,
                   foregroundColor: Colors.white,
                   textStyle: const TextStyle(
                     fontWeight: FontWeight.w600,
@@ -1327,6 +1331,7 @@ class CineBottomNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
     final gradientColors = isDark
@@ -1335,8 +1340,8 @@ class CineBottomNavBar extends StatelessWidget {
             const Color(0xFF0b0f17).withOpacity(0.95),
           ]
         : [
-            theme.colorScheme.surface.withOpacity(0.95),
-            theme.colorScheme.surface.withOpacity(0.9),
+            scheme.surface.withOpacity(0.95),
+            scheme.surface.withOpacity(0.9),
           ];
 
     final borderColor = isDark
@@ -1426,7 +1431,7 @@ class _NavItemSpec {
 }
 
 /// A single pill in the bottom nav ("Home", "Discover", etc.).
-/// Red glow + accent color when active.
+/// Primary glow + accent when active.
 class _NavButton extends StatelessWidget {
   const _NavButton({
     required this.icon,
@@ -1443,17 +1448,18 @@ class _NavButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
     final inactiveBg = isDark
         ? const Color(0xFF0f172a).withOpacity(0.7)
         : Colors.black.withOpacity(0.06);
-    final inactiveBorder = _accent.withOpacity(0.3);
+    final inactiveBorder = scheme.primary.withOpacity(0.30);
     final inactiveText = primaryTextColor(context);
 
-    final activeBg = _accent.withOpacity(0.12);
-    final activeBorder = _accent;
-    final activeText = _accent;
+    final activeBg = scheme.primary.withOpacity(0.12);
+    final activeBorder = scheme.primary;
+    final activeText = scheme.primary;
 
     final bg = selected ? activeBg : inactiveBg;
     final borderColor = selected ? activeBorder : inactiveBorder;
@@ -1462,7 +1468,7 @@ class _NavButton extends StatelessWidget {
     final glow = selected
         ? [
             BoxShadow(
-              color: _accent.withOpacity(0.4),
+              color: scheme.primary.withOpacity(0.40),
               blurRadius: 20,
               offset: const Offset(0, 10),
             ),
