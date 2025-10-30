@@ -49,7 +49,7 @@ import 'features/discover/discover_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/saved/saved_screen.dart';
 import 'features/story/story_details.dart';
-import 'theme/theme_colors.dart'; // primaryTextColor()
+import 'theme/theme_colors.dart'; // tokens & helpers
 import 'widgets/app_drawer.dart';
 
 const String _kAppVersion = '0.1.0';
@@ -461,7 +461,7 @@ class _RootShellState extends State<RootShell> {
                     label: const Text('OK'),
                     style: FilledButton.styleFrom(
                       backgroundColor: scheme.primary,
-                      foregroundColor: Colors.white,
+                      foregroundColor: scheme.onPrimary, // was Colors.white
                       textStyle: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     onPressed: () => Navigator.pop(ctx),
@@ -866,7 +866,7 @@ class _CategoryPickerState extends State<_CategoryPicker> {
                 label: const Text('Apply'),
                 style: FilledButton.styleFrom(
                   backgroundColor: scheme.primary,
-                  foregroundColor: Colors.white,
+                  foregroundColor: scheme.onPrimary, // was Colors.white
                   textStyle: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 onPressed: () => Navigator.pop(context, _local),
@@ -990,8 +990,8 @@ class _ContentTypePickerState extends State<_ContentTypePicker> {
                 icon: const Icon(Icons.check_rounded),
                 label: const Text('Apply'),
                 style: FilledButton.styleFrom(
-                  backgroundColor: scheme.primary,
-                  foregroundColor: Colors.white,
+                  backgroundColor: theme.colorScheme.primary,
+                  foregroundColor: theme.colorScheme.onPrimary, // was white
                   textStyle: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 onPressed: () => Navigator.pop(context, _localType),
@@ -1131,7 +1131,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
                 label: const Text('Apply'),
                 style: FilledButton.styleFrom(
                   backgroundColor: theme.colorScheme.primary,
-                  foregroundColor: Colors.white,
+                  foregroundColor: theme.colorScheme.onPrimary, // was white
                   textStyle: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 onPressed: () => Navigator.pop(context, _localCode),
@@ -1184,19 +1184,18 @@ class CineBottomNavBar extends StatelessWidget {
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
 
+    // Use theme tokens for frosted gradient instead of hard-coded colors
     final gradientColors = isDark
         ? [
-            const Color(0xFF1e2537).withOpacity(0.9),
-            const Color(0xFF0b0f17).withOpacity(0.95),
+            kCardTop.withOpacity(0.90),
+            kDarkBgEnd.withOpacity(0.95),
           ]
         : [
             scheme.surface.withOpacity(0.95),
-            scheme.surface.withOpacity(0.9),
+            scheme.surface.withOpacity(0.90),
           ];
 
-    final borderColor = isDark
-        ? Colors.white.withOpacity(0.06)
-        : Colors.black.withOpacity(0.06);
+    final borderColor = outlineHairline(context);
 
     final navItems = <_NavItemSpec>[
       const _NavItemSpec(icon: Icons.home_rounded, label: 'Home'),
@@ -1222,7 +1221,7 @@ class CineBottomNavBar extends StatelessWidget {
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.6),
+                color: theme.shadowColor.withOpacity(isDark ? 0.60 : 0.12),
                 blurRadius: 30,
                 offset: const Offset(0, -20),
               ),
@@ -1279,10 +1278,9 @@ class _NavButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
 
-    final inactiveBg =
-        isDark ? const Color(0xFF0f172a).withOpacity(0.7) : Colors.black.withOpacity(0.06);
+    // All pill colors sourced from theme helpers
+    final inactiveBg = neutralPillBg(context);
     final inactiveBorder = scheme.primary.withOpacity(0.30);
     final inactiveText = primaryTextColor(context);
 
