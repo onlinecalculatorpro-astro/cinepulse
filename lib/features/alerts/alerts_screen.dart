@@ -1,14 +1,14 @@
 // lib/features/alerts/alerts_screen.dart
 //
-// ALERTS TAB (theme-driven)
+// ALERTS TAB (theme-driven, wired to CategoryPrefs)
 // ----------------------------------------------------------------------
 // WIDE (≥768px):    [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
 // COMPACT (<768px): [Search] [Refresh] [Menu]
-// Search toggles an inline row scoped to Alerts.
-// Row 2  = AppToolbar (chips + “Mark all read” trailing pill)
+// Search toggles an inline row scoped to Alerts (AnimatedSize, neutral theme).
+// Row 2   = AppToolbar (chips = All + selected categories, + “Mark all read”)
 // Row 2.5 = count
-// Body   = refreshable grid of StoryCard
-// Colors come from Theme + theme_colors helpers (no hard-coded reds).
+// Body    = refreshable grid of StoryCard
+// Colors  = Theme + theme_colors helpers (no hard-coded reds).
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -20,12 +20,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/api.dart';
 import '../../core/models.dart';
+import '../../core/category_prefs.dart';    // CategoryPrefs
 import '../../widgets/search_bar.dart';
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
-import '../../theme/theme_colors.dart'; // primaryTextColor, neutralPillBg, outlineHairline
+import '../../theme/theme_colors.dart';     // primaryTextColor, neutralPillBg, outlineHairline, text helpers
 import '../../widgets/app_toolbar.dart';
-import '../../theme/toolbar.dart'; // toolbarSortPill
+import '../../theme/toolbar.dart';          // toolbarSortPill
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({
@@ -55,10 +56,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
   bool _loading = true;
   String? _error;
 
-  // Category chips (0=All,1=Entertainment,2=Sports)
+  // Dynamic category toolbar (All + selected from CategoryPrefs)
+  List<String> _catKeys = const ['all'];
+  List<String> _catLabels = const ['All'];
+  final List<GlobalKey> _chipKeys = [];
   int _activeCatIndex = 0;
-  final List<String> _tabs = const ['All', 'Entertainment', 'Sports'];
-  final List<GlobalKey> _chipKeys = List.generate(3, (_) => GlobalKey());
 
   // Inline search row state
   bool _showSearchRow = false;
@@ -68,6 +70,9 @@ class _AlertsScreenState extends State<AlertsScreen> {
   @override
   void initState() {
     super.initState();
+    _wireCategories();
+    CategoryPrefs.instance.addListener(_onCategoriesChanged);
+
     _searchCtl.addListener(_onSearchChanged);
     _bootstrap();
   }
@@ -77,8 +82,37 @@ class _AlertsScreenState extends State<AlertsScreen> {
     _debounce?.cancel();
     _searchCtl.removeListener(_onSearchChanged);
     _searchCtl.dispose();
+
+    CategoryPrefs.instance.removeListener(_onCategoriesChanged);
     super.dispose();
   }
+
+  /* ─────────────── Category prefs wiring ─────────────── */
+
+  void _onCategoriesChanged() {
+    if (!mounted) return;
+    setState(_wireCategories);
+  }
+
+  void _wireCategories() {
+    final prevKey = _currentCatKey();
+    _catKeys = CategoryPrefs.instance.displayKeys();
+    _catLabels = CategoryPrefs.instance.displayLabels();
+
+    _chipKeys
+      ..clear()
+      ..addAll(List.generate(_catLabels.length, (_) => GlobalKey()));
+
+    final keep = _catKeys.indexOf(prevKey);
+    _activeCatIndex = keep >= 0 ? keep : 0;
+  }
+
+  String _currentCatKey() {
+    if (_activeCatIndex < 0 || _activeCatIndex >= _catKeys.length) return 'all';
+    return _catKeys[_activeCatIndex];
+  }
+
+  /* ─────────────── Bootstrap / Persistence ─────────────── */
 
   Future<void> _bootstrap() async {
     await _loadLastSeen();
@@ -140,6 +174,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
   }
 
+  /* ─────────────── Header actions / Search / Chips ─────────────── */
+
   void _toggleSearchRow() {
     setState(() {
       _showSearchRow = !_showSearchRow;
@@ -155,7 +191,9 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 
   void _setCategory(int i) {
+    if (i < 0 || i >= _catKeys.length) return;
     setState(() => _activeCatIndex = i);
+
     // Scroll the tapped chip into view.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _chipKeys[i].currentContext;
@@ -175,7 +213,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   bool get _hasAlerts => _alerts.isNotEmpty;
 
-  // Categorization like Saved (best-effort using optional fields)
+  // Categorization (best-effort using optional fields)
   String _verticalOf(Story s) {
     try {
       final dyn = (s as dynamic);
@@ -185,11 +223,21 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return '';
   }
 
-  bool _categoryMatch(Story s) {
-    if (_activeCatIndex == 0) return true; // All
+  bool _storyMatchesKey(Story s, String key) {
+    if (key == 'all') return true;
     final v = _verticalOf(s);
-    if (_activeCatIndex == 1) return v.contains('entertain');
-    return v.contains('sport');
+    switch (key) {
+      case 'entertainment':
+        return v.contains('entertain');
+      case 'sports':
+        return v.contains('sport');
+      case 'travel':
+        return v.contains('travel');
+      case 'fashion':
+        return v.contains('fashion') || v.contains('style');
+      default:
+        return v.contains(key);
+    }
   }
 
   String _countLabel(int visibleCount) {
@@ -201,9 +249,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 
   List<Story> _filteredAlerts() {
+    final key = _currentCatKey();
     final q = _searchCtl.text.trim().toLowerCase();
-    final base = _alerts.where(_categoryMatch);
+
+    final base = _alerts.where((s) => _storyMatchesKey(s, key));
     if (q.isEmpty) return base.toList();
+
     return base.where((s) {
       final title = s.title.toLowerCase();
       final summ = (s.summary ?? '').toLowerCase();
@@ -341,9 +392,9 @@ class _AlertsScreenState extends State<AlertsScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row 2: ✅ AppToolbar (chips + “Mark all read” trailing pill)
+          // Row 2: AppToolbar (dynamic chips + “Mark all read” pill)
           AppToolbar(
-            tabs: _tabs,
+            tabs: _catLabels,
             activeIndex: _activeCatIndex,
             onSelect: _setCategory,
             chipKeys: _chipKeys,
@@ -364,21 +415,48 @@ class _AlertsScreenState extends State<AlertsScreen> {
             ),
           ),
 
-          // Row 3: inline search (if toggled)
-          if (_showSearchRow)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: SearchBarInput(
-                controller: _searchCtl,
-                onExitSearch: () {
-                  setState(() {
-                    _searchCtl.clear();
-                    _showSearchRow = false;
-                  });
-                  FocusScope.of(context).unfocus();
-                },
-              ),
-            ),
+          // Row 3: inline search (AnimatedSize + neutral theme)
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: _showSearchRow
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Theme(
+                      data: Theme.of(context).copyWith(
+                        inputDecorationTheme: InputDecorationTheme(
+                          filled: true,
+                          fillColor: neutralPillBg(context),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          hintStyle: TextStyle(color: faintTextColor(context)),
+                          prefixIconColor: secondaryTextColor(context),
+                          suffixIconColor: secondaryTextColor(context),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: outlineHairline(context), width: 1),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: outlineHairline(context), width: 1.2),
+                          ),
+                        ),
+                      ),
+                      child: SearchBarInput(
+                        controller: _searchCtl,
+                        autofocus: true,
+                        onExitSearch: () {
+                          setState(() {
+                            _searchCtl.clear();
+                            _showSearchRow = false;
+                          });
+                          FocusScope.of(context).unfocus();
+                        },
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
 
           // Body: refreshable grid
           Expanded(
