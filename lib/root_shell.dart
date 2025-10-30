@@ -51,6 +51,8 @@ import 'features/saved/saved_screen.dart';
 import 'features/story/story_details.dart';
 import 'theme/theme_colors.dart'; // tokens & helpers
 import 'widgets/app_drawer.dart';
+// NEW: shared picker sheets
+import 'widgets/picker_sheets.dart';
 
 const String _kAppVersion = '0.1.0';
 
@@ -347,7 +349,7 @@ class _RootShellState extends State<RootShell> {
     final picked = await showModalBottomSheet<ThemeMode>(
       context: context,
       showDragHandle: true,
-      builder: (_) => _ThemePicker(current: currentThemeMode),
+      builder: (_) => ThemePickerSheet(current: currentThemeMode),
     );
 
     if (picked != null) {
@@ -363,7 +365,7 @@ class _RootShellState extends State<RootShell> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => _CategoryPicker(initial: CategoryPrefs.instance.selected),
+      builder: (_) => CategoryPickerSheet(initial: CategoryPrefs.instance.selected),
     );
 
     if (picked != null && picked.isNotEmpty) {
@@ -379,7 +381,7 @@ class _RootShellState extends State<RootShell> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => _ContentTypePicker(current: _currentContentType),
+      builder: (_) => ContentTypePickerSheet(current: _currentContentType),
     );
 
     if (picked != null && picked.isNotEmpty) {
@@ -461,7 +463,7 @@ class _RootShellState extends State<RootShell> {
                     label: const Text('OK'),
                     style: FilledButton.styleFrom(
                       backgroundColor: scheme.primary,
-                      foregroundColor: scheme.onPrimary, // was Colors.white
+                      foregroundColor: scheme.onPrimary,
                       textStyle: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     onPressed: () => Navigator.pop(ctx),
@@ -644,367 +646,7 @@ class _DiscoverTabHost extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── THEME PICKER SHEET ───────────────────────── */
-class _ThemePicker extends StatelessWidget {
-  const _ThemePicker({required this.current});
-  final ThemeMode current;
-
-  @override
-  Widget build(BuildContext context) {
-    final options = <ThemeMode, ({String label, IconData icon})>{
-      ThemeMode.system: (label: 'System', icon: Icons.auto_awesome),
-      ThemeMode.light: (label: 'Light', icon: Icons.light_mode_outlined),
-      ThemeMode.dark: (label: 'Dark', icon: Icons.dark_mode_outlined),
-    };
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Theme',
-              style: GoogleFonts.inter(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Affects Home and story cards.',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-            ),
-            const SizedBox(height: 12),
-            for (final entry in options.entries)
-              RadioListTile<ThemeMode>(
-                value: entry.key,
-                groupValue: current,
-                onChanged: (val) => Navigator.pop(context, val),
-                title: Row(
-                  children: [
-                    Icon(entry.value.icon, size: 18),
-                    const SizedBox(width: 8),
-                    Text(entry.value.label),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/* ───────────────────────── CATEGORY PICKER SHEET ───────────────────────── */
-class _CategoryPicker extends StatefulWidget {
-  const _CategoryPicker({required this.initial});
-  final Set<String> initial;
-
-  @override
-  State<_CategoryPicker> createState() => _CategoryPickerState();
-}
-
-class _CategoryPickerState extends State<_CategoryPicker> {
-  late Set<String> _local;
-
-  @override
-  void initState() {
-    super.initState();
-    _local = Set<String>.of(widget.initial);
-  }
-
-  void _toggle(String key) {
-    const allKey = CategoryPrefs.keyAll;
-
-    if (key == allKey) {
-      _local
-        ..clear()
-        ..add(allKey);
-    } else {
-      if (_local.contains(key)) {
-        _local.remove(key);
-      } else {
-        _local.add(key);
-      }
-      _local.remove(allKey);
-      if (_local.isEmpty) _local.add(allKey);
-    }
-
-    setState(() {});
-  }
-
-  bool _checked(String key) => _local.contains(key);
-
-  Widget _catRow({
-    required String catKey,
-    required IconData icon,
-    required String title,
-    required String desc,
-  }) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final active = _checked(catKey);
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(10),
-      onTap: () => _toggle(catKey),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Checkbox(
-              value: active,
-              onChanged: (_) => _toggle(catKey),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              icon,
-              size: 20,
-              color: active ? scheme.primary : scheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-                    ),
-                  ),
-                  Text(
-                    desc,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Categories',
-              style: GoogleFonts.inter(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Pick what you want in your feed. We mostly cover Entertainment right now.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            _catRow(
-              catKey: CategoryPrefs.keyAll,
-              icon: Icons.apps_rounded,
-              title: 'All',
-              desc: 'Everything we have (Entertainment)',
-            ),
-            _catRow(
-              catKey: CategoryPrefs.keyEntertainment,
-              icon: Icons.local_movies_rounded,
-              title: 'Entertainment',
-              desc: 'Movies, OTT, on-air drama, box office',
-            ),
-            _catRow(
-              catKey: CategoryPrefs.keySports,
-              icon: Icons.sports_cricket_rounded,
-              title: 'Sports',
-              desc: 'Match talk, highlights (coming soon)',
-            ),
-            _catRow(
-              catKey: CategoryPrefs.keyTravel,
-              icon: Icons.flight_takeoff_rounded,
-              title: 'Travel',
-              desc: 'Trips, destinations, culture clips (coming soon)',
-            ),
-            _catRow(
-              catKey: CategoryPrefs.keyFashion,
-              icon: Icons.checkroom_rounded,
-              title: 'Fashion',
-              desc: 'Looks, red carpet, style drops (coming soon)',
-            ),
-
-            const SizedBox(height: 24),
-
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                icon: const Icon(Icons.check_rounded),
-                label: const Text('Apply'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: scheme.primary,
-                  foregroundColor: scheme.onPrimary, // was Colors.white
-                  textStyle: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                onPressed: () => Navigator.pop(context, _local),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/* ───────────────────────── CONTENT TYPE PICKER SHEET ───────────────────────── */
-class _ContentTypePicker extends StatefulWidget {
-  const _ContentTypePicker({required this.current});
-  final String current;
-
-  @override
-  State<_ContentTypePicker> createState() => _ContentTypePickerState();
-}
-
-class _ContentTypePickerState extends State<_ContentTypePicker> {
-  late String _localType;
-
-  @override
-  void initState() {
-    super.initState();
-    _localType = widget.current;
-  }
-
-  void _pick(String v) => setState(() => _localType = v);
-
-  Widget _typeTile({
-    required String value,
-    required String title,
-    required String desc,
-  }) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final selected = (_localType == value);
-
-    return RadioListTile<String>(
-      value: value,
-      groupValue: _localType,
-      onChanged: (val) => _pick(val ?? value),
-      title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: theme.textTheme.bodyLarge?.copyWith(
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
-          Text(
-            desc,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Content type',
-              style: GoogleFonts.inter(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Choose what format you prefer first.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            _typeTile(
-              value: ContentTypePrefs.typeAll,
-              title: 'All',
-              desc: 'Everything',
-            ),
-            _typeTile(
-              value: ContentTypePrefs.typeRead,
-              title: 'Read',
-              desc: 'Text / captions',
-            ),
-            _typeTile(
-              value: ContentTypePrefs.typeVideo,
-              title: 'Video',
-              desc: 'Clips, trailers, interviews',
-            ),
-            _typeTile(
-              value: ContentTypePrefs.typeAudio,
-              title: 'Audio',
-              desc: 'Pod bites (coming soon)',
-            ),
-
-            const SizedBox(height: 24),
-
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                icon: const Icon(Icons.check_rounded),
-                label: const Text('Apply'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: theme.colorScheme.primary,
-                  foregroundColor: theme.colorScheme.onPrimary, // was white
-                  textStyle: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                onPressed: () => Navigator.pop(context, _localType),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/* ───────────────────────── APP LANGUAGE SHEET ───────────────────────── */
+/* ───────────────────────── APP LANGUAGE SHEET (kept local) ───────────────── */
 class _AppLanguageSheet extends StatefulWidget {
   const _AppLanguageSheet({required this.currentCode});
   final String currentCode;
@@ -1131,7 +773,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
                 label: const Text('Apply'),
                 style: FilledButton.styleFrom(
                   backgroundColor: theme.colorScheme.primary,
-                  foregroundColor: theme.colorScheme.onPrimary, // was white
+                  foregroundColor: theme.colorScheme.onPrimary,
                   textStyle: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 onPressed: () => Navigator.pop(context, _localCode),
@@ -1163,7 +805,8 @@ class _ResponsiveWidth extends StatelessWidget {
             child: child,
           ),
         );
-    });
+      },
+    );
   }
 }
 
