@@ -2,30 +2,17 @@
 //
 // Reusable second-row toolbar used under page headers.
 //
-// Left  : horizontally scrollable category chips
+// Left  : horizontally scrollable category chips (fixed lane height)
 // Right : Sort pill (optional) + compact square actions (optional)
-// Notes : The trailing area is a single Row so actions stay on the SAME line.
-//
-// API
-// ---
-// AppToolbar(
-//   tabs: const ['All','Entertainment','Sports'],
-//   activeIndex: _tab.index,
-//   onSelect: _onTabTap,
-//   chipKeys: _chipKeys,                    // optional
-//   sortLabel: _sortModeLabel(_sortMode),   // optional (omit to hide)
-//   sortIcon:  _iconForSort(_sortMode),
-//   onSortTap: () => _showSortSheet(context),
-//   actions: const [
-//     AppToolbarAction(icon: Icons.ios_share,      tooltip: 'Export',    onTap: ...),
-//     AppToolbarAction(icon: Icons.delete_outline, tooltip: 'Clear all', onTap: ...),
-//   ],
-//   // OR take full control of the right side with `trailing:`
-// )
+// Notes : Trailing area is a single Row so actions stay on the SAME line.
+//         Uses a SizedBox(height: _kChipLaneH) to avoid collapse on Android
+//         when other rows (like an inline search bar) mount/unmount.
 
 import 'package:flutter/material.dart';
 import '../theme/toolbar.dart' show ToolbarChip, toolbarSortPill;
 import '../theme/theme_colors.dart' show outlineHairline, neutralPillBg;
+
+const double _kChipLaneH = 40;
 
 /// Declarative config for square action buttons on the right side.
 class AppToolbarAction {
@@ -148,9 +135,7 @@ class AppToolbar extends StatelessWidget {
 
       final List<Widget> right = [];
       final sort = buildSortPill();
-      if (sort is! SizedBox) {
-        right.add(sort);
-      }
+      if (sort is! SizedBox) right.add(sort);
 
       final acts = actions ?? const <AppToolbarAction>[];
       if (acts.isNotEmpty) {
@@ -162,8 +147,6 @@ class AppToolbar extends StatelessWidget {
       }
 
       if (right.isEmpty) return const SizedBox.shrink();
-
-      // Single-line cluster pinned to the right
       return Row(mainAxisSize: MainAxisSize.min, children: right);
     }
 
@@ -176,37 +159,42 @@ class AppToolbar extends StatelessWidget {
       ),
       padding: padding,
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // LEFT: scrollable chips (take remaining space)
+          // LEFT: scrollable chips (fixed lane height to prevent collapse)
           Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: List.generate(tabs.length, (i) {
-                  final key = (chipKeys != null && i < chipKeys!.length)
-                      ? chipKeys![i]
-                      : null;
-                  return Row(
-                    key: ValueKey('toolbar-chip-wrap-$i'),
-                    children: [
-                      ToolbarChip(
+            child: SizedBox(
+              height: _kChipLaneH,
+              child: MediaQuery.removePadding(
+                context: context,
+                removeTop: true,
+                removeBottom: true,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  itemCount: tabs.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (ctx, i) {
+                    final key = (chipKeys != null && i < chipKeys!.length)
+                        ? chipKeys![i]
+                        : null;
+                    return Center(
+                      child: ToolbarChip(
                         key: key,
                         label: tabs[i],
                         active: i == activeIndex,
                         onTap: () => onSelect(i),
                       ),
-                      if (i != tabs.length - 1) const SizedBox(width: 8),
-                    ],
-                  );
-                }),
+                    );
+                  },
+                ),
               ),
             ),
           ),
 
           const SizedBox(width: 12),
 
-          // RIGHT: sort + actions
+          // RIGHT: sort + actions (single line)
           buildTrailing(),
         ],
       ),
