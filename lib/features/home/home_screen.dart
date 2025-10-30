@@ -80,6 +80,7 @@ import '../../core/cache.dart'; // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
 import '../../core/utils.dart'; // fadeRoute(), deepLinkForStoryId()
 import '../../theme/theme_colors.dart'; // brand + text helpers
+import '../../theme/toolbar.dart'; // ToolbarChip, toolbarSortPill  ✅ NEW
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/search_bar.dart'; // SearchBarInput
@@ -671,7 +672,7 @@ class _HomeScreenState extends State<HomeScreen>
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
-            sortMode: _sortMode, // ✅ remove redundant expression
+            sortMode: _sortMode,
             isDark: isDark,
             theme: theme,
             chipKeys: _chipKeys,
@@ -720,7 +721,7 @@ class _HomeScreenState extends State<HomeScreen>
 /* ──────────────────────────────────────────────────────────────────────────
  * Filters row under header (Row 2)
  *  - Horizontal chips for All / Entertainment / Sports
- *  - Sort pill on the right
+ *  - Sort pill on the right (neutral onSurface text/icons in both themes)
  * ───────────────────────────────────────────────────────────────────────── */
 class _FiltersRow extends StatelessWidget {
   const _FiltersRow({
@@ -743,108 +744,26 @@ class _FiltersRow extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final void Function(BuildContext ctx) onSortTap;
 
+  IconData _iconForSort(_SortMode mode) {
+    switch (mode) {
+      case _SortMode.latest:
+        return Icons.access_time_rounded;
+      case _SortMode.trending:
+        return Icons.local_fire_department_rounded;
+      case _SortMode.views:
+        return Icons.visibility_rounded;
+      case _SortMode.editorsPick:
+        return Icons.star_rounded;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final acc = cs.primary;
-
-    Widget tabChip(int index, String label, Key itemKey) {
-      final selected = (activeIndex == index);
-
-      final bgColor = selected ? acc : Colors.transparent;
-      final textColor = selected ? cs.onPrimary : acc;
-      final borderClr = selected ? acc : acc.withOpacity(0.35);
-      final fontWeight = selected ? FontWeight.w600 : FontWeight.w500;
-
-      return InkWell(
-        key: itemKey,
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => onSelect(index),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: borderClr, width: 1),
-            boxShadow: selected
-                ? [
-                    BoxShadow(
-                      color: acc.withOpacity(0.35),
-                      blurRadius: 20,
-                      offset: const Offset(0, 10),
-                    ),
-                  ]
-                : const <BoxShadow>[],
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.2,
-              fontWeight: fontWeight,
-              color: textColor,
-            ),
-          ),
-        ),
-      );
-    }
-
-    IconData iconForSort(_SortMode mode) {
-      switch (mode) {
-        case _SortMode.latest:
-          return Icons.access_time_rounded;
-        case _SortMode.trending:
-          return Icons.local_fire_department_rounded;
-        case _SortMode.views:
-          return Icons.visibility_rounded;
-        case _SortMode.editorsPick:
-          return Icons.star_rounded;
-      }
-    }
-
-    Widget sortButton() {
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => onSortTap(context),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              width: 1,
-              color: acc.withOpacity(0.35),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(iconForSort(sortMode), size: 16, color: acc),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  sortLabel,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    height: 1.2,
-                    fontWeight: FontWeight.w500,
-                    color: acc,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 2),
-              Icon(Icons.arrow_drop_down_rounded, size: 18, color: acc),
-            ],
-          ),
-        ),
-      );
-    }
 
     return Container(
       decoration: BoxDecoration(
-        // ✅ Filters row uses cs.surface across themes
-        color: Theme.of(context).colorScheme.surface,
+        color: cs.surface,
         border: Border(
           bottom: BorderSide(width: 1, color: outlineHairline(context)),
         ),
@@ -853,25 +772,68 @@ class _FiltersRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Horizontal scroll row of chips.
+          // Horizontal scroll row of chips (theme-driven via ToolbarChip).
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  tabChip(0, 'All', chipKeys[0]),
+                  ToolbarChip(
+                    key: chipKeys[0],
+                    label: 'All',
+                    active: activeIndex == 0,
+                    onTap: () => onSelect(0),
+                  ),
                   const SizedBox(width: 8),
-                  tabChip(1, 'Entertainment', chipKeys[1]),
+                  ToolbarChip(
+                    key: chipKeys[1],
+                    label: 'Entertainment',
+                    active: activeIndex == 1,
+                    onTap: () => onSelect(1),
+                  ),
                   const SizedBox(width: 8),
-                  tabChip(2, 'Sports', chipKeys[2]),
+                  ToolbarChip(
+                    key: chipKeys[2],
+                    label: 'Sports',
+                    active: activeIndex == 2,
+                    onTap: () => onSelect(2),
+                  ),
                 ],
               ),
             ),
           ),
           const SizedBox(width: 12),
-          // Sort pill.
-          sortButton(),
+          // Sort pill (neutral text/icons for contrast in dark & light).
+          InkWell(
+            borderRadius: BorderRadius.circular(999),
+            onTap: () => onSortTap(context),
+            child: toolbarSortPill(
+              context: context,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(_iconForSort(sortMode), size: 16, color: cs.onSurface),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      sortLabel,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.2,
+                        fontWeight: FontWeight.w500,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(Icons.arrow_drop_down_rounded,
+                      size: 18, color: cs.onSurface),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
