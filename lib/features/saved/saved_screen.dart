@@ -1,14 +1,14 @@
 // lib/features/saved/saved_screen.dart
 //
-// SAVED TAB
+// SAVED TAB (wired to CategoryPrefs registry)
 // ----------------------------------------------------------------------
 // Header rules (matches global nav spec):
 // WIDE (≥768px):    [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
 // COMPACT (<768px): [Search] [Refresh] [Menu]
-// Search toggles an inline bar INSIDE Saved (Row 3).
-// Row 2  = shared AppToolbar (chips + Sort pill + actions: Export / Clear)
-// Row 2.5 = "N items" (for current chip + search result)
-// Body   = grid of StoryCard.
+// Row 2    = shared AppToolbar (chips = All + selected, Sort pill, actions)
+// Row 2.5  = "N items" (for current chip + search result)
+// Row 3    = inline search (AnimatedSize, neutral theme)
+// Body     = grid of StoryCard (sorted + filtered + category-scoped)
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -19,11 +19,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../core/cache.dart';            // SavedStore, SavedSort, FeedCache
+import '../../core/cache.dart';             // SavedStore, SavedSort, FeedCache
 import '../../core/models.dart';
-import '../../theme/theme_colors.dart';    // primaryTextColor, neutralPillBg, outlineHairline
-import '../../widgets/app_toolbar.dart';   // AppToolbar, AppToolbarAction
-import '../../widgets/search_bar.dart';    // SearchBarInput
+import '../../core/category_prefs.dart';    // CategoryPrefs (keys/labels)
+import '../../theme/theme_colors.dart';     // primaryTextColor, neutralPillBg, outlineHairline, text helpers
+import '../../widgets/app_toolbar.dart';    // AppToolbar, AppToolbarAction
+import '../../widgets/search_bar.dart';     // SearchBarInput
 import '../story/story_card.dart';
 
 class SavedScreen extends StatefulWidget {
@@ -45,10 +46,10 @@ class SavedScreen extends StatefulWidget {
 }
 
 class _SavedScreenState extends State<SavedScreen> {
-  static const List<String> _tabs = ['All', 'Entertainment', 'Sports'];
-
-  final List<GlobalKey> _chipKeys =
-      List.generate(_tabs.length, (_) => GlobalKey());
+  // Dynamic category toolbar: keys/labels come from CategoryPrefs.
+  List<String> _catKeys = const ['all'];
+  List<String> _catLabels = const ['All'];
+  final List<GlobalKey> _chipKeys = [];
 
   SavedSort _sort = SavedSort.recent;
   int _activeCatIndex = 0;
@@ -60,6 +61,9 @@ class _SavedScreenState extends State<SavedScreen> {
   @override
   void initState() {
     super.initState();
+    _syncWithCategoryPrefs();
+    CategoryPrefs.instance.addListener(_onCategoriesChanged);
+
     _query.addListener(_onQueryChanged);
   }
 
@@ -68,25 +72,42 @@ class _SavedScreenState extends State<SavedScreen> {
     _debounce?.cancel();
     _query.removeListener(_onQueryChanged);
     _query.dispose();
+
+    CategoryPrefs.instance.removeListener(_onCategoriesChanged);
     super.dispose();
   }
 
-  void _onQueryChanged() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) setState(() {});
-    });
+  /* ─────────────── Category prefs wiring ─────────────── */
+
+  void _onCategoriesChanged() {
+    if (!mounted) return;
+    setState(_syncWithCategoryPrefs);
   }
 
-  void _toggleSearchRow() {
-    setState(() {
-      _showSearchRow = !_showSearchRow;
-      if (!_showSearchRow) _query.clear();
-    });
+  void _syncWithCategoryPrefs() {
+    final prevKey = _currentCatKeyOrAll();
+
+    _catKeys = CategoryPrefs.instance.displayKeys();
+    _catLabels = CategoryPrefs.instance.displayLabels();
+
+    _chipKeys
+      ..clear()
+      ..addAll(List.generate(_catLabels.length, (_) => GlobalKey()));
+
+    // Keep same key selected if still available; else fall back to 'all'
+    final keepIdx = _catKeys.indexOf(prevKey);
+    _activeCatIndex = keepIdx >= 0 ? keepIdx : 0;
+  }
+
+  String _currentCatKeyOrAll() {
+    if (_activeCatIndex < 0 || _activeCatIndex >= _catKeys.length) {
+      return 'all';
+    }
+    return _catKeys[_activeCatIndex];
   }
 
   void _setCategory(int i) {
-    if (i < 0 || i >= _tabs.length) return;
+    if (i < 0 || i >= _catKeys.length) return;
     setState(() => _activeCatIndex = i);
 
     // Ensure the tapped chip scrolls into view.
@@ -104,7 +125,23 @@ class _SavedScreenState extends State<SavedScreen> {
     });
   }
 
-  void _refreshSaved() => setState(() {}); // local only
+  /* ─────────────── Search handling ─────────────── */
+
+  void _onQueryChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 200), () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _toggleSearchRow() {
+    setState(() {
+      _showSearchRow = !_showSearchRow;
+      if (!_showSearchRow) _query.clear();
+    });
+  }
+
+  void _refreshSaved() => setState(() {}); // local recompute/paint
 
   /* ─────────────── Category filter helpers ─────────────── */
 
@@ -117,13 +154,21 @@ class _SavedScreenState extends State<SavedScreen> {
     return '';
   }
 
-  bool _matchesActiveCategory(Story s) {
-    if (_activeCatIndex == 0) return true; // All
+  bool _storyMatchesKey(Story s, String key) {
+    if (key == 'all') return true;
     final v = _verticalOf(s);
-    if (_activeCatIndex == 1) {
-      return v.contains('entertain');
-    } else {
-      return v.contains('sport');
+    switch (key) {
+      case 'entertainment':
+        return v.contains('entertain');
+      case 'sports':
+        return v.contains('sport');
+      case 'travel':
+        return v.contains('travel');
+      case 'fashion':
+        return v.contains('fashion') || v.contains('style');
+      default:
+        // Fallback: substring match on the key itself
+        return v.contains(key);
     }
   }
 
@@ -270,7 +315,9 @@ class _SavedScreenState extends State<SavedScreen> {
         // 1) order; 2) category filter; 3) search filter
         final ids = SavedStore.instance.orderedIds(_sort);
         final base = ids.map(FeedCache.get).whereType<Story>().toList(growable: false);
-        final byCategory = base.where(_matchesActiveCategory).toList(growable: false);
+
+        final currentKey = _currentCatKeyOrAll();
+        final byCategory = base.where((s) => _storyMatchesKey(s, currentKey)).toList(growable: false);
 
         final q = _query.text.trim().toLowerCase();
         final filtered = (q.isEmpty)
@@ -351,9 +398,9 @@ class _SavedScreenState extends State<SavedScreen> {
           body: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Row 2: ✅ shared toolbar (chips + Sort + actions on the SAME row)
+              // Row 2: shared toolbar (dynamic chips + Sort + actions)
               AppToolbar(
-                tabs: _tabs,
+                tabs: _catLabels,               // ["All", "Entertainment", ...]
                 activeIndex: _activeCatIndex,
                 onSelect: _setCategory,
                 chipKeys: _chipKeys,
@@ -385,21 +432,48 @@ class _SavedScreenState extends State<SavedScreen> {
                 ),
               ),
 
-              // Row 3: inline search
-              if (_showSearchRow)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: SearchBarInput(
-                    controller: _query,
-                    onExitSearch: () {
-                      setState(() {
-                        _query.clear();
-                        _showSearchRow = false;
-                      });
-                      FocusScope.of(context).unfocus();
-                    },
-                  ),
-                ),
+              // Row 3: inline search (AnimatedSize + neutral theme like Home)
+              AnimatedSize(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                alignment: Alignment.topCenter,
+                child: _showSearchRow
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                        child: Theme(
+                          data: Theme.of(context).copyWith(
+                            inputDecorationTheme: InputDecorationTheme(
+                              filled: true,
+                              fillColor: neutralPillBg(context),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              hintStyle: TextStyle(color: faintTextColor(context)),
+                              prefixIconColor: secondaryTextColor(context),
+                              suffixIconColor: secondaryTextColor(context),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(color: outlineHairline(context), width: 1),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(color: outlineHairline(context), width: 1.2),
+                              ),
+                            ),
+                          ),
+                          child: SearchBarInput(
+                            controller: _query,
+                            autofocus: true,
+                            onExitSearch: () {
+                              setState(() {
+                                _query.clear();
+                                _showSearchRow = false;
+                              });
+                              FocusScope.of(context).unfocus();
+                            },
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
 
               // Grid / empty
               Expanded(
@@ -415,12 +489,12 @@ class _SavedScreenState extends State<SavedScreen> {
                     final bottomPad = 28.0 + bottomSafe;
 
                     if (filtered.isEmpty) {
-                      final isSearching = _query.text.trim().isNotEmpty || _activeCatIndex != 0;
+                      final isScoped = _query.text.trim().isNotEmpty || currentKey != 'all';
                       return ListView(
                         padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
-                          if (!isSearching)
+                          if (!isScoped)
                             const _EmptySaved()
                           else
                             Center(
