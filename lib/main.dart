@@ -7,11 +7,11 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import 'app/app.dart';
-import 'app/app_settings.dart';
-import 'core/api.dart'; // kApiBaseUrl, kDeepLinkBase
-import 'core/cache.dart';
-import 'core/fcm_bootstrap.dart'; // FCM init (Android only)
+import 'app/app.dart';                 // CinePulseApp
+import 'app/app_settings.dart';        // AppSettings singleton
+import 'core/api.dart';                // kApiBaseUrl, kDeepLinkBase
+import 'core/cache.dart';              // SavedStore
+import 'core/fcm_bootstrap.dart';      // FCM init (Android only)
 
 Future<void> main() async {
   // Ensure bindings for async init (prefs, plugins, channels).
