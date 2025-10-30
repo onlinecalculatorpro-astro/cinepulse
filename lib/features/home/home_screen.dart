@@ -20,7 +20,7 @@ import 'package:web_socket_channel/status.dart' as ws_status;
 import '../../core/api.dart';             // fetchFeed(), kApiBaseUrl
 import '../../core/cache.dart';           // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
-import '../../core/category_prefs.dart';  // CategoryPrefs, CategoryRegistry
+import '../../core/category_prefs.dart';  // CategoryPrefs (single source)
 import '../../theme/theme_colors.dart';   // brand + text helpers
 import '../../widgets/app_toolbar.dart';  // shared toolbar row
 import '../../widgets/error_view.dart';
@@ -59,8 +59,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // refresh + realtime timing
   static const Duration _kAutoRefreshEvery = Duration(minutes: 2);
   static const Duration _kRealtimeDebounce = Duration(milliseconds: 500);
@@ -97,21 +96,10 @@ class _HomeScreenState extends State<HomeScreen>
   int _wsBackoffSecs = 2;
 
   /* ──────────────────────────────────────────────────────────────────────
-   * Derived helpers for categories
+   * Derived helpers for categories (from CategoryPrefs)
    * ────────────────────────────────────────────────────────────────────── */
-  List<String> get _catKeys {
-    // Always show "all", then user-selected in registry order.
-    final selected = CategoryPrefs.instance.selected; // Set<String>
-    final ordered = CategoryRegistry.ordered;         // List<CategoryDef> (assumed)
-    final rest = ordered
-        .map((d) => d.key)
-        .where((k) => k != 'all' && selected.contains(k))
-        .toList();
-    return ['all', ...rest];
-  }
-
-  List<String> get _catLabels =>
-      _catKeys.map((k) => CategoryRegistry.labelOf(k)).toList();
+  List<String> get _catKeys => CategoryPrefs.instance.displayKeys();     // ['all', ...selected]
+  List<String> get _catLabels => CategoryPrefs.instance.displayLabels(); // labels for _catKeys
 
   String get _currentCatKey =>
       (_activeCatIndex >= 0 && _activeCatIndex < _catKeys.length)
@@ -226,18 +214,23 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _syncFeedsWithCategoryPrefs({required bool preload}) {
+    // Snapshot keys/labels once to keep lengths aligned in this pass.
+    final keys = _catKeys;
+    final labels = _catLabels;
+
     // Ensure feed models exist for current keys.
-    for (final key in _catKeys) {
+    for (final key in keys) {
       _feeds.putIfAbsent(key, () => _PagedFeed(tab: key));
     }
+
     // Ensure chip keys match label count.
     _chipKeys
       ..clear()
-      ..addAll(List.generate(_catLabels.length, (_) => GlobalKey()));
+      ..addAll(List.generate(labels.length, (_) => GlobalKey()));
 
     // Optionally warm from disk cache.
     if (preload) {
-      for (final k in _catKeys) {
+      for (final k in keys) {
         unawaited(_feeds[k]!.load(reset: true));
       }
     }
@@ -630,14 +623,21 @@ class _HomeScreenState extends State<HomeScreen>
             ),
 
           // Row 2: shared AppToolbar (chips + sort pill)
-          AppToolbar(
-            tabs: _catLabels,                 // e.g. ["All","Entertainment","Sports"]
-            activeIndex: _activeCatIndex,
-            onSelect: _onChipSelect,
-            chipKeys: _chipKeys,
-            sortLabel: _sortModeLabel(_sortMode),
-            sortIcon: _iconForSort(_sortMode),
-            onSortTap: () => _showSortSheet(context),
+          // Rebuild when CategoryPrefs changes so chips reflect latest picks.
+          AnimatedBuilder(
+            animation: CategoryPrefs.instance,
+            builder: (context, _) {
+              final labels = _catLabels; // derived from prefs
+              return AppToolbar(
+                tabs: labels,                 // e.g. ["All","Entertainment","Sports"]
+                activeIndex: _activeCatIndex,
+                onSelect: _onChipSelect,
+                chipKeys: _chipKeys,
+                sortLabel: _sortModeLabel(_sortMode),
+                sortIcon: _iconForSort(_sortMode),
+                onSortTap: () => _showSortSheet(context),
+              );
+            },
           ),
 
           // Row 3: inline search bar (smooth show/hide + autofocus)
