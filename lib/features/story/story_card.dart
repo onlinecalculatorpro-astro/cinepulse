@@ -2,18 +2,8 @@
 //
 // CinePulse card (mobile-first).
 //
-// - Dark navy card (#0f172a in dark mode), subtle 1px border, 10px radius,
-//   shadow/glow on hover (web only).
-// - 16:9 thumbnail cropped from top, min height ~160px.
-// - Meta row:
-//      [Release] [27 Oct 2025, 3:30 PM] [+6m]
-//   with colored pill per kind (Release red, News blue, OTT purple, etc.).
-// - Title: Inter 14px, up to 3 lines.
-// - CTA row pinned to bottom (Watch/Read + Save + Share), then "Source:".
-// - Body reserves extra bottom space so CTA row never overlaps the title
-//   even with large text scale.
-//
-// Overall tile height is still influenced by childAspectRatio in home_screen.dart.
+// Uses theme tokens/helpers (theme/theme_colors.dart, app theme) — no
+// hard-coded colors for themed elements.
 
 import 'dart:math' as math;
 import 'dart:ui';
@@ -150,9 +140,9 @@ class _StoryCardState extends State<StoryCard> {
     );
   }
 
-  Widget _ctaLeading() => _isWatchCta
-      ? const Icon(Icons.play_arrow_rounded, size: 20, color: Colors.white)
-      : const _Emoji(emoji: '📖', size: 16);
+  Widget _ctaLeading(BuildContext ctx) => _isWatchCta
+      ? Icon(Icons.play_arrow_rounded, size: 20, color: Theme.of(ctx).colorScheme.onPrimary)
+      : _Emoji(emoji: '📖', size: 16, color: Theme.of(ctx).colorScheme.onPrimary);
 
   /* ───────────────────────── formatting helpers ────────────────────────── */
 
@@ -233,11 +223,9 @@ class _StoryCardState extends State<StoryCard> {
     final imageUrl = resolveStoryImageUrl(story);
     final srcText = _sourceDomain(story);
 
-    // Card chrome:
-    final Color cardBg = isDark ? const Color(0xFF0f172a) : scheme.surface;
-    final Color borderColor = isDark
-        ? Colors.white.withOpacity(0.07)
-        : Colors.black.withOpacity(0.08);
+    // Card chrome (theme-aware):
+    final Color cardBg = theme.cardColor;
+    final Color borderColor = outlineHairline(context);
 
     final card = AnimatedContainer(
       duration: const Duration(milliseconds: 140),
@@ -253,14 +241,13 @@ class _StoryCardState extends State<StoryCard> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(_hover ? 0.9 : 0.8),
+            color: theme.shadowColor.withOpacity(isDark ? 0.9 : 0.25),
             blurRadius: _hover ? 70 : 50,
             spreadRadius: 0,
             offset: const Offset(0, 30),
           ),
           if (_hover)
             BoxShadow(
-              // use themed primary instead of hard-coded red
               color: scheme.primary.withOpacity(0.18),
               blurRadius: 30,
               spreadRadius: 0,
@@ -285,13 +272,6 @@ class _StoryCardState extends State<StoryCard> {
               final mediaH = math.max(160.0, baseH);
 
               // Keep title from colliding with CTA:
-              //
-              // CTA row height (36)
-              // + spacing above CTA row (we'll give it comfortable air)
-              // + Source line (~16 if present)
-              //
-              // Plus: a "safety gap" to ensure we always have breathing room,
-              // scaled by textScale so large fonts don't crash into buttons.
               final textScale = MediaQuery.textScaleFactorOf(context);
 
               final baseCtaBlock =
@@ -299,7 +279,6 @@ class _StoryCardState extends State<StoryCard> {
                   8.0 + // gap between row and source
                   (srcText.isNotEmpty ? 16.0 : 0.0); // "Source:" line
 
-              // big cushion above CTA/source block
               const safetyGap = 32.0;
 
               final double reservedBottom =
@@ -339,7 +318,7 @@ class _StoryCardState extends State<StoryCard> {
                                 kind: story.kind,
                               ),
 
-                            // subtle bottom gradient overlay
+                            // subtle bottom gradient overlay (theme scrim)
                             Positioned.fill(
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
@@ -347,7 +326,7 @@ class _StoryCardState extends State<StoryCard> {
                                     begin: Alignment.bottomCenter,
                                     end: Alignment.topCenter,
                                     colors: [
-                                      Colors.black.withOpacity(0.35),
+                                      scheme.scrim.withOpacity(0.35),
                                       Colors.transparent,
                                     ],
                                     stops: const [0.0, 0.6],
@@ -361,10 +340,10 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                  // divider under thumbnail
+                  // divider under thumbnail (hairline)
                   Container(
                     height: 1,
-                    color: Colors.white.withOpacity(0.07),
+                    color: outlineHairline(context),
                   ),
 
                   /* ───── BODY / TEXT / CTA ───── */
@@ -429,7 +408,7 @@ class _StoryCardState extends State<StoryCard> {
                                             child: SizedBox(
                                               height: 36,
                                               child: ElevatedButton.icon(
-                                                icon: _ctaLeading(),
+                                                icon: _ctaLeading(context),
                                                 onPressed: hasUrl
                                                     ? () {
                                                         if (_isWatchCta &&
@@ -447,11 +426,10 @@ class _StoryCardState extends State<StoryCard> {
                                                     : null,
                                                 style:
                                                     ElevatedButton.styleFrom(
-                                                  // use themed primary
                                                   backgroundColor:
                                                       scheme.primary,
                                                   foregroundColor:
-                                                      Colors.white,
+                                                      scheme.onPrimary,
                                                   elevation: 0,
                                                   minimumSize:
                                                       const Size(0, 36),
@@ -466,8 +444,8 @@ class _StoryCardState extends State<StoryCard> {
                                                       6,
                                                     ),
                                                     side: BorderSide(
-                                                      color: Colors.white
-                                                          .withOpacity(0.08),
+                                                      color: outlineHairline(
+                                                          context),
                                                       width: 1,
                                                     ),
                                                   ),
@@ -563,52 +541,30 @@ class _KindStyle {
   });
 }
 
-// Pick badge colors by kind.
-// We keep text readable on dark cards.
-_KindStyle _styleForKind(String rawKind) {
+// Pick badge colors by kind — themed.
+// release → error, news → primary, ott → tertiary, trailer → secondary.
+// fallback → onSurfaceVariant tones.
+_KindStyle _styleForKind(BuildContext ctx, String rawKind) {
+  final cs = Theme.of(ctx).colorScheme;
   final k = rawKind.toLowerCase().trim();
 
-  // base palettes (Tailwind-ish tones)
-  const red = Color(0xFFdc2626);
-  const blue = Color(0xFF3b82f6);
-  const purple = Color(0xFF8b5cf6);
-  const amber = Color(0xFFFACC15);
-  const gray = Color(0xFF94a3b8);
-
+  Color base;
   if (k.contains('release')) {
-    return _KindStyle(
-      bg: red.withOpacity(0.16),
-      border: red.withOpacity(0.4),
-      text: red,
-    );
-  }
-  if (k.contains('news')) {
-    return _KindStyle(
-      bg: blue.withOpacity(0.16),
-      border: blue.withOpacity(0.4),
-      text: blue,
-    );
-  }
-  if (k.contains('ott')) {
-    return _KindStyle(
-      bg: purple.withOpacity(0.16),
-      border: purple.withOpacity(0.4),
-      text: purple,
-    );
-  }
-  if (k.contains('trailer')) {
-    return _KindStyle(
-      bg: amber.withOpacity(0.16),
-      border: amber.withOpacity(0.4),
-      text: amber,
-    );
+    base = cs.error;
+  } else if (k.contains('news')) {
+    base = cs.primary;
+  } else if (k.contains('ott')) {
+    base = cs.tertiary;
+  } else if (k.contains('trailer')) {
+    base = cs.secondary;
+  } else {
+    base = cs.onSurfaceVariant;
   }
 
-  // fallback
   return _KindStyle(
-    bg: gray.withOpacity(0.16),
-    border: gray.withOpacity(0.4),
-    text: gray,
+    bg: base.withOpacity(0.16),
+    border: base.withOpacity(0.40),
+    text: base,
   );
 }
 
@@ -629,9 +585,8 @@ class _MetaLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // use themed primary instead of hard-coded red
     final accent = Theme.of(context).colorScheme.primary;
-    final style = _styleForKind(kindRaw);
+    final style = _styleForKind(context, kindRaw);
 
     final pill = kindLabel.isEmpty
         ? const SizedBox.shrink()
@@ -761,18 +716,16 @@ class _FallbackThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        // simple dark vertical gradient for missing images
+        // theme-aware vertical gradient for missing images
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            isDark
-                ? const Color(0xFF0F1625)
-                : scheme.surfaceVariant.withOpacity(0.2),
-            isDark
-                ? const Color(0xFF1E2433)
-                : scheme.surfaceVariant.withOpacity(0.4),
-          ],
+          colors: isDark
+              ? [neutralPillBg(context), Theme.of(context).cardColor]
+              : [
+                  scheme.surfaceVariant.withOpacity(0.20),
+                  scheme.surfaceVariant.withOpacity(0.40),
+                ],
         ),
       ),
       child: Center(
@@ -790,19 +743,21 @@ class _SampleIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     IconData iconData = Icons.movie_rounded;
-    Color iconColor = const Color(0xFFECC943);
+    Color iconColor = cs.primary;
 
     final lower = kind.toLowerCase();
     if (lower.contains('trailer')) {
       iconData = Icons.theater_comedy_rounded;
-      iconColor = const Color(0xFF56BAF8);
+      iconColor = cs.secondary;
     } else if (lower.contains('release')) {
       iconData = Icons.balance_rounded;
-      iconColor = const Color(0xFFF9D359);
+      iconColor = cs.error;
     } else if (lower.contains('ott')) {
       iconData = Icons.videocam_rounded;
-      iconColor = const Color(0xFFC377F2);
+      iconColor = cs.tertiary;
     }
 
     return Icon(
@@ -816,9 +771,10 @@ class _SampleIcon extends StatelessWidget {
 /* ───────────────────────────── emoji text ─────────────────────────────── */
 
 class _Emoji extends StatelessWidget {
-  const _Emoji({required this.emoji, this.size = 16});
+  const _Emoji({required this.emoji, this.size = 16, this.color});
   final String emoji;
   final double size;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -828,6 +784,7 @@ class _Emoji extends StatelessWidget {
       style: TextStyle(
         fontSize: size,
         height: 1,
+        color: color,
         fontFamily: null,
         fontFamilyFallback: const [
           'Apple Color Emoji',
@@ -855,33 +812,56 @@ class _ActionIconBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    // dark square w/ thin border, matches the approved look
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : Colors.black.withOpacity(0.06);
-
-    final borderColor =
-        isDark ? Colors.white.withOpacity(0.12) : Colors.black.withOpacity(0.12);
-
     return Tooltip(
       message: tooltip,
       waitDuration: const Duration(milliseconds: 400),
       child: Material(
-        color: bgColor,
+        color: neutralPillBg(context),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
-          side: BorderSide(color: borderColor, width: 1),
+          side: BorderSide(color: outlineHairline(context), width: 1),
         ),
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: onTap,
-          child: SizedBox(
+          child: const SizedBox(
             width: 36,
             height: 36,
-            child: Center(child: icon),
+            child: Center(child: null), // icon added below via LayoutBuilder
           ),
         ),
+      ),
+    ).buildWithIcon(icon);
+  }
+}
+
+// Small helper to keep the API of _ActionIconBox untouched
+extension on Tooltip {
+  Widget buildWithIcon(Widget icon) {
+    return Tooltip(
+      message: message ?? '',
+      waitDuration: waitDuration,
+      child: Builder(
+        builder: (context) {
+          return Material(
+            color: neutralPillBg(context),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+              side: BorderSide(color: outlineHairline(context), width: 1),
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: (this.child as Material).child is SizedBox
+                  ? (this.child as Material).onTap
+                  : null,
+              child: SizedBox(
+                width: 36,
+                height: 36,
+                child: Center(child: icon),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
