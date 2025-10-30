@@ -1,18 +1,17 @@
 // lib/features/discover/discover_screen.dart
 //
-// DISCOVER TAB
+// DISCOVER TAB (wired to CategoryPrefs)
 // ----------------------------------------------------------------------
 // Header (same responsive CTA model as other tabs):
 // WIDE (≥768px):    [Home] [Search] [Saved] [Alerts] [Refresh] [Menu]
 // COMPACT (<768px): [Search] [Refresh] [Menu]
 // - No "Discover" CTA here because we’re already on Discover.
 //
-// Row 2  : AppToolbar (chips + Sort pill; theme-safe)
-// Row 2.5: Count line ("24 results")
-// Row 3  : Inline SearchBarInput (toggled by header Search; AnimatedSize)
-// Body   : RefreshIndicator + responsive grid of StoryCard
-// Notes  : Chips map to API tabs: all / entertainment / sports.
-//          Sort applied client-side. Search filters locally.
+// Row 2   : AppToolbar (chips = All + selected categories, + Sort pill)
+// Row 2.5 : Count line ("24 results")
+// Row 3   : Inline SearchBarInput (toggled by header Search; AnimatedSize)
+// Body    : RefreshIndicator + responsive grid of StoryCard
+// Sort    : client-side; Search filters locally
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -22,8 +21,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/api.dart';
 import '../../core/models.dart';
-import '../../theme/theme_colors.dart';   // primaryTextColor, neutralPillBg, outlineHairline
-import '../../widgets/app_toolbar.dart';  // shared toolbar (chips + trailing sort)
+import '../../core/category_prefs.dart';   // CategoryPrefs
+import '../../theme/theme_colors.dart';    // primaryTextColor, neutralPillBg, outlineHairline, text helpers
+import '../../widgets/app_toolbar.dart';   // shared toolbar (chips + trailing sort)
 import '../../widgets/search_bar.dart';
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
@@ -50,28 +50,29 @@ class DiscoverScreen extends StatefulWidget {
 }
 
 class _DiscoverScreenState extends State<DiscoverScreen> {
-  // Category chips → backend tab keys
-  static const List<String> _tabKeys = ['all', 'entertainment', 'sports'];
-  static const List<String> _tabLabels = ['All', 'Entertainment', 'Sports'];
-
-  // State
+  // Dynamic category toolbar (All + selected from CategoryPrefs)
+  List<String> _catKeys = const ['all'];
+  List<String> _catLabels = const ['All'];
+  final List<GlobalKey> _chipKeys = [];
   int _activeCatIndex = 0;
+
+  // Sort / search
   _SortMode _sort = _SortMode.trending; // Discover defaults to "Trending"
   bool _showSearchRow = false;
   final TextEditingController _query = TextEditingController();
   Timer? _debounce;
 
+  // Data
   bool _loading = true;
   String? _error;
   List<Story> _results = [];
 
-  // Optional: keep keys so active chip can be scrolled into view
-  final List<GlobalKey> _chipKeys =
-      List.generate(_tabLabels.length, (_) => GlobalKey());
-
   @override
   void initState() {
     super.initState();
+    _wireCategories();
+    CategoryPrefs.instance.addListener(_onCategoriesChanged);
+
     _query.addListener(_onQueryChanged);
     _load();
   }
@@ -81,10 +82,39 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     _debounce?.cancel();
     _query.removeListener(_onQueryChanged);
     _query.dispose();
+
+    CategoryPrefs.instance.removeListener(_onCategoriesChanged);
     super.dispose();
   }
 
-  /* ───────────────────────── Network load ───────────────────────── */
+  /* ───────────────────── Category wiring ───────────────────── */
+
+  void _onCategoriesChanged() {
+    if (!mounted) return;
+    final prevKey = _currentCatKey();
+    setState(() {
+      _wireCategories();
+      // keep selection if still present
+      final idx = _catKeys.indexOf(prevKey);
+      _activeCatIndex = (idx >= 0) ? idx : 0;
+    });
+    _load();
+  }
+
+  void _wireCategories() {
+    _catKeys = CategoryPrefs.instance.displayKeys();
+    _catLabels = CategoryPrefs.instance.displayLabels();
+    _chipKeys
+      ..clear()
+      ..addAll(List.generate(_catLabels.length, (_) => GlobalKey()));
+  }
+
+  String _currentCatKey() {
+    if (_activeCatIndex < 0 || _activeCatIndex >= _catKeys.length) return 'all';
+    return _catKeys[_activeCatIndex];
+  }
+
+  /* ───────────────────── Network load ───────────────────── */
 
   Future<void> _load() async {
     setState(() {
@@ -93,7 +123,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     });
 
     try {
-      final tabKey = _tabKeys[_activeCatIndex];
+      final tabKey = _currentCatKey();
       final list = await fetchFeed(tab: tabKey, since: null, limit: 80);
 
       // Newest-first baseline order (matches Home)
@@ -115,7 +145,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
   }
 
-  /* ───────────────────────── Interactions ───────────────────────── */
+  /* ───────────────────── Interactions ───────────────────── */
 
   void _onQueryChanged() {
     _debounce?.cancel();
@@ -134,7 +164,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   void _setCategory(int i) {
     if (i == _activeCatIndex) return;
     setState(() => _activeCatIndex = i);
-    // Optional scroll-to-visible for the tapped chip
+
+    // scroll tapped chip into view
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _chipKeys[i].currentContext;
       if (ctx != null) {
@@ -147,6 +178,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         );
       }
     });
+
     _load();
   }
 
@@ -223,7 +255,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
   }
 
-  /* ───────────────────────── Sorting / Filter ───────────────────────── */
+  /* ───────────────────── Sorting / Filter ───────────────────── */
 
   double _trendingScore(Story s) {
     try {
@@ -305,7 +337,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     return '$n results';
   }
 
-  /* ───────────────────────── Grid helper ───────────────────────── */
+  /* ───────────────────── Grid helper ───────────────────── */
 
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
@@ -327,7 +359,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     );
   }
 
-  /* ───────────────────────── UI BUILD ───────────────────────── */
+  /* ───────────────────── UI BUILD ───────────────────── */
 
   @override
   Widget build(BuildContext context) {
@@ -361,10 +393,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   ],
                 ),
                 border: Border(
-                  bottom: BorderSide(
-                    color: outlineHairline(context),
-                    width: 1,
-                  ),
+                  bottom: BorderSide(color: outlineHairline(context), width: 1),
                 ),
               ),
               child: Row(
@@ -438,9 +467,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row 2: ✅ shared AppToolbar (chips + sort pill; theme-safe)
+          // Row 2: shared AppToolbar (dynamic chips + sort pill)
           AppToolbar(
-            tabs: _tabLabels,
+            tabs: _catLabels,
             activeIndex: _activeCatIndex,
             onSelect: _setCategory,
             chipKeys: _chipKeys,
@@ -460,7 +489,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             ),
           ),
 
-          // Row 3: inline search (animated)
+          // Row 3: inline search (animated + neutral themed)
           AnimatedSize(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
@@ -468,16 +497,36 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             child: _showSearchRow
                 ? Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: SearchBarInput(
-                      controller: _query,
-                      autofocus: true,
-                      onExitSearch: () {
-                        setState(() {
-                          _query.clear();
-                          _showSearchRow = false;
-                        });
-                        FocusScope.of(context).unfocus();
-                      },
+                    child: Theme(
+                      data: Theme.of(context).copyWith(
+                        inputDecorationTheme: InputDecorationTheme(
+                          filled: true,
+                          fillColor: neutralPillBg(context),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          hintStyle: TextStyle(color: faintTextColor(context)),
+                          prefixIconColor: secondaryTextColor(context),
+                          suffixIconColor: secondaryTextColor(context),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: outlineHairline(context), width: 1),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: outlineHairline(context), width: 1.2),
+                          ),
+                        ),
+                      ),
+                      child: SearchBarInput(
+                        controller: _query,
+                        autofocus: true,
+                        onExitSearch: () {
+                          setState(() {
+                            _query.clear();
+                            _showSearchRow = false;
+                          });
+                          FocusScope.of(context).unfocus();
+                        },
+                      ),
                     ),
                   )
                 : const SizedBox.shrink(),
@@ -572,9 +621,11 @@ class _EmptyDiscover extends StatelessWidget {
           children: [
             Icon(Icons.search_off_rounded, size: 48, color: cs.onSurfaceVariant),
             const SizedBox(height: 12),
-            Text('Nothing to discover yet',
-                style: Theme.of(context).textTheme.titleMedium,
-                textAlign: TextAlign.center),
+            Text(
+              'Nothing to discover yet',
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 6),
             Text(
               'New trailers, clips, and drops will land here.',
@@ -616,7 +667,7 @@ class _HeaderIconButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: neutralPillBg(context),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: cs.primary.withOpacity(0.30), width: 1),
+            border: Border.all(color: outlineHairline(context), width: 1),
           ),
           child: Icon(icon, size: 16, color: primaryTextColor(context)),
         ),
