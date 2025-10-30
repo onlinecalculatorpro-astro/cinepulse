@@ -7,6 +7,7 @@
 //  • Grid only rebuilds on search text changes via ValueListenableBuilder
 //  • Minor perf polish for realtime/refresh checks
 //  • Inline search row is locally themed (no red) on mobile & desktop
+//  • Flutter 3.35: AnimatedSize no longer uses `vsync`
 
 import 'dart:async';
 import 'dart:convert';
@@ -610,7 +611,7 @@ class _HomeScreenState extends State<HomeScreen>
 
           // Row 3: inline search bar (smooth show/hide + autofocus)
           AnimatedSize(
-            vsync: this,
+            // NOTE: Flutter 3.35 — no `vsync` param
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
             alignment: Alignment.topCenter,
