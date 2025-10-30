@@ -7,7 +7,7 @@
 // COMPACT (<768px): [Search] [Refresh] [Menu]
 // Search toggles an inline bar INSIDE Saved (Row 3).
 // Row 2 = chips + actions; Row 2.5 = "N items"; Body = grid of StoryCard.
-// All visuals are theme-driven (no hard-coded reds).
+// All visuals are theme-driven (no hard-coded colors).
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -346,7 +346,6 @@ class _SavedToolbarRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
 
     // Generic chip builders (theme-driven)
     Widget inactiveChip(String label, VoidCallback onTap) {
@@ -499,7 +498,7 @@ class _SavedToolbarRow extends StatelessWidget {
             runSpacing: 8,
             children: [
               sortPill(),
-              actionSquare(icon: Icons.ios_share,     tooltip: 'Export saved', onTap: onExportTap),
+              actionSquare(icon: Icons.ios_share,      tooltip: 'Export saved', onTap: onExportTap),
               actionSquare(icon: Icons.delete_outline, tooltip: 'Clear all',     onTap: onClearAllTap),
             ],
           ),
