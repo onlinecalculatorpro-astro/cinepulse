@@ -5,7 +5,9 @@
 // WIDE (≥768px):    [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
 // COMPACT (<768px): [Search] [Refresh] [Menu]
 // Search toggles an inline row scoped to Alerts.
-// Row 2 = chips + “Mark all read”; Row 2.5 = count; Body = grid.
+// Row 2  = AppToolbar (chips + “Mark all read” trailing pill)
+// Row 2.5 = count
+// Body   = refreshable grid of StoryCard
 // Colors come from Theme + theme_colors helpers (no hard-coded reds).
 // ----------------------------------------------------------------------
 
@@ -22,6 +24,8 @@ import '../../widgets/search_bar.dart';
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
 import '../../theme/theme_colors.dart'; // primaryTextColor, neutralPillBg, outlineHairline
+import '../../widgets/app_toolbar.dart';
+import '../../theme/toolbar.dart'; // toolbarSortPill
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({
@@ -51,10 +55,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
   bool _loading = true;
   String? _error;
 
-  bool get _hasAlerts => _alerts.isNotEmpty;
-
   // Category chips (0=All,1=Entertainment,2=Sports)
   int _activeCatIndex = 0;
+  final List<String> _tabs = const ['All', 'Entertainment', 'Sports'];
+  final List<GlobalKey> _chipKeys = List.generate(3, (_) => GlobalKey());
 
   // Inline search row state
   bool _showSearchRow = false;
@@ -106,13 +110,13 @@ class _AlertsScreenState extends State<AlertsScreen> {
       final list = await fetchFeed(tab: 'all', since: null, limit: 80);
 
       final fresh = list.where((s) {
-        final dt = s.publishedAt;
+        final dt = s.publishedAt ?? s.normalizedAt ?? s.releaseDate;
         return dt != null && dt.isAfter(_lastSeenUtc);
       }).toList();
 
       fresh.sort((a, b) {
-        final pa = a.publishedAt;
-        final pb = b.publishedAt;
+        final pa = a.publishedAt ?? a.normalizedAt ?? a.releaseDate;
+        final pb = b.publishedAt ?? b.normalizedAt ?? b.releaseDate;
         if (pa == null) return 1;
         if (pb == null) return -1;
         return pb.compareTo(pa);
@@ -150,7 +154,62 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
   }
 
-  void _setCategory(int i) => setState(() => _activeCatIndex = i);
+  void _setCategory(int i) {
+    setState(() => _activeCatIndex = i);
+    // Scroll the tapped chip into view.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _chipKeys[i].currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+        );
+      }
+    });
+  }
+
+  /* ───────── Helpers ───────── */
+
+  bool get _hasAlerts => _alerts.isNotEmpty;
+
+  // Categorization like Saved (best-effort using optional fields)
+  String _verticalOf(Story s) {
+    try {
+      final dyn = (s as dynamic);
+      final v = dyn.vertical ?? dyn.category ?? dyn.section ?? '';
+      if (v is String) return v.toLowerCase();
+    } catch (_) {}
+    return '';
+  }
+
+  bool _categoryMatch(Story s) {
+    if (_activeCatIndex == 0) return true; // All
+    final v = _verticalOf(s);
+    if (_activeCatIndex == 1) return v.contains('entertain');
+    return v.contains('sport');
+  }
+
+  String _countLabel(int visibleCount) {
+    if (_loading) return 'Checking…';
+    if (_error != null) return 'Couldn’t refresh';
+    if (visibleCount == 0) return 'No new alerts';
+    if (visibleCount == 1) return '1 new alert';
+    return '$visibleCount new alerts';
+  }
+
+  List<Story> _filteredAlerts() {
+    final q = _searchCtl.text.trim().toLowerCase();
+    final base = _alerts.where(_categoryMatch);
+    if (q.isEmpty) return base.toList();
+    return base.where((s) {
+      final title = s.title.toLowerCase();
+      final summ = (s.summary ?? '').toLowerCase();
+      return title.contains(q) || summ.contains(q);
+    }).toList();
+  }
 
   /* ───────── Grid sizing (matches Home/Saved) ───────── */
 
@@ -174,27 +233,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
     );
   }
 
-  /* ───────── Labels / local filter ───────── */
-
-  String _countLabel() {
-    if (_loading) return 'Checking…';
-    if (_error != null) return 'Couldn’t refresh';
-    final total = _alerts.length;
-    if (total == 0) return 'No new alerts';
-    if (total == 1) return '1 new alert';
-    return '$total new alerts';
-  }
-
-  List<Story> _filteredAlerts() {
-    final q = _searchCtl.text.trim().toLowerCase();
-    if (q.isEmpty) return _alerts;
-    return _alerts.where((s) {
-      final title = s.title.toLowerCase();
-      final summ = (s.summary ?? '').toLowerCase();
-      return title.contains(q) || summ.contains(q);
-    }).toList();
-  }
-
   /* ───────── UI ───────── */
 
   @override
@@ -204,6 +242,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
+
+    final visibleAlerts = _filteredAlerts();
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -222,8 +262,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    cs.surface.withOpacity(0.96),
-                    cs.surface.withOpacity(0.94),
+                    cs.surface.withOpacity(0.95),
+                    cs.surface.withOpacity(0.90),
                   ],
                 ),
                 border: Border(
@@ -271,9 +311,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       icon: Icons.menu_rounded,
                       onTap: widget.onOpenMenu,
                     ),
-                  ],
-
-                  if (!isWide) ...[
+                  ] else ...[
                     _HeaderIconButton(
                       tooltip: 'Search',
                       icon: Icons.search_rounded,
@@ -303,20 +341,23 @@ class _AlertsScreenState extends State<AlertsScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row 2: chips + "Mark all read"
-          _AlertsToolbarRow(
+          // Row 2: ✅ AppToolbar (chips + “Mark all read” trailing pill)
+          AppToolbar(
+            tabs: _tabs,
             activeIndex: _activeCatIndex,
-            onCategoryTap: _setCategory,
-            hasAlerts: _hasAlerts,
-            loading: _loading,
-            onMarkAllRead: _markAllRead,
+            onSelect: _setCategory,
+            chipKeys: _chipKeys,
+            trailing: _MarkAllReadTrailing(
+              enabled: _hasAlerts && !_loading,
+              onTap: _markAllRead,
+            ),
           ),
 
           // Row 2.5: count
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
-              _countLabel(),
+              _countLabel(visibleAlerts.length),
               style: theme.textTheme.labelMedium?.copyWith(
                 color: cs.onSurfaceVariant,
               ),
@@ -355,8 +396,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   final bottomSafe = MediaQuery.viewPaddingOf(ctx).bottom;
                   final bottomPad = 28.0 + bottomSafe;
 
-                  final visibleAlerts = _filteredAlerts();
-
                   if (_loading) {
                     return GridView.builder(
                       padding: EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
@@ -388,7 +427,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     return ListView(
                       padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                       physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [ _EmptyAlerts() ],
+                      children: const [_EmptyAlerts()],
                     );
                   }
 
@@ -414,156 +453,44 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 }
 
-/* ───────── Row 2: chips + “Mark all read” ───────── */
+/* ───────── Trailing: “Mark all read” pill (for AppToolbar) ───────── */
 
-class _AlertsToolbarRow extends StatelessWidget {
-  const _AlertsToolbarRow({
-    required this.activeIndex,
-    required this.onCategoryTap,
-    required this.hasAlerts,
-    required this.loading,
-    required this.onMarkAllRead,
+class _MarkAllReadTrailing extends StatelessWidget {
+  const _MarkAllReadTrailing({
+    required this.enabled,
+    required this.onTap,
   });
 
-  final int activeIndex;
-  final ValueChanged<int> onCategoryTap;
-
-  final bool hasAlerts;
-  final bool loading;
-  final VoidCallback onMarkAllRead;
+  final bool enabled;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs = Theme.of(context).colorScheme;
+    final textColor = enabled ? cs.onSurface : cs.onSurface.withOpacity(0.45);
 
-    Widget inactiveChip(String label, VoidCallback onTap) {
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: cs.primary.withOpacity(0.45), width: 1),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              height: 1.2,
-              color: cs.primary,
-            ),
-          ),
-        ),
-      );
-    }
-
-    Widget activeChip(String label, int index) {
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => onCategoryTap(index),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: cs.primary,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: cs.primary, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: cs.primary.withOpacity(0.35),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
-              color: cs.onPrimary,
-            ),
-          ),
-        ),
-      );
-    }
-
-    Widget chip(int idx, String label) =>
-        (idx == activeIndex) ? activeChip(label, idx) : inactiveChip(label, () => onCategoryTap(idx));
-
-    Widget markAllReadPill() {
-      final enabled = hasAlerts && !loading;
-      final borderColor = cs.primary.withOpacity(enabled ? 0.45 : 0.20);
-      final textColor  = enabled ? cs.primary : cs.primary.withOpacity(0.45);
-
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: enabled ? onMarkAllRead : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(width: 1, color: borderColor),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.done_all_rounded, size: 16, color: textColor),
-              const SizedBox(width: 6),
-              Text(
-                'Mark all read',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  height: 1.2,
-                  color: textColor,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.scaffoldBackgroundColor,
-        border: Border(
-          bottom: BorderSide(width: 1, color: outlineHairline(context)),
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // LEFT: chips
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: [
-                  chip(0, 'All'),
-                  const SizedBox(width: 8),
-                  chip(1, 'Entertainment'),
-                  const SizedBox(width: 8),
-                  chip(2, 'Sports'),
-                ],
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: enabled ? onTap : null,
+      child: toolbarSortPill(
+        context: context,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.done_all_rounded, size: 16, color: textColor),
+            const SizedBox(width: 6),
+            Text(
+              'Mark all read',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                height: 1.2,
+                color: textColor,
               ),
             ),
-          ),
-
-          const SizedBox(width: 12),
-
-          // RIGHT: "Mark all read"
-          markAllReadPill(),
-        ],
+          ],
+        ),
       ),
     );
   }
