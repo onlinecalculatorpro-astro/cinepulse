@@ -1,42 +1,12 @@
 // lib/features/alerts/alerts_screen.dart
 //
-// ALERTS TAB
+// ALERTS TAB (theme-driven)
 // ----------------------------------------------------------------------
-// Header rules (global CTA model):
-//
-// WIDE (≥768px):
-//   [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
-//   - We do NOT show "Alerts" in the header because we're already on Alerts.
-//
-// COMPACT (<768px):
-//   [Search] [Refresh] [Menu]
-//   - We skip Home / Saved / Discover in compact mode because bottom nav
-//     already exposes Home / Discover / Saved / Alerts.
-//
-// Search CTA behavior:
-//   - Tapping Search in the header toggles a dedicated inline search row
-//     (Row 3 below the chips + count line), scoped to Alerts only.
-//   - Closing that row clears the query.
-//
-// Layout structure:
-//
-//   Row 1 (header): CinePulse brand + CTAs above
-//
-//   Row 2: _AlertsToolbarRow
-//          LEFT  = category chips [All / Entertainment / Sports]
-//          RIGHT = "Mark all read" pill
-//
-//   Row 2.5: count line, e.g. "3 new alerts"
-//
-//   Row 3 (conditional): inline SearchBarInput (only if header Search toggled)
-//          - Filters the visible alerts list locally
-//
-//   Body: pull-to-refresh + grid of unread alerts
-//
-// Other behavior:
-//   • "Mark all read" advances lastSeen, clears current list.
-//   • Refresh icon is in header, not in Row 2.
-//   • Grid sizing math matches Home and Saved so StoryCard tiles line up.
+// WIDE (≥768px):    [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
+// COMPACT (<768px): [Search] [Refresh] [Menu]
+// Search toggles an inline row scoped to Alerts.
+// Row 2 = chips + “Mark all read”; Row 2.5 = count; Body = grid.
+// Colors come from Theme + theme_colors helpers (no hard-coded reds).
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -51,7 +21,7 @@ import '../../core/models.dart';
 import '../../widgets/search_bar.dart';
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
-import '../../theme/theme_colors.dart';
+import '../../theme/theme_colors.dart'; // primaryTextColor, neutralPillBg, outlineHairline
 
 class AlertsScreen extends StatefulWidget {
   const AlertsScreen({
@@ -73,13 +43,9 @@ class AlertsScreen extends StatefulWidget {
 
 class _AlertsScreenState extends State<AlertsScreen> {
   static const _kPrefKey = 'alerts_last_seen';
-  static const _accent = Color(0xFFdc2626);
 
-  // Last time user "marked all read" (UTC).
   DateTime _lastSeenUtc =
       DateTime.fromMillisecondsSinceEpoch(0, isUtc: true); // first run
-
-  // Stories published after _lastSeenUtc.
   List<Story> _alerts = [];
 
   bool _loading = true;
@@ -87,10 +53,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   bool get _hasAlerts => _alerts.isNotEmpty;
 
-  // Category chip state (0=All,1=Entertainment,2=Sports).
+  // Category chips (0=All,1=Entertainment,2=Sports)
   int _activeCatIndex = 0;
 
-  // Inline search row toggle + controller.
+  // Inline search row state
   bool _showSearchRow = false;
   final _searchCtl = TextEditingController();
   Timer? _debounce;
@@ -120,9 +86,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     final raw = sp.getString(_kPrefKey);
     if (raw != null) {
       final parsed = DateTime.tryParse(raw);
-      if (parsed != null) {
-        _lastSeenUtc = parsed.toUtc();
-      }
+      if (parsed != null) _lastSeenUtc = parsed.toUtc();
     }
   }
 
@@ -131,7 +95,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     await sp.setString(_kPrefKey, t.toUtc().toIso8601String());
   }
 
-  /// Fetch latest feed and keep only "new since lastSeen".
+  /// Fetch latest and keep only “new since lastSeen”.
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -146,7 +110,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
         return dt != null && dt.isAfter(_lastSeenUtc);
       }).toList();
 
-      // newest first
       fresh.sort((a, b) {
         final pa = a.publishedAt;
         final pb = b.publishedAt;
@@ -155,19 +118,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
         return pb.compareTo(pa);
       });
 
-      setState(() {
-        _alerts = fresh;
-      });
+      setState(() => _alerts = fresh);
     } catch (e) {
-      setState(() {
-        _error = '$e';
-      });
+      setState(() => _error = '$e');
     } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -184,9 +139,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
   void _toggleSearchRow() {
     setState(() {
       _showSearchRow = !_showSearchRow;
-      if (!_showSearchRow) {
-        _searchCtl.clear();
-      }
+      if (!_showSearchRow) _searchCtl.clear();
     });
   }
 
@@ -197,40 +150,19 @@ class _AlertsScreenState extends State<AlertsScreen> {
     });
   }
 
-  void _setCategory(int i) {
-    setState(() {
-      _activeCatIndex = i;
-    });
-    // (future: actually filter by category here)
-  }
+  void _setCategory(int i) => setState(() => _activeCatIndex = i);
 
-  /* ───────────────────────── Grid sizing helper ─────────────────────────
-   * SAME math as Home and Saved tabs so StoryCard tiles line up.
-   */
+  /* ───────── Grid sizing (matches Home/Saved) ───────── */
+
   SliverGridDelegate _gridDelegateFor(double width, double textScale) {
     int estCols;
-    if (width < 520) {
-      estCols = 1;
-    } else if (width < 900) {
-      estCols = 2;
-    } else if (width < 1400) {
-      estCols = 3;
-    } else {
-      estCols = 4;
-    }
+    if (width < 520) estCols = 1;
+    else if (width < 900) estCols = 2;
+    else if (width < 1400) estCols = 3;
+    else estCols = 4;
 
-    double maxTileW = width / estCols;
-    maxTileW = maxTileW.clamp(320.0, 480.0);
-
-    double baseRatio;
-    if (estCols == 1) {
-      baseRatio = 0.88;
-    } else if (estCols == 2) {
-      baseRatio = 0.95;
-    } else {
-      baseRatio = 1.00;
-    }
-
+    double maxTileW = (width / estCols).clamp(320.0, 480.0);
+    final baseRatio = (estCols == 1) ? 0.88 : (estCols == 2 ? 0.95 : 1.00);
     final scaleForHeight = textScale.clamp(1.0, 1.4);
     final effectiveRatio = baseRatio / scaleForHeight;
 
@@ -242,7 +174,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
     );
   }
 
-  /* ───────────────────────── Label helpers ───────────────────────── */
+  /* ───────── Labels / local filter ───────── */
 
   String _countLabel() {
     if (_loading) return 'Checking…';
@@ -253,7 +185,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return '$total new alerts';
   }
 
-  // apply local search filter
   List<Story> _filteredAlerts() {
     final q = _searchCtl.text.trim().toLowerCase();
     if (q.isEmpty) return _alerts;
@@ -264,22 +195,20 @@ class _AlertsScreenState extends State<AlertsScreen> {
     }).toList();
   }
 
-  /* ───────────────────────── UI BUILD ───────────────────────── */
+  /* ───────── UI ───────── */
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final bgColor =
-        isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
+    final cs = theme.colorScheme;
 
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
 
     return Scaffold(
-      backgroundColor: bgColor,
+      backgroundColor: theme.scaffoldBackgroundColor,
 
-      /* ───────── Row 1: Frosted CinePulse header ───────── */
+      /* ── Row 1: Frosted header ── */
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(64),
         child: ClipRRect(
@@ -292,21 +221,13 @@ class _AlertsScreenState extends State<AlertsScreen> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: isDark
-                      ? [
-                          const Color(0xFF1e2537).withOpacity(0.9),
-                          const Color(0xFF0b0f17).withOpacity(0.95),
-                        ]
-                      : [
-                          theme.colorScheme.surface.withOpacity(0.95),
-                          theme.colorScheme.surface.withOpacity(0.9),
-                        ],
+                  colors: [
+                    cs.surface.withOpacity(0.96),
+                    cs.surface.withOpacity(0.94),
+                  ],
                 ),
-                border: const Border(
-                  bottom: BorderSide(
-                    color: Color(0x0FFFFFFF),
-                    width: 1,
-                  ),
+                border: Border(
+                  bottom: BorderSide(color: outlineHairline(context), width: 1),
                 ),
               ),
               child: Row(
@@ -314,9 +235,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   const _ModernBrandLogo(),
                   const Spacer(),
 
-                  // WIDE (≥768px):
-                  // [Home] [Search] [Saved] [Discover] [Refresh] [Menu]
-                  // (No "Alerts" CTA because we're already here.)
                   if (isWide) ...[
                     _HeaderIconButton(
                       tooltip: 'Home',
@@ -324,37 +242,30 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       onTap: widget.onOpenHome,
                     ),
                     const SizedBox(width: 8),
-
                     _HeaderIconButton(
                       tooltip: 'Search',
                       icon: Icons.search_rounded,
                       onTap: _toggleSearchRow,
                     ),
                     const SizedBox(width: 8),
-
                     _HeaderIconButton(
                       tooltip: 'Saved',
                       icon: Icons.bookmark_rounded,
                       onTap: widget.onOpenSaved,
                     ),
                     const SizedBox(width: 8),
-
                     _HeaderIconButton(
                       tooltip: 'Discover',
-                      icon: kIsWeb
-                          ? Icons.explore_outlined
-                          : Icons.manage_search_rounded,
+                      icon: kIsWeb ? Icons.explore_outlined : Icons.manage_search_rounded,
                       onTap: widget.onOpenDiscover,
                     ),
                     const SizedBox(width: 8),
-
                     _HeaderIconButton(
                       tooltip: 'Refresh',
                       icon: Icons.refresh_rounded,
                       onTap: _load,
                     ),
                     const SizedBox(width: 8),
-
                     _HeaderIconButton(
                       tooltip: 'Menu',
                       icon: Icons.menu_rounded,
@@ -362,8 +273,6 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     ),
                   ],
 
-                  // COMPACT (<768px):
-                  // [Search] [Refresh] [Menu]
                   if (!isWide) ...[
                     _HeaderIconButton(
                       tooltip: 'Search',
@@ -371,14 +280,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
                       onTap: _toggleSearchRow,
                     ),
                     const SizedBox(width: 8),
-
                     _HeaderIconButton(
                       tooltip: 'Refresh',
                       icon: Icons.refresh_rounded,
                       onTap: _load,
                     ),
                     const SizedBox(width: 8),
-
                     _HeaderIconButton(
                       tooltip: 'Menu',
                       icon: Icons.menu_rounded,
@@ -392,11 +299,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
         ),
       ),
 
-      /* ───────── Body ───────── */
+      /* ── Body ── */
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Row 2: category chips + "Mark all read"
+          // Row 2: chips + "Mark all read"
           _AlertsToolbarRow(
             activeIndex: _activeCatIndex,
             onCategoryTap: _setCategory,
@@ -405,22 +312,21 @@ class _AlertsScreenState extends State<AlertsScreen> {
             onMarkAllRead: _markAllRead,
           ),
 
-          // Row 2.5: count line ("3 new alerts")
+          // Row 2.5: count
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Text(
               _countLabel(),
               style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: cs.onSurfaceVariant,
               ),
             ),
           ),
 
-          // Row 3: inline search bar (if toggled)
+          // Row 3: inline search (if toggled)
           if (_showSearchRow)
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: SearchBarInput(
                 controller: _searchCtl,
                 onExitSearch: () {
@@ -433,11 +339,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
               ),
             ),
 
-          // Body: refreshable grid / states
+          // Body: refreshable grid
           Expanded(
             child: RefreshIndicator.adaptive(
               onRefresh: _load,
-              color: _accent,
+              color: cs.primary,
               child: LayoutBuilder(
                 builder: (ctx, constraints) {
                   final w = constraints.maxWidth;
@@ -451,15 +357,9 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
                   final visibleAlerts = _filteredAlerts();
 
-                  // 1) Loading -> skeleton grid
                   if (_loading) {
                     return GridView.builder(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPad,
-                        topPad,
-                        horizontalPad,
-                        bottomPad,
-                      ),
+                      padding: EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
                       physics: const AlwaysScrollableScrollPhysics(),
                       cacheExtent: 1800,
                       gridDelegate: gridDelegate,
@@ -468,23 +368,15 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     );
                   }
 
-                  // 2) Error -> simple scrollable error view
                   if (_error != null) {
                     return ListView(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPad,
-                        24,
-                        horizontalPad,
-                        bottomPad,
-                      ),
+                      padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                       physics: const AlwaysScrollableScrollPhysics(),
                       children: [
                         Center(
                           child: Text(
                             _error!,
-                            style: TextStyle(
-                              color: theme.colorScheme.onSurface,
-                            ),
+                            style: TextStyle(color: cs.onSurface),
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -492,42 +384,25 @@ class _AlertsScreenState extends State<AlertsScreen> {
                     );
                   }
 
-                  // 3) Empty / all caught up
                   if (visibleAlerts.isEmpty) {
                     return ListView(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPad,
-                        24,
-                        horizontalPad,
-                        bottomPad,
-                      ),
+                      padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                       physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [
-                        _EmptyAlerts(),
-                      ],
+                      children: const [ _EmptyAlerts() ],
                     );
                   }
 
-                  // 4) Normal grid of unread alerts
                   return GridView.builder(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPad,
-                      topPad,
-                      horizontalPad,
-                      bottomPad,
-                    ),
+                    padding: EdgeInsets.fromLTRB(horizontalPad, topPad, horizontalPad, bottomPad),
                     physics: const AlwaysScrollableScrollPhysics(),
                     cacheExtent: 2000,
                     gridDelegate: gridDelegate,
                     itemCount: visibleAlerts.length,
-                    itemBuilder: (_, i) {
-                      final story = visibleAlerts[i];
-                      return StoryCard(
-                        story: story,
-                        allStories: visibleAlerts,
-                        index: i,
-                      );
-                    },
+                    itemBuilder: (_, i) => StoryCard(
+                      story: visibleAlerts[i],
+                      allStories: visibleAlerts,
+                      index: i,
+                    ),
                   );
                 },
               ),
@@ -539,16 +414,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
   }
 }
 
-/* ───────────────────────── Row 2 under header ─────────────────────────
- *
- * _AlertsToolbarRow
- * LEFT  : category chips (All / Entertainment / Sports)
- * RIGHT : "Mark all read" pill
- *
- * The pill:
- *   - Red outline style
- *   - Disabled when there are no alerts or we're loading
- */
+/* ───────── Row 2: chips + “Mark all read” ───────── */
+
 class _AlertsToolbarRow extends StatelessWidget {
   const _AlertsToolbarRow({
     required this.activeIndex,
@@ -565,12 +432,10 @@ class _AlertsToolbarRow extends StatelessWidget {
   final bool loading;
   final VoidCallback onMarkAllRead;
 
-  static const _accent = Color(0xFFdc2626);
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final cs = theme.colorScheme;
 
     Widget inactiveChip(String label, VoidCallback onTap) {
       return InkWell(
@@ -581,96 +446,59 @@ class _AlertsToolbarRow extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.transparent,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: _accent.withOpacity(0.4),
-              width: 1,
-            ),
+            border: Border.all(color: cs.primary.withOpacity(0.45), width: 1),
           ),
           child: Text(
             label,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w500,
               height: 1.2,
-              color: _accent,
+              color: cs.primary,
             ),
           ),
         ),
       );
     }
 
-    Widget activeChip(String label, VoidCallback onTap) {
+    Widget activeChip(String label, int index) {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
+        onTap: () => onCategoryTap(index),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: _accent,
+            color: cs.primary,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: _accent, width: 1),
+            border: Border.all(color: cs.primary, width: 1),
             boxShadow: [
               BoxShadow(
-                color: _accent.withOpacity(0.4),
-                blurRadius: 20,
+                color: cs.primary.withOpacity(0.35),
+                blurRadius: 18,
                 offset: const Offset(0, 10),
               ),
             ],
           ),
-          child: const Text(
-            'placeholder', // replaced per-chip below via chip()
+          child: Text(
+            label,
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
               height: 1.2,
-              color: Colors.white,
+              color: cs.onPrimary,
             ),
           ),
         ),
       );
     }
 
-    Widget chip(int idx, String label) {
-      if (idx == activeIndex) {
-        return InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: () => onCategoryTap(idx),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: _accent,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: _accent, width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: _accent.withOpacity(0.4),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                height: 1.2,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        );
-      } else {
-        return inactiveChip(label, () => onCategoryTap(idx));
-      }
-    }
+    Widget chip(int idx, String label) =>
+        (idx == activeIndex) ? activeChip(label, idx) : inactiveChip(label, () => onCategoryTap(idx));
 
     Widget markAllReadPill() {
       final enabled = hasAlerts && !loading;
-
-      final borderColor =
-          enabled ? _accent.withOpacity(0.4) : _accent.withOpacity(0.15);
-      final textColor = enabled ? _accent : _accent.withOpacity(0.4);
+      final borderColor = cs.primary.withOpacity(enabled ? 0.45 : 0.20);
+      final textColor  = enabled ? cs.primary : cs.primary.withOpacity(0.45);
 
       return InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -680,19 +508,12 @@ class _AlertsToolbarRow extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.transparent,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              width: 1,
-              color: borderColor,
-            ),
+            border: Border.all(width: 1, color: borderColor),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.done_all_rounded,
-                size: 16,
-                color: textColor,
-              ),
+              Icon(Icons.done_all_rounded, size: 16, color: textColor),
               const SizedBox(width: 6),
               Text(
                 'Mark all read',
@@ -712,21 +533,16 @@ class _AlertsToolbarRow extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
+        color: theme.scaffoldBackgroundColor,
         border: Border(
-          bottom: BorderSide(
-            width: 1,
-            color: isDark
-                ? Colors.white.withOpacity(0.06)
-                : Colors.black.withOpacity(0.06),
-          ),
+          bottom: BorderSide(width: 1, color: outlineHairline(context)),
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // LEFT: chip row, horizontally scrollable if needed
+          // LEFT: chips
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -745,7 +561,7 @@ class _AlertsToolbarRow extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // RIGHT: "Mark all read" pill
+          // RIGHT: "Mark all read"
           markAllReadPill(),
         ],
       ),
@@ -753,7 +569,7 @@ class _AlertsToolbarRow extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── Empty state ───────────────────────── */
+/* ───────── Empty state ───────── */
 
 class _EmptyAlerts extends StatelessWidget {
   const _EmptyAlerts();
@@ -767,24 +583,13 @@ class _EmptyAlerts extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.notifications_none_rounded,
-              size: 48,
-              color: cs.onSurfaceVariant,
-            ),
+            Icon(Icons.notifications_none_rounded, size: 48, color: cs.onSurfaceVariant),
             const SizedBox(height: 12),
-            Text(
-              "You're all caught up",
-              style: Theme.of(context).textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
+            Text("You're all caught up", style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
             const SizedBox(height: 6),
             Text(
               'New trailers, clips, and drops will show here.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
           ],
@@ -794,7 +599,7 @@ class _EmptyAlerts extends StatelessWidget {
   }
 }
 
-/* ───────────────────────── Header CTA button + brand ───────────────────────── */
+/* ───────── Header CTA + brand ───────── */
 
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
@@ -807,18 +612,9 @@ class _HeaderIconButton extends StatelessWidget {
   final VoidCallback? onTap;
   final String tooltip;
 
-  static const _accent = Color(0xFFdc2626);
-
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final Color bg = isDark
-        ? const Color(0xFF0f172a).withOpacity(0.7)
-        : Colors.black.withOpacity(0.06);
-
-    // icon color now adapts using theme_colors.dart
-    final Color fg = primaryTextColor(context);
-
+    final cs = Theme.of(context).colorScheme;
     return Tooltip(
       message: tooltip,
       waitDuration: const Duration(milliseconds: 400),
@@ -829,18 +625,11 @@ class _HeaderIconButton extends StatelessWidget {
           width: 32,
           height: 32,
           decoration: BoxDecoration(
-            color: bg,
+            color: neutralPillBg(context),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: _accent.withOpacity(0.3),
-              width: 1,
-            ),
+            border: Border.all(color: outlineHairline(context), width: 1),
           ),
-          child: Icon(
-            icon,
-            size: 16,
-            color: fg,
-          ),
+          child: Icon(icon, size: 16, color: cs.onSurface),
         ),
       ),
     );
@@ -852,6 +641,7 @@ class _ModernBrandLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -859,25 +649,18 @@ class _ModernBrandLogo extends StatelessWidget {
           width: 28,
           height: 28,
           decoration: BoxDecoration(
-            color: const Color(0xFFdc2626),
+            color: cs.primary,
             borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFdc2626).withOpacity(0.4),
-                blurRadius: 20,
+                color: cs.primary.withOpacity(0.35),
+                blurRadius: 18,
                 offset: const Offset(0, 10),
               ),
             ],
           ),
-          child: const Center(
-            child: Text(
-              '🎬',
-              style: TextStyle(
-                fontSize: 16,
-                height: 1,
-                color: Colors.white,
-              ),
-            ),
+          child: Center(
+            child: Text('🎬', style: TextStyle(fontSize: 16, height: 1, color: cs.onPrimary)),
           ),
         ),
         const SizedBox(width: 8),
@@ -887,7 +670,7 @@ class _ModernBrandLogo extends StatelessWidget {
             fontSize: 18,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
-            color: primaryTextColor(context), // was hardcoded white
+            color: primaryTextColor(context),
           ),
         ),
       ],
