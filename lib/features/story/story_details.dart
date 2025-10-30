@@ -427,7 +427,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                         if (_hasVideo) {
                                           _openPlayerInHeader();
                                         } else {
-                                            _openExternalPrimary(context);
+                                          _openExternalPrimary(context);
                                         }
                                       }
                                     : null,
