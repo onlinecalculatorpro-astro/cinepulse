@@ -29,7 +29,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../theme/theme_colors.dart'; // accent + text + hairlines
+import '../theme/theme_colors.dart'; // accent + text + hairlines + bg tokens
 
 class AppDrawer extends StatefulWidget {
   const AppDrawer({
@@ -388,7 +388,7 @@ class _AppDrawerState extends State<AppDrawer> {
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
                       height: 1.1,
-                      color: Colors.white,
+                      color: cs.onPrimary, // no hard-coded white
                       letterSpacing: -0.5,
                     ),
                   ),
@@ -469,7 +469,8 @@ class _AppDrawerState extends State<AppDrawer> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF0f172a) : Theme.of(context).colorScheme.surface;
+    final cs = Theme.of(context).colorScheme;
+    final bgColor = isDark ? kDarkBgEnd : cs.surface; // no hard-coded hex
 
     return Drawer(
       backgroundColor: bgColor,
