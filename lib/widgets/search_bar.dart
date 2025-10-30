@@ -24,11 +24,15 @@ import 'package:flutter/material.dart';
 ///
 /// Lifecycle
 /// ---------
-/// - We own a FocusNode so we can:
+/// - Owns a FocusNode to:
 ///     • update the border color on focus
 ///     • close the keyboard on exit
-/// - We listen to [controller] and rebuild so we can react to text changes
-///   if you ever want to hide ✕ when empty. (Right now ✕ always shows.)
+/// - Listens to [controller] and rebuilds to keep UI in sync.
+///
+/// Extras
+/// ------
+/// - ESC closes/clears (desktop/web): if [onExitSearch] is set we call it,
+///   else we just clear & unfocus.
 class SearchBarInput extends StatefulWidget {
   const SearchBarInput({
     super.key,
@@ -41,9 +45,8 @@ class SearchBarInput extends StatefulWidget {
   final TextEditingController controller;
 
   /// Optional "close search mode" handler.
-  ///
-  /// If non-null, tapping ✕ will call this instead of just clearing [controller].
-  /// Each tab uses this to both hide the row and clear the text.
+  /// If non-null, tapping ✕ (or pressing ESC) will call this instead of
+  /// just clearing [controller].
   final VoidCallback? onExitSearch;
 
   /// Placeholder string.
@@ -69,8 +72,6 @@ class _SearchBarInputState extends State<SearchBarInput> {
   @override
   void didUpdateWidget(covariant SearchBarInput oldWidget) {
     super.didUpdateWidget(oldWidget);
-
-    // If the parent swapped controllers, detach from the old one and attach to the new one.
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_syncUI);
       widget.controller.addListener(_syncUI);
@@ -81,27 +82,20 @@ class _SearchBarInputState extends State<SearchBarInput> {
   void dispose() {
     _focusNode.removeListener(_syncUI);
     _focusNode.dispose();
-
     widget.controller.removeListener(_syncUI);
     super.dispose();
   }
 
   void _syncUI() {
-    if (mounted) {
-      setState(() {});
-    }
+    if (mounted) setState(() {});
   }
 
   void _handleClearOrExit() {
     if (widget.onExitSearch != null) {
-      // Tab-level handler: hide search row and reset state.
       widget.onExitSearch!.call();
     } else {
-      // Default fallback: just clear.
       widget.controller.clear();
     }
-
-    // Always drop keyboard focus.
     FocusScope.of(context).unfocus();
   }
 
@@ -123,88 +117,125 @@ class _SearchBarInputState extends State<SearchBarInput> {
         : theme.colorScheme.surface.withOpacity(0.6);
 
     final Color textColor = isDark ? Colors.white : Colors.black87;
-    final Color hintColor = isDark
-        ? Colors.white.withOpacity(0.6)
-        : Colors.black.withOpacity(0.5);
+    final Color hintColor =
+        isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.5);
 
-    return Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: outlineColor, width: 1),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.search_rounded,
-            size: 18,
-            color: _accent,
+    // Keybindings: ESC to clear/exit.
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          DismissIntent: CallbackAction<DismissIntent>(
+            onInvoke: (_) {
+              _handleClearOrExit();
+              return null;
+            },
           ),
-          const SizedBox(width: 8),
-
-          // Editable text
-          Expanded(
-            child: TextField(
-              controller: widget.controller,
-              focusNode: _focusNode,
-              textInputAction: TextInputAction.search,
-              cursorColor: _accent,
-              style: TextStyle(
-                fontSize: 14,
-                height: 1.3,
-                color: textColor,
-                fontWeight: FontWeight.w500,
-              ),
-              decoration: InputDecoration(
-                isCollapsed: true,
-                border: InputBorder.none,
-                hintText: widget.hintText,
-                hintStyle: TextStyle(
-                  fontSize: 14,
-                  height: 1.3,
-                  color: hintColor,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
+        },
+        child: Focus(
+          focusNode: _focusNode,
+          child: AnimatedContainer(
+            height: 40,
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: outlineColor, width: 1),
             ),
-          ),
-
-          const SizedBox(width: 8),
-
-          // ✕ button.
-          // We always render it so you can instantly bail out of search mode.
-          InkWell(
-            borderRadius: BorderRadius.circular(6),
-            onTap: _handleClearOrExit,
-            child: Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(
-                color: _accent.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: _accent.withOpacity(0.4),
-                  width: 1,
+            child: Row(
+              children: [
+                Icon(
+                  Icons.search_rounded,
+                  size: 18,
+                  color: _accent,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: _accent.withOpacity(0.4),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
+                const SizedBox(width: 8),
+
+                // Editable text
+                Expanded(
+                  child: TextField(
+                    controller: widget.controller,
+                    focusNode: _focusNode,
+                    textInputAction: TextInputAction.search,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    maxLines: 1,
+                    cursorColor: _accent,
+                    onTapOutside: (_) => FocusScope.of(context).unfocus(),
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.3,
+                      color: textColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    decoration: InputDecoration(
+                      isCollapsed: true,
+                      border: InputBorder.none,
+                      hintText: widget.hintText,
+                      hintStyle: TextStyle(
+                        fontSize: 14,
+                        height: 1.3,
+                        color: hintColor,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
                   ),
-                ],
-              ),
-              child: const Icon(
-                Icons.close_rounded,
-                size: 16,
-                color: _accent,
-              ),
+                ),
+
+                const SizedBox(width: 8),
+
+                // ✕ button — always visible for quick exit.
+                Tooltip(
+                  message: 'Clear',
+                  waitDuration: const Duration(milliseconds: 400),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: _handleClearOrExit,
+                    child: Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: _accent.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: _accent.withOpacity(0.4),
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: _accent.withOpacity(0.4),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: const Center(
+                        // NOTE: not "const Icon(..., color: _accent)" because _accent isn't const
+                        child: Icon(
+                          Icons.close_rounded,
+                          size: 16,
+                          // color set by parent Container overlay tint; leave default white/ink
+                          // If you prefer solid accent:
+                          // color: _accent,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
+}
+
+/// Intent used for ESC-to-dismiss behavior.
+class DismissIntent extends Intent {
+  const DismissIntent();
 }
