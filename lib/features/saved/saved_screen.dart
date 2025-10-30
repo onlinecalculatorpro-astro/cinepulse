@@ -6,8 +6,10 @@
 // WIDE (≥768px):    [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
 // COMPACT (<768px): [Search] [Refresh] [Menu]
 // Search toggles an inline bar INSIDE Saved (Row 3).
-// Row 2 = chips + actions; Row 2.5 = "N items"; Body = grid of StoryCard.
-// All visuals are theme-driven (no hard-coded colors).
+// Row 2 = shared AppToolbar (chips + sort pill; theme-safe colors)
+// Row 2b = Saved-only actions (Export / Clear)
+// Row 2.5 = "N items"
+// Body = grid of StoryCard.
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -15,13 +17,14 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
-import '../../core/cache.dart';          // SavedStore, SavedSort, FeedCache
+import '../../core/cache.dart';            // SavedStore, SavedSort, FeedCache
 import '../../core/models.dart';
-import '../../widgets/search_bar.dart';  // shared SearchBarInput
-import '../../theme/theme_colors.dart';  // primaryTextColor, neutralPillBg, outlineHairline
+import '../../theme/theme_colors.dart';    // primaryTextColor, neutralPillBg, outlineHairline
+import '../../widgets/app_toolbar.dart';   // ✅ shared toolbar row
+import '../../widgets/search_bar.dart';    // SearchBarInput
 import '../story/story_card.dart';
 
 class SavedScreen extends StatefulWidget {
@@ -91,11 +94,10 @@ class _SavedScreenState extends State<SavedScreen> {
       } else {
         await Clipboard.setData(ClipboardData(text: text));
       }
-      if (!mounted) return;
     } catch (_) {
       await Clipboard.setData(ClipboardData(text: text));
-      if (!mounted) return;
     }
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(kIsWeb ? 'Copied to clipboard' : 'Share sheet opened')),
     );
@@ -141,13 +143,74 @@ class _SavedScreenState extends State<SavedScreen> {
     );
   }
 
+  /* ─────────────── Sort sheet (Saved) ─────────────── */
+
+  Future<void> _showSortSheet(BuildContext context) async {
+    final cs = Theme.of(context).colorScheme;
+    final picked = await showModalBottomSheet<SavedSort>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: cs.surface,
+      builder: (ctx) {
+        Widget tile({
+          required SavedSort value,
+          required IconData icon,
+          required String title,
+          required String subtitle,
+        }) {
+          final selected = (_sort == value);
+          return ListTile(
+            leading: Icon(icon, color: selected ? cs.primary : cs.onSurface),
+            title: Text(
+              title,
+              style: TextStyle(
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                color: cs.onSurface,
+              ),
+            ),
+            subtitle: Text(
+              subtitle,
+              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+            ),
+            trailing: selected ? Icon(Icons.check_rounded, color: cs.primary) : null,
+            onTap: () => Navigator.pop(ctx, value),
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              tile(
+                value: SavedSort.recent,
+                icon: Icons.history,
+                title: 'Recently saved',
+                subtitle: 'Latest bookmarks first',
+              ),
+              tile(
+                value: SavedSort.title,
+                icon: Icons.sort_by_alpha,
+                title: 'Title (A–Z)',
+                subtitle: 'Alphabetical by title',
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (picked != null && picked != _sort) {
+      setState(() => _sort = picked);
+    }
+  }
+
   /* ─────────────── UI ─────────────── */
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
 
     final screenWidth = MediaQuery.of(context).size.width;
     final isWide = screenWidth >= 768;
@@ -156,7 +219,9 @@ class _SavedScreenState extends State<SavedScreen> {
       animation: SavedStore.instance,
       builder: (context, _) {
         if (!SavedStore.instance.isReady) {
-          return const Center(child: CircularProgressIndicator());
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
 
         // ordered + locally filtered
@@ -191,8 +256,8 @@ class _SavedScreenState extends State<SavedScreen> {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
-                        cs.surface.withOpacity(isDark ? 0.92 : 0.96),
-                        cs.surface.withOpacity(isDark ? 0.90 : 0.94),
+                        cs.surface.withOpacity(0.95),
+                        cs.surface.withOpacity(0.90),
                       ],
                     ),
                     border: Border(
@@ -205,11 +270,11 @@ class _SavedScreenState extends State<SavedScreen> {
                       const Spacer(),
 
                       if (isWide) ...[
-                        _HeaderIconButton(tooltip: 'Home',     icon: Icons.home_rounded,            onTap: widget.onOpenHome),
+                        _HeaderIconButton(tooltip: 'Home',   icon: Icons.home_rounded,          onTap: widget.onOpenHome),
                         const SizedBox(width: 8),
-                        _HeaderIconButton(tooltip: 'Search',   icon: Icons.search_rounded,          onTap: _toggleSearchRow),
+                        _HeaderIconButton(tooltip: 'Search', icon: Icons.search_rounded,        onTap: _toggleSearchRow),
                         const SizedBox(width: 8),
-                        _HeaderIconButton(tooltip: 'Alerts',   icon: Icons.notifications_rounded,   onTap: widget.onOpenAlerts),
+                        _HeaderIconButton(tooltip: 'Alerts', icon: Icons.notifications_rounded, onTap: widget.onOpenAlerts),
                         const SizedBox(width: 8),
                         _HeaderIconButton(
                           tooltip: 'Discover',
@@ -217,12 +282,10 @@ class _SavedScreenState extends State<SavedScreen> {
                           onTap: widget.onOpenDiscover,
                         ),
                         const SizedBox(width: 8),
-                        _HeaderIconButton(tooltip: 'Refresh',  icon: Icons.refresh_rounded,         onTap: _refreshSaved),
+                        _HeaderIconButton(tooltip: 'Refresh', icon: Icons.refresh_rounded, onTap: _refreshSaved),
                         const SizedBox(width: 8),
-                        _HeaderIconButton(tooltip: 'Menu',     icon: Icons.menu_rounded,            onTap: widget.onOpenMenu),
-                      ],
-
-                      if (!isWide) ...[
+                        _HeaderIconButton(tooltip: 'Menu',    icon: Icons.menu_rounded,    onTap: widget.onOpenMenu),
+                      ] else ...[
                         _HeaderIconButton(tooltip: 'Search',  icon: Icons.search_rounded,  onTap: _toggleSearchRow),
                         const SizedBox(width: 8),
                         _HeaderIconButton(tooltip: 'Refresh', icon: Icons.refresh_rounded, onTap: _refreshSaved),
@@ -240,14 +303,38 @@ class _SavedScreenState extends State<SavedScreen> {
           body: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Row 2: chips + actions
-              _SavedToolbarRow(
+              // Row 2: ✅ shared toolbar (chips + sort pill with neutral text)
+              AppToolbar(
+                tabs: const ['All', 'Entertainment', 'Sports'],
                 activeIndex: _activeCatIndex,
-                onCategoryTap: _setCategory,
-                currentSort: _sort,
-                onSortPicked: (v) => setState(() => _sort = v),
-                onExportTap: () => _export(context),
-                onClearAllTap: () => _clearAll(context),
+                onSelect: _setCategory,
+                // You can pass GlobalKeys if you want auto-scroll-to-active; optional:
+                chipKeys: List.generate(3, (_) => GlobalKey()),
+                sortLabel: (_sort == SavedSort.recent) ? 'Recent' : 'Title',
+                sortIcon: (_sort == SavedSort.recent) ? Icons.history : Icons.sort_by_alpha,
+                onSortTap: () => _showSortSheet(context),
+              ),
+
+              // Row 2b: Saved-only actions (right-aligned; same surface bg, no extra border)
+              Container(
+                color: cs.surface,
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+                child: Row(
+                  children: [
+                    const Spacer(),
+                    _HeaderIconButton(
+                      icon: Icons.ios_share,
+                      tooltip: 'Export saved',
+                      onTap: () => _export(context),
+                    ),
+                    const SizedBox(width: 8),
+                    _HeaderIconButton(
+                      icon: Icons.delete_outline,
+                      tooltip: 'Clear all',
+                      onTap: () => _clearAll(context),
+                    ),
+                  ],
+                ),
               ),
 
               // Row 2.5: count
@@ -294,7 +381,7 @@ class _SavedScreenState extends State<SavedScreen> {
                       return ListView(
                         padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [ _EmptySaved() ],
+                        children: const [_EmptySaved()],
                       );
                     }
 
@@ -317,193 +404,6 @@ class _SavedScreenState extends State<SavedScreen> {
           ),
         );
       },
-    );
-  }
-}
-
-/* ───────── Toolbar row (Row 2) ───────── */
-
-class _SavedToolbarRow extends StatelessWidget {
-  const _SavedToolbarRow({
-    required this.activeIndex,
-    required this.onCategoryTap,
-    required this.currentSort,
-    required this.onSortPicked,
-    required this.onExportTap,
-    required this.onClearAllTap,
-  });
-
-  final int activeIndex;
-  final ValueChanged<int> onCategoryTap;
-
-  final SavedSort currentSort;
-  final ValueChanged<SavedSort> onSortPicked;
-
-  final VoidCallback onExportTap;
-  final VoidCallback onClearAllTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    // Generic chip builders (theme-driven)
-    Widget inactiveChip(String label, VoidCallback onTap) {
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: cs.primary.withOpacity(0.45), width: 1),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              height: 1.2,
-              color: cs.primary,
-            ),
-          ),
-        ),
-      );
-    }
-
-    Widget activeChip(String label, int index) {
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => onCategoryTap(index),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: cs.primary,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: cs.primary, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: cs.primary.withOpacity(0.35),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
-              color: cs.onPrimary,
-            ),
-          ),
-        ),
-      );
-    }
-
-    Widget chip(int index, String label) =>
-        (activeIndex == index) ? activeChip(label, index) : inactiveChip(label, () => onCategoryTap(index));
-
-    // Sort pill popup (Recent/Title), theme-colored
-    Widget sortPill() {
-      final isRecent = (currentSort == SavedSort.recent);
-      final iconData = isRecent ? Icons.history : Icons.sort_by_alpha;
-      final label = isRecent ? 'Recent' : 'Title';
-
-      return PopupMenuButton<SavedSort>(
-        tooltip: 'Sort',
-        onSelected: onSortPicked,
-        itemBuilder: (_) => [
-          PopupMenuItem(
-            value: SavedSort.recent,
-            child: Row(children: const [Icon(Icons.history, size: 18), SizedBox(width: 8), Text('Recently saved')]),
-          ),
-          PopupMenuItem(
-            value: SavedSort.title,
-            child: Row(children: const [Icon(Icons.sort_by_alpha, size: 18), SizedBox(width: 8), Text('Title (A–Z)')]),
-          ),
-        ],
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: cs.primary.withOpacity(0.45), width: 1),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(iconData, size: 16, color: cs.primary),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  height: 1.2,
-                  color: cs.primary,
-                ),
-              ),
-              const SizedBox(width: 2),
-              Icon(Icons.arrow_drop_down_rounded, size: 18, color: cs.primary),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // Right-side square actions
-    Widget actionSquare({
-      required IconData icon,
-      required String tooltip,
-      required VoidCallback onTap,
-    }) {
-      return _HeaderIconButton(icon: icon, tooltip: tooltip, onTap: onTap);
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.scaffoldBackgroundColor,
-        border: Border(bottom: BorderSide(width: 1, color: outlineHairline(context))),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // left: chips (scroll on overflow)
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: [
-                  chip(0, 'All'),
-                  const SizedBox(width: 8),
-                  chip(1, 'Entertainment'),
-                  const SizedBox(width: 8),
-                  chip(2, 'Sports'),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(width: 12),
-
-          // right: sort / export / clear
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              sortPill(),
-              actionSquare(icon: Icons.ios_share,      tooltip: 'Export saved', onTap: onExportTap),
-              actionSquare(icon: Icons.delete_outline, tooltip: 'Clear all',     onTap: onClearAllTap),
-            ],
-          ),
-        ],
-      ),
     );
   }
 }
@@ -538,7 +438,7 @@ class _EmptySaved extends StatelessWidget {
   }
 }
 
-/* ───────── Shared header bits ───────── */
+/* ───────── Shared header bits (match Home) ───────── */
 
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
@@ -566,7 +466,7 @@ class _HeaderIconButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: neutralPillBg(context),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: outlineHairline(context), width: 1),
+            border: Border.all(color: cs.primary.withOpacity(0.30), width: 1),
           ),
           child: Icon(icon, size: 16, color: cs.onSurface),
         ),
