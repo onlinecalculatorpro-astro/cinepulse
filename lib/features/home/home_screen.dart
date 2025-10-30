@@ -79,7 +79,7 @@ import '../../core/api.dart'; // fetchFeed(), kApiBaseUrl
 import '../../core/cache.dart'; // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
 import '../../core/utils.dart'; // fadeRoute(), deepLinkForStoryId()
-import '../../theme/theme_colors.dart'; // primaryTextColor(), secondaryTextColor(), faintTextColor()
+import '../../theme/theme_colors.dart'; // brand + text helpers
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/search_bar.dart'; // SearchBarInput
@@ -458,9 +458,7 @@ class _HomeScreenState extends State<HomeScreen>
       backgroundColor: Theme.of(sheetContext).colorScheme.surface,
       builder: (ctx) {
         final theme = Theme.of(ctx);
-        final isDark = theme.brightness == Brightness.dark;
-        final onSurface = theme.colorScheme.onSurface;
-        final onSurfaceVar = theme.colorScheme.onSurfaceVariant;
+        final cs = theme.colorScheme;
 
         Widget option({
           required _SortMode mode,
@@ -469,9 +467,7 @@ class _HomeScreenState extends State<HomeScreen>
           required String subtitle,
         }) {
           final selected = (_sortMode == mode);
-          final iconColor = selected
-              ? const Color(0xFFdc2626)
-              : (isDark ? Colors.white : Colors.black87);
+          final iconColor = selected ? cs.primary : primaryTextColor(ctx);
 
           return ListTile(
             leading: Icon(icon, color: iconColor),
@@ -479,19 +475,18 @@ class _HomeScreenState extends State<HomeScreen>
               title,
               style: TextStyle(
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                color: onSurface,
+                color: primaryTextColor(ctx),
               ),
             ),
             subtitle: Text(
               subtitle,
               style: TextStyle(
                 fontSize: 13,
-                color: onSurfaceVar,
+                color: secondaryTextColor(ctx),
               ),
             ),
-            trailing: selected
-                ? const Icon(Icons.check_rounded, color: Color(0xFFdc2626))
-                : null,
+            trailing:
+                selected ? Icon(Icons.check_rounded, color: cs.primary) : null,
             onTap: () => Navigator.pop(ctx, mode),
           );
         }
@@ -606,9 +601,9 @@ class _HomeScreenState extends State<HomeScreen>
                           theme.colorScheme.surface.withOpacity(0.9),
                         ],
                 ),
-                border: const Border(
+                border: Border(
                   bottom: BorderSide(
-                    color: Color(0x0FFFFFFF), // ~6% white hairline
+                    color: outlineHairline(context),
                     width: 1,
                   ),
                 ),
@@ -773,17 +768,17 @@ class _FiltersRow extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final void Function(BuildContext ctx) onSortTap;
 
-  static const _accent = Color(0xFFdc2626);
-
   @override
   Widget build(BuildContext context) {
-    // To avoid the placeholder hack, just inline the content:
-    Widget _tabChip(int index, String label, Key itemKey) {
+    final cs = Theme.of(context).colorScheme;
+    final acc = cs.primary;
+
+    Widget tabChip(int index, String label, Key itemKey) {
       final selected = (activeIndex == index);
 
-      final bgColor = selected ? _accent : Colors.transparent;
-      final textColor = selected ? Colors.white : _accent;
-      final borderClr = selected ? _accent : _accent.withOpacity(0.4);
+      final bgColor = selected ? acc : Colors.transparent;
+      final textColor = selected ? Colors.white : acc;
+      final borderClr = selected ? acc : acc.withOpacity(0.35);
       final fontWeight = selected ? FontWeight.w600 : FontWeight.w500;
 
       return InkWell(
@@ -799,7 +794,7 @@ class _FiltersRow extends StatelessWidget {
             boxShadow: selected
                 ? [
                     BoxShadow(
-                      color: _accent.withOpacity(0.4),
+                      color: acc.withOpacity(0.35),
                       blurRadius: 20,
                       offset: const Offset(0, 10),
                     ),
@@ -819,7 +814,7 @@ class _FiltersRow extends StatelessWidget {
       );
     }
 
-    IconData _iconForSort(_SortMode mode) {
+    IconData iconForSort(_SortMode mode) {
       switch (mode) {
         case _SortMode.latest:
           return Icons.access_time_rounded;
@@ -832,7 +827,7 @@ class _FiltersRow extends StatelessWidget {
       }
     }
 
-    Widget _sortButton() {
+    Widget sortButton() {
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: () => onSortTap(context),
@@ -843,35 +838,35 @@ class _FiltersRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(999),
             border: Border.all(
               width: 1,
-              color: _accent.withOpacity(0.4),
+              color: acc.withOpacity(0.35),
             ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                _iconForSort(sortMode),
+                iconForSort(sortMode),
                 size: 16,
-                color: _accent,
+                color: acc,
               ),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
                   sortLabel,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     height: 1.2,
                     fontWeight: FontWeight.w500,
-                    color: _accent,
+                    color: acc,
                   ),
                 ),
               ),
               const SizedBox(width: 2),
-              const Icon(
+              Icon(
                 Icons.arrow_drop_down_rounded,
                 size: 18,
-                color: _accent,
+                color: acc,
               ),
             ],
           ),
@@ -885,9 +880,7 @@ class _FiltersRow extends StatelessWidget {
         border: Border(
           bottom: BorderSide(
             width: 1,
-            color: isDark
-                ? Colors.white.withOpacity(0.06)
-                : Colors.black.withOpacity(0.06),
+            color: outlineHairline(context),
           ),
         ),
       ),
@@ -902,18 +895,18 @@ class _FiltersRow extends StatelessWidget {
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  _tabChip(0, 'All', chipKeys[0]),
+                  tabChip(0, 'All', chipKeys[0]),
                   const SizedBox(width: 8),
-                  _tabChip(1, 'Entertainment', chipKeys[1]),
+                  tabChip(1, 'Entertainment', chipKeys[1]),
                   const SizedBox(width: 8),
-                  _tabChip(2, 'Sports', chipKeys[2]),
+                  tabChip(2, 'Sports', chipKeys[2]),
                 ],
               ),
             ),
           ),
           const SizedBox(width: 12),
           // Sort pill.
-          _sortButton(),
+          sortButton(),
         ],
       ),
     );
@@ -947,8 +940,6 @@ class _FeedList extends StatefulWidget {
 
 class _FeedListState extends State<_FeedList>
     with AutomaticKeepAliveClientMixin<_FeedList> {
-  static const _accent = Color(0xFFdc2626);
-
   @override
   bool get wantKeepAlive => true;
 
@@ -1045,13 +1036,15 @@ class _FeedListState extends State<_FeedList>
     }
   }
 
-  // Adds a red "saved" badge on top of the StoryCard if this story is saved.
+  // Adds a brand-colored "saved" badge on top of the StoryCard if saved.
   Widget _withSavedBadge({
     required Story story,
     required List<Story> allStories,
     required int index,
   }) {
     final isSaved = SavedStore.instance.isSaved(story.id);
+    final cs = Theme.of(context).colorScheme;
+    final acc = cs.primary;
 
     final card = StoryCard(
       story: story,
@@ -1071,15 +1064,15 @@ class _FeedListState extends State<_FeedList>
           child: Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: _accent,
+              color: acc,
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: _accent,
+                color: acc,
                 width: 1,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: _accent.withOpacity(0.4),
+                  color: acc.withOpacity(0.35),
                   blurRadius: 20,
                   offset: const Offset(0, 10),
                 ),
@@ -1364,19 +1357,11 @@ class _HeaderIconButton extends StatelessWidget {
   final VoidCallback? onTap;
   final String tooltip;
 
-  static const _accent = Color(0xFFdc2626);
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    final bg = isDark
-        ? const Color(0xFF0f172a).withOpacity(0.7)
-        : Colors.black.withOpacity(0.06);
-
-    final borderColor = _accent.withOpacity(0.3);
-    final iconColor = isDark ? Colors.white : Colors.black87;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    final acc = cs.primary;
 
     return Tooltip(
       message: tooltip,
@@ -1388,17 +1373,17 @@ class _HeaderIconButton extends StatelessWidget {
           width: 32,
           height: 32,
           decoration: BoxDecoration(
-            color: bg,
+            color: neutralPillBg(context),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: borderColor,
+              color: acc.withOpacity(0.30),
               width: 1,
             ),
           ),
           child: Icon(
             icon,
             size: 16,
-            color: iconColor,
+            color: isDark ? Colors.white : Colors.black87,
           ),
         ),
       ),
@@ -1407,15 +1392,16 @@ class _HeaderIconButton extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
- * Brand logo blob in header (red square with 🎬 + text "CinePulse")
+ * Brand logo blob in header (square with 🎬 + text "CinePulse")
  * ───────────────────────────────────────────────────────────────────────── */
 class _BrandLogo extends StatelessWidget {
   const _BrandLogo();
 
-  static const _accent = Color(0xFFdc2626);
-
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final acc = cs.primary;
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1423,11 +1409,11 @@ class _BrandLogo extends StatelessWidget {
           width: 28,
           height: 28,
           decoration: BoxDecoration(
-            color: _accent,
+            color: acc,
             borderRadius: BorderRadius.circular(8),
             boxShadow: [
               BoxShadow(
-                color: _accent.withOpacity(0.4),
+                color: acc.withOpacity(0.35),
                 blurRadius: 20,
                 offset: const Offset(0, 10),
               ),
