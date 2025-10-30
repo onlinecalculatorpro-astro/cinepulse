@@ -1,6 +1,6 @@
 // lib/widgets/search_bar.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show LogicalKeyboardKey, LogicalKeySet; // for ESC key
+import 'package:flutter/services.dart' show LogicalKeyboardKey, LogicalKeySet; // ESC key + keyset
 
 /// CinePulse inline search field.
 ///
@@ -43,15 +43,8 @@ class SearchBarInput extends StatefulWidget {
     this.hintText = 'Search…',
   });
 
-  /// Parent-owned text controller.
   final TextEditingController controller;
-
-  /// Optional "close search mode" handler.
-  /// If non-null, tapping ✕ (or pressing ESC) will call this instead of
-  /// just clearing [controller].
   final VoidCallback? onExitSearch;
-
-  /// Placeholder string.
   final String hintText;
 
   @override
@@ -109,22 +102,18 @@ class _SearchBarInputState extends State<SearchBarInput> {
     // Outline color = accent when focused, subtle hairline otherwise.
     final Color outlineColor = _focusNode.hasFocus
         ? _accent
-        : (isDark
-            ? Colors.white.withOpacity(0.15)
-            : Colors.black.withOpacity(0.2));
+        : (isDark ? Colors.white.withOpacity(0.15) : Colors.black.withOpacity(0.2));
 
     // Background matches the pill buttons in headers / bottom nav.
-    final Color bgColor = isDark
-        ? const Color(0xFF0f172a).withOpacity(0.7)
-        : theme.colorScheme.surface.withOpacity(0.6);
+    final Color bgColor =
+        isDark ? const Color(0xFF0f172a).withOpacity(0.7) : theme.colorScheme.surface.withOpacity(0.6);
 
     final Color textColor = isDark ? Colors.white : Colors.black87;
-    final Color hintColor =
-        isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.5);
+    final Color hintColor = isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.5);
 
-    // Keybindings: ESC to clear/exit (use LogicalKeySet so the map can be const).
+    // Keybindings: ESC to clear/exit (use const LogicalKeySet & const Intent in a const map).
     return Shortcuts(
-      shortcuts: const <LogicalKeySet, Intent>{
+      shortcuts: const <ShortcutActivator, Intent>{
         LogicalKeySet(LogicalKeyboardKey.escape): DismissIntent(),
       },
       child: Actions(
@@ -203,10 +192,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                       decoration: BoxDecoration(
                         color: _accent.withOpacity(0.12),
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: _accent.withOpacity(0.4),
-                          width: 1,
-                        ),
+                        border: Border.all(color: _accent.withOpacity(0.4), width: 1),
                         boxShadow: [
                           BoxShadow(
                             color: _accent.withOpacity(0.4),
