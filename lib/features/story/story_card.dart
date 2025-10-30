@@ -824,44 +824,12 @@ class _ActionIconBox extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(6),
           onTap: onTap,
-          child: const SizedBox(
+          child: SizedBox(
             width: 36,
             height: 36,
-            child: Center(child: null), // icon added below via LayoutBuilder
+            child: Center(child: icon),
           ),
         ),
-      ),
-    ).buildWithIcon(icon);
-  }
-}
-
-// Small helper to keep the API of _ActionIconBox untouched
-extension on Tooltip {
-  Widget buildWithIcon(Widget icon) {
-    return Tooltip(
-      message: message ?? '',
-      waitDuration: waitDuration,
-      child: Builder(
-        builder: (context) {
-          return Material(
-            color: neutralPillBg(context),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(6),
-              side: BorderSide(color: outlineHairline(context), width: 1),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: (this.child as Material).child is SizedBox
-                  ? (this.child as Material).onTap
-                  : null,
-              child: SizedBox(
-                width: 36,
-                height: 36,
-                child: Center(child: icon),
-              ),
-            ),
-          );
-        },
       ),
     );
   }
