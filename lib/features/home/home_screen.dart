@@ -1,13 +1,11 @@
 // lib/features/home/home_screen.dart
 //
 // HomeScreen = main "Home" tab.
-// Updates in this rewrite:
-//  • Search row opens/closes smoothly (AnimatedSize) and autofocuses
-//  • Uses shared SearchBarInput with `[🔍][text][✕]`
-//  • Grid only rebuilds on search text changes via ValueListenableBuilder
-//  • Minor perf polish for realtime/refresh checks
-//  • Inline search row is locally themed (no red) on mobile & desktop
-//  • Flutter 3.35: AnimatedSize no longer uses `vsync`
+// Key changes in this rewrite:
+//  • Category toolbar is dynamic → "All + selected categories" from CategoryPrefs
+//  • Removed TabController/TabBarView; we render the single active category feed
+//  • Keeps realtime WS, search, sort, offline banner, skeletons, saved badge
+//  • AnimatedSize works on Flutter 3.35 (no vsync)
 
 import 'dart:async';
 import 'dart:convert';
@@ -19,14 +17,15 @@ import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
-import '../../core/api.dart';            // fetchFeed(), kApiBaseUrl
-import '../../core/cache.dart';          // FeedDiskCache, FeedCache, SavedStore
+import '../../core/api.dart';             // fetchFeed(), kApiBaseUrl
+import '../../core/cache.dart';           // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
-import '../../theme/theme_colors.dart';  // brand + text helpers
-import '../../widgets/app_toolbar.dart'; // shared toolbar row
+import '../../core/category_prefs.dart';  // CategoryPrefs, CategoryRegistry
+import '../../theme/theme_colors.dart';   // brand + text helpers
+import '../../widgets/app_toolbar.dart';  // shared toolbar row
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
-import '../../widgets/search_bar.dart';  // SearchBarInput
+import '../../widgets/search_bar.dart';   // SearchBarInput
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
 
@@ -61,33 +60,20 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
-  // Tabs for this feed layer.
-  static const Map<String, String> _tabs = {
-    'all': 'All',
-    'entertainment': 'Entertainment',
-    'sports': 'Sports',
-  };
-
+    with WidgetsBindingObserver {
   // refresh + realtime timing
   static const Duration _kAutoRefreshEvery = Duration(minutes: 2);
   static const Duration _kRealtimeDebounce = Duration(milliseconds: 500);
 
-  // controller for tabs ("All" / "Entertainment" / "Sports")
-  late final TabController _tab =
-      TabController(length: _tabs.length, vsync: this);
+  // category toolbar state
+  int _activeCatIndex = 0;
+  final List<GlobalKey> _chipKeys = [];
 
   // inline search text controller (Row 3)
   final TextEditingController _search = TextEditingController();
 
-  // feed state per tab key
-  final Map<String, _PagedFeed> _feeds = {
-    for (final k in _tabs.keys) k: _PagedFeed(tab: k),
-  };
-
-  // we keep keys so we can scroll selected chip into view
-  final List<GlobalKey> _chipKeys =
-      List.generate(_tabs.length, (_) => GlobalKey());
+  // feed state per category key (e.g. 'all','entertainment','sports',...)
+  final Map<String, _PagedFeed> _feeds = {};
 
   // network / lifecycle state
   bool _offline = false;
@@ -110,8 +96,30 @@ class _HomeScreenState extends State<HomeScreen>
   Timer? _realtimeDebounceTimer;
   int _wsBackoffSecs = 2;
 
-  String get _currentTabKey => _tabs.keys.elementAt(_tab.index);
-  _PagedFeed get _currentFeed => _feeds[_currentTabKey]!;
+  /* ──────────────────────────────────────────────────────────────────────
+   * Derived helpers for categories
+   * ────────────────────────────────────────────────────────────────────── */
+  List<String> get _catKeys {
+    // Always show "all", then user-selected in registry order.
+    final selected = CategoryPrefs.instance.selected; // Set<String>
+    final ordered = CategoryRegistry.ordered;         // List<CategoryDef> (assumed)
+    final rest = ordered
+        .map((d) => d.key)
+        .where((k) => k != 'all' && selected.contains(k))
+        .toList();
+    return ['all', ...rest];
+  }
+
+  List<String> get _catLabels =>
+      _catKeys.map((k) => CategoryRegistry.labelOf(k)).toList();
+
+  String get _currentCatKey =>
+      (_activeCatIndex >= 0 && _activeCatIndex < _catKeys.length)
+          ? _catKeys[_activeCatIndex]
+          : 'all';
+
+  _PagedFeed get _currentFeed =>
+      _feeds[_currentCatKey] ??= _PagedFeed(tab: _currentCatKey);
 
   /* ──────────────────────────────────────────────────────────────────────
    * init / dispose / lifecycle
@@ -120,13 +128,13 @@ class _HomeScreenState extends State<HomeScreen>
   void initState() {
     super.initState();
 
-    // Preload all tab feeds (cached data appears instantly if available).
-    for (final f in _feeds.values) {
-      unawaited(f.load(reset: true));
-    }
-
-    _tab.addListener(_onTabChanged);
     WidgetsBinding.instance.addObserver(this);
+
+    // Sync feeds with current prefs and preload from disk cache.
+    _syncFeedsWithCategoryPrefs(preload: true);
+
+    // React to category changes from drawer picker.
+    CategoryPrefs.instance.addListener(_onCatsChanged);
 
     // Connectivity watcher.
     _connSub = Connectivity().onConnectivityChanged.listen((event) {
@@ -145,7 +153,6 @@ class _HomeScreenState extends State<HomeScreen>
         _teardownWebSocket();
       }
 
-      // When we come back online, reset WS backoff.
       if (hasNetwork && wasOffline) {
         _wsBackoffSecs = 2;
       }
@@ -182,10 +189,8 @@ class _HomeScreenState extends State<HomeScreen>
     _connSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
 
+    CategoryPrefs.instance.removeListener(_onCatsChanged);
     _search.dispose();
-
-    _tab.removeListener(_onTabChanged);
-    _tab.dispose();
 
     for (final f in _feeds.values) {
       f.dispose();
@@ -204,6 +209,46 @@ class _HomeScreenState extends State<HomeScreen>
     } else if (!_isForeground) {
       _teardownWebSocket();
     }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+   * Category sync & interactions
+   * ────────────────────────────────────────────────────────────────────── */
+  void _onCatsChanged() {
+    if (!mounted) return;
+    setState(() {
+      final prevKey = _currentCatKey;
+      _syncFeedsWithCategoryPrefs(preload: false);
+      // Keep selection on same key if still present; else reset to 0 ("all")
+      final idx = _catKeys.indexOf(prevKey);
+      _activeCatIndex = (idx >= 0) ? idx : 0;
+    });
+  }
+
+  void _syncFeedsWithCategoryPrefs({required bool preload}) {
+    // Ensure feed models exist for current keys.
+    for (final key in _catKeys) {
+      _feeds.putIfAbsent(key, () => _PagedFeed(tab: key));
+    }
+    // Ensure chip keys match label count.
+    _chipKeys
+      ..clear()
+      ..addAll(List.generate(_catLabels.length, (_) => GlobalKey()));
+
+    // Optionally warm from disk cache.
+    if (preload) {
+      for (final k in _catKeys) {
+        unawaited(_feeds[k]!.load(reset: true));
+      }
+    }
+  }
+
+  void _onChipSelect(int i) {
+    if (i < 0 || i >= _catKeys.length) return;
+    setState(() => _activeCatIndex = i);
+    _ensureChipVisible(i);
+    // Pull fresh (non-reset) so cache stays while network comes in.
+    unawaited(_currentFeed.load(reset: false));
   }
 
   /* ──────────────────────────────────────────────────────────────────────
@@ -300,13 +345,13 @@ class _HomeScreenState extends State<HomeScreen>
     return true;
   }
 
-  void _ensureChipVisible(int tabIndex) {
+  void _ensureChipVisible(int index) {
     if (!mounted) return;
-    if (tabIndex < 0 || tabIndex >= _chipKeys.length) return;
+    if (index < 0 || index >= _chipKeys.length) return;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final ctx = _chipKeys[tabIndex].currentContext;
+      final ctx = _chipKeys[index].currentContext;
       if (ctx == null) return;
       Scrollable.ensureVisible(
         ctx,
@@ -318,23 +363,9 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  void _onTabChanged() {
-    if (!mounted) return;
-    setState(() {}); // update AppToolbar active chip
-    _ensureChipVisible(_tab.index);
-  }
-
   Future<void> _refreshManually() async {
-    final key = _currentTabKey;
-    await _feeds[key]!.load(reset: true);
+    await _currentFeed.load(reset: true);
     widget.onHeaderRefresh?.call();
-  }
-
-  void _onTabTap(int i) {
-    if (i < 0 || i >= _tab.length) return;
-    _tab.animateTo(i);
-    unawaited(_feeds[_tabs.keys.elementAt(i)]!.load(reset: false));
-    _ensureChipVisible(i);
   }
 
   void _tickAutoRefresh() {
@@ -600,9 +631,9 @@ class _HomeScreenState extends State<HomeScreen>
 
           // Row 2: shared AppToolbar (chips + sort pill)
           AppToolbar(
-            tabs: _tabs.values.toList(growable: false),
-            activeIndex: _tab.index,
-            onSelect: _onTabTap,
+            tabs: _catLabels,                 // e.g. ["All","Entertainment","Sports"]
+            activeIndex: _activeCatIndex,
+            onSelect: _onChipSelect,
             chipKeys: _chipKeys,
             sortLabel: _sortModeLabel(_sortMode),
             sortIcon: _iconForSort(_sortMode),
@@ -611,7 +642,6 @@ class _HomeScreenState extends State<HomeScreen>
 
           // Row 3: inline search bar (smooth show/hide + autofocus)
           AnimatedSize(
-            // NOTE: Flutter 3.35 — no `vsync` param
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
             alignment: Alignment.topCenter,
@@ -667,24 +697,18 @@ class _HomeScreenState extends State<HomeScreen>
                 : const SizedBox.shrink(),
           ),
 
-          // Feed content (TabBarView)
+          // Feed content for CURRENT category
           Expanded(
-            // Rebuild only the grid area when search text changes.
             child: ValueListenableBuilder<TextEditingValue>(
               valueListenable: _search,
               builder: (context, _, __) {
-                return TabBarView(
-                  controller: _tab,
-                  children: _tabs.keys.map((tabKey) {
-                    final feed = _feeds[tabKey]!;
-                    return _FeedList(
-                      key: PageStorageKey('feed-$tabKey'),
-                      feed: feed,
-                      searchText: _search,
-                      offline: _offline,
-                      sortMode: _sortMode,
-                    );
-                  }).toList(),
+                final feed = _currentFeed;
+                return _FeedList(
+                  key: PageStorageKey('feed-${_currentCatKey}'),
+                  feed: feed,
+                  searchText: _search,
+                  offline: _offline,
+                  sortMode: _sortMode,
                 );
               },
             ),
@@ -696,7 +720,7 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
- * Feed list / grid per tab
+ * Feed list / grid for one category
  * ───────────────────────────────────────────────────────────────────────── */
 class _FeedList extends StatefulWidget {
   const _FeedList({
