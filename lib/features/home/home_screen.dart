@@ -89,12 +89,7 @@ import '../story/story_card.dart';
 /* ──────────────────────────────────────────────────────────────────────────
  * Sort mode enum
  * ───────────────────────────────────────────────────────────────────────── */
-enum _SortMode {
-  latest,
-  trending,
-  views,
-  editorsPick,
-}
+enum _SortMode { latest, trending, views, editorsPick }
 
 /* ──────────────────────────────────────────────────────────────────────────
  * HomeScreen widget
@@ -110,17 +105,9 @@ class HomeScreen extends StatefulWidget {
     this.onOpenAlerts,
   });
 
-  /// Legacy prop from when search was "owned" by RootShell.
-  /// We keep it to avoid breaking the call site.
   final bool showSearchBar;
-
-  /// Opens the global right-side drawer ("Menu").
   final VoidCallback? onMenuPressed;
-
-  /// Callback after a manual refresh succeeds.
   final VoidCallback? onHeaderRefresh;
-
-  /// Wide-layout navigation callbacks that jump to other RootShell tabs.
   final VoidCallback? onOpenDiscover;
   final VoidCallback? onOpenSaved;
   final VoidCallback? onOpenAlerts;
@@ -275,11 +262,9 @@ class _HomeScreenState extends State<HomeScreen>
     _isForeground = (state == AppLifecycleState.resumed);
 
     if (_isForeground && mounted && !_offline) {
-      // We just came back to foreground and we're online:
       unawaited(_currentFeed.load(reset: false));
       _ensureWebSocket();
     } else if (!_isForeground) {
-      // We're backgrounding:
       _teardownWebSocket();
     }
   }
@@ -307,7 +292,7 @@ class _HomeScreenState extends State<HomeScreen>
   void _ensureWebSocket() {
     if (!mounted) return;
     if (_offline || !_isForeground) return;
-    if (_ws != null) return; // already connected
+    if (_ws != null) return;
 
     final url = _buildWsUrl();
 
@@ -315,13 +300,9 @@ class _HomeScreenState extends State<HomeScreen>
       _ws = WebSocketChannel.connect(Uri.parse(url));
       _wsSub = _ws!.stream.listen(
         (data) {
-          // Any "content updated" ping should trigger a debounced refresh.
           try {
             final obj = json.decode(data.toString());
-            if (obj is Map && obj['type'] == 'ping') {
-              // ignore keep-alive pings
-              return;
-            }
+            if (obj is Map && obj['type'] == 'ping') return; // keep-alive
           } catch (_) {}
           _scheduleRealtimeRefresh();
         },
@@ -343,7 +324,6 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (_offline || !_isForeground) return;
 
-    // Try to reconnect with exponential backoff.
     _wsReconnectTimer?.cancel();
     _wsReconnectTimer =
         Timer(Duration(seconds: _wsBackoffSecs), _ensureWebSocket);
@@ -396,7 +376,6 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     if (tabIndex < 0 || tabIndex >= _chipKeys.length) return;
 
-    // We wait one frame so layout is finalized.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = _chipKeys[tabIndex].currentContext;
@@ -538,8 +517,6 @@ class _HomeScreenState extends State<HomeScreen>
   void _toggleHeaderSearch() {
     setState(() {
       _showHeaderSearch = !_showHeaderSearch;
-
-      // If hiding the row, also clear the text and dismiss keyboard.
       if (!_showHeaderSearch) {
         _search.clear();
         FocusScope.of(context).unfocus();
@@ -565,8 +542,11 @@ class _HomeScreenState extends State<HomeScreen>
 
   Widget _buildScaffold(BuildContext context) {
     final theme = Theme.of(context);
+    final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final bgColor = isDark ? kDarkBgEnd : theme.colorScheme.surface;
+
+    // ✅ Use themed background, not hard-coded navy
+    final bgColor = theme.scaffoldBackgroundColor;
 
     // Responsive breakpoint
     final screenWidth = MediaQuery.of(context).size.width;
@@ -588,18 +568,14 @@ class _HomeScreenState extends State<HomeScreen>
               height: 64,
               padding: const EdgeInsets.symmetric(horizontal: 16),
               decoration: BoxDecoration(
+                // ✅ AppBar tint uses cs.surface for both modes
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: isDark
-                      ? [
-                          kCardTop.withOpacity(0.90),
-                          kDarkBgEnd.withOpacity(0.95),
-                        ]
-                      : [
-                          theme.colorScheme.surface.withOpacity(0.95),
-                          theme.colorScheme.surface.withOpacity(0.90),
-                        ],
+                  colors: [
+                    cs.surface.withOpacity(0.95),
+                    cs.surface.withOpacity(0.90),
+                  ],
                 ),
                 border: Border(
                   bottom: BorderSide(
@@ -695,7 +671,7 @@ class _HomeScreenState extends State<HomeScreen>
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
-            sortMode: _SortMode.latest == _sortMode ? _SortMode.latest : _sortMode,
+            sortMode: _sortMode, // ✅ remove redundant expression
             isDark: isDark,
             theme: theme,
             chipKeys: _chipKeys,
@@ -710,7 +686,6 @@ class _HomeScreenState extends State<HomeScreen>
               child: SearchBarInput(
                 controller: _search,
                 onExitSearch: () {
-                  // Called when the little "X" is tapped.
                   setState(() {
                     _search.clear();
                     FocusScope.of(context).unfocus();
@@ -844,11 +819,7 @@ class _FiltersRow extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                iconForSort(sortMode),
-                size: 16,
-                color: acc,
-              ),
+              Icon(iconForSort(sortMode), size: 16, color: acc),
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
@@ -863,11 +834,7 @@ class _FiltersRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 2),
-              Icon(
-                Icons.arrow_drop_down_rounded,
-                size: 18,
-                color: acc,
-              ),
+              Icon(Icons.arrow_drop_down_rounded, size: 18, color: acc),
             ],
           ),
         ),
@@ -876,12 +843,10 @@ class _FiltersRow extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? kDarkBgEnd : theme.colorScheme.surface,
+        // ✅ Filters row uses cs.surface across themes
+        color: Theme.of(context).colorScheme.surface,
         border: Border(
-          bottom: BorderSide(
-            width: 1,
-            color: outlineHairline(context),
-          ),
+          bottom: BorderSide(width: 1, color: outlineHairline(context)),
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -915,10 +880,6 @@ class _FiltersRow extends StatelessWidget {
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Feed list / grid per tab
- *   - Shows SkeletonCard grid while first load
- *   - Shows ErrorView if we got an error and have no data
- *   - Shows cards grid with client-side sort + search
- *   - Handles "saved" badge overlay in the corner of saved stories
  * ───────────────────────────────────────────────────────────────────────── */
 class _FeedList extends StatefulWidget {
   const _FeedList({
@@ -1016,19 +977,14 @@ class _FeedListState extends State<_FeedList>
   List<Story> _applySortMode(List<Story> input) {
     switch (widget.sortMode) {
       case _SortMode.latest:
-        // Already newest-first from _PagedFeed
-        return input;
+        return input; // newest-first already
       case _SortMode.trending:
         final list = [...input];
-        list.sort(
-          (a, b) => _trendingScore(b).compareTo(_trendingScore(a)),
-        );
+        list.sort((a, b) => _trendingScore(b).compareTo(_trendingScore(a)));
         return list;
       case _SortMode.views:
         final list = [...input];
-        list.sort(
-          (a, b) => _viewsCount(b).compareTo(_viewsCount(a)),
-        );
+        list.sort((a, b) => _viewsCount(b).compareTo(_viewsCount(a)));
         return list;
       case _SortMode.editorsPick:
         final picks = input.where(_isEditorsPick).toList();
@@ -1066,10 +1022,7 @@ class _FeedListState extends State<_FeedList>
             decoration: BoxDecoration(
               color: acc,
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: acc,
-                width: 1,
-              ),
+              border: Border.all(color: acc, width: 1),
               boxShadow: [
                 BoxShadow(
                   color: acc.withOpacity(0.35),
@@ -1078,11 +1031,7 @@ class _FeedListState extends State<_FeedList>
                 ),
               ],
             ),
-            child: Icon(
-              Icons.bookmark_rounded,
-              size: 14,
-              color: cs.onPrimary,
-            ),
+            child: Icon(Icons.bookmark_rounded, size: 14, color: cs.onPrimary),
           ),
         ),
       ],
@@ -1116,12 +1065,8 @@ class _FeedListState extends State<_FeedList>
                 // 1. Initial load → skeleton grid
                 if (feed.isInitialLoading) {
                   return GridView.builder(
-                    padding: EdgeInsets.fromLTRB(
-                      hPad,
-                      topPad,
-                      hPad,
-                      bottomPad,
-                    ),
+                    padding:
+                        EdgeInsets.fromLTRB(hPad, topPad, hPad, bottomPad),
                     physics: const AlwaysScrollableScrollPhysics(),
                     cacheExtent: 1800,
                     gridDelegate: gridDelegate,
@@ -1133,17 +1078,12 @@ class _FeedListState extends State<_FeedList>
                 // 2. Hard failure w/ no cached data
                 if (feed.hasError && feed.items.isEmpty) {
                   return ListView(
-                    padding: EdgeInsets.fromLTRB(
-                      hPad,
-                      24,
-                      hPad,
-                      bottomPad,
-                    ),
+                    padding:
+                        EdgeInsets.fromLTRB(hPad, 24, hPad, bottomPad),
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
                       ErrorView(
-                        message:
-                            feed.errorMessage ?? 'Something went wrong.',
+                        message: feed.errorMessage ?? 'Something went wrong.',
                         onRetry: () => feed.load(reset: true),
                       ),
                     ],
@@ -1168,27 +1108,16 @@ class _FeedListState extends State<_FeedList>
                       ? "You're offline and no results match your search."
                       : 'No matching items.';
                   return ListView(
-                    padding: EdgeInsets.fromLTRB(
-                      hPad,
-                      24,
-                      hPad,
-                      bottomPad,
-                    ),
+                    padding:
+                        EdgeInsets.fromLTRB(hPad, 24, hPad, bottomPad),
                     physics: const AlwaysScrollableScrollPhysics(),
-                    children: [
-                      Center(child: Text(msg)),
-                    ],
+                    children: [Center(child: Text(msg))],
                   );
                 }
 
                 // 4. Normal grid (no "Load more" button in this revision)
                 return GridView.builder(
-                  padding: EdgeInsets.fromLTRB(
-                    hPad,
-                    topPad,
-                    hPad,
-                    bottomPad,
-                  ),
+                  padding: EdgeInsets.fromLTRB(hPad, topPad, hPad, bottomPad),
                   physics: const AlwaysScrollableScrollPhysics(),
                   cacheExtent: 2000,
                   gridDelegate: gridDelegate,
@@ -1212,12 +1141,7 @@ class _FeedListState extends State<_FeedList>
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
- * Paged feed model:
- *  - Holds items for a given tab (e.g. "all", "entertainment", "sports")
- *  - Knows if it's loading / error
- *  - Loads cached data first (FeedDiskCache), then fetches fresh
- *  - Tracks a "since" cursor for incremental updates
- *  - Keeps newest items first
+ * Paged feed model
  * ───────────────────────────────────────────────────────────────────────── */
 class _PagedFeed extends ChangeNotifier {
   _PagedFeed({required this.tab});
@@ -1239,8 +1163,7 @@ class _PagedFeed extends ChangeNotifier {
   bool get canLoadMore => _canLoadMore;
 
   // "Effective timestamp" (normalizedAt > publishedAt > releaseDate)
-  DateTime? _eff(Story s) =>
-      s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
+  DateTime? _eff(Story s) => s.normalizedAt ?? s.publishedAt ?? s.releaseDate;
 
   DateTime? _sinceCursor;
 
@@ -1266,17 +1189,12 @@ class _PagedFeed extends ChangeNotifier {
         _initialLoading = false;
         notifyListeners();
       } else {
-        // Still notify so UI flips to skeleton state.
         notifyListeners();
       }
     }
 
     try {
-      final fresh = await fetchFeed(
-        tab: tab,
-        since: _sinceCursor,
-        limit: 40,
-      );
+      final fresh = await fetchFeed(tab: tab, since: _sinceCursor, limit: 40);
 
       // Merge by ID.
       final byId = {for (final s in _items) s.id: s};
@@ -1285,19 +1203,14 @@ class _PagedFeed extends ChangeNotifier {
         FeedCache.put(s);
       }
 
-      _items
-        ..clear()
-        ..addAll(byId.values);
-
+      _items..clear()..addAll(byId.values);
       _sortNewestFirst(_items);
 
       // Update cursor to newest timestamp in list.
       final allDates = _items.map(_eff).whereType<DateTime>();
       _sinceCursor = allDates.isEmpty
           ? null
-          : allDates.reduce(
-              (a, b) => a.isAfter(b) ? a : b,
-            );
+          : allDates.reduce((a, b) => a.isAfter(b) ? a : b);
 
       _hasError = false;
       _errorMessage = null;
@@ -1326,17 +1239,11 @@ class _PagedFeed extends ChangeNotifier {
     list.sort((a, b) {
       final da = _eff(a);
       final db = _eff(b);
-
-      // Fall back to ID sort (desc) if timestamps tie / missing.
-      if (da == null && db == null) {
-        return b.id.compareTo(a.id);
-      }
+      if (da == null && db == null) return b.id.compareTo(a.id);
       if (da == null) return 1;
       if (db == null) return -1;
-
       final cmp = db.compareTo(da); // newer first
       if (cmp != 0) return cmp;
-
       return b.id.compareTo(a.id);
     });
   }
@@ -1344,7 +1251,6 @@ class _PagedFeed extends ChangeNotifier {
 
 /* ──────────────────────────────────────────────────────────────────────────
  * HeaderIconButton
- * Square-ish pill buttons in the header bar ("Search", "Menu", etc.)
  * ───────────────────────────────────────────────────────────────────────── */
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
@@ -1373,10 +1279,7 @@ class _HeaderIconButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: neutralPillBg(context),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: cs.primary.withOpacity(0.30),
-              width: 1,
-            ),
+            border: Border.all(color: cs.primary.withOpacity(0.30), width: 1),
           ),
           child: Icon(
             icon,
@@ -1390,7 +1293,7 @@ class _HeaderIconButton extends StatelessWidget {
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
- * Brand logo blob in header (square with 🎬 + text "CinePulse")
+ * Brand logo blob in header
  * ───────────────────────────────────────────────────────────────────────── */
 class _BrandLogo extends StatelessWidget {
   const _BrandLogo();
@@ -1420,11 +1323,7 @@ class _BrandLogo extends StatelessWidget {
           child: Center(
             child: Text(
               '🎬',
-              style: TextStyle(
-                fontSize: 16,
-                height: 1,
-                color: cs.onPrimary,
-              ),
+              style: TextStyle(fontSize: 16, height: 1, color: cs.onPrimary),
             ),
           ),
         ),
