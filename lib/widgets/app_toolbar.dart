@@ -2,12 +2,9 @@
 //
 // Reusable second-row toolbar used under page headers.
 //
-// Supports the four main screens:
-//
-// • Home / Discover → chips + Sort pill
-// • Saved           → chips + Sort pill + action squares (Export, Clear)
-// • Alerts          → chips + action squares (e.g., Mark all read)
-//                     (simply omit sort* params and pass actions)
+// Left  : horizontally scrollable category chips
+// Right : Sort pill (optional) + compact square actions (optional)
+// Notes : The trailing area is a single Row so actions stay on the SAME line.
 //
 // API
 // ---
@@ -16,22 +13,15 @@
 //   activeIndex: _tab.index,
 //   onSelect: _onTabTap,
 //   chipKeys: _chipKeys,                    // optional
-//   // Option A: standard Sort pill
-//   sortLabel: _sortModeLabel(_sortMode),   // optional
+//   sortLabel: _sortModeLabel(_sortMode),   // optional (omit to hide)
 //   sortIcon:  _iconForSort(_sortMode),
 //   onSortTap: () => _showSortSheet(context),
-//
-//   // Option B: extra actions rendered to the right of Sort (or alone)
-//   actions: [
-//     AppToolbarAction(icon: Icons.ios_share,      tooltip: 'Export',     onTap: _export),
-//     AppToolbarAction(icon: Icons.delete_outline, tooltip: 'Clear all',  onTap: _clearAll),
+//   actions: const [
+//     AppToolbarAction(icon: Icons.ios_share,      tooltip: 'Export',    onTap: ...),
+//     AppToolbarAction(icon: Icons.delete_outline, tooltip: 'Clear all', onTap: ...),
 //   ],
-//
-//   // Option C: provide your own trailing widget and take full control
-//   // trailing: MyCustomTrailing(...),
+//   // OR take full control of the right side with `trailing:`
 // )
-//
-// Visuals are theme-driven (surface/onSurface) and safe in light/dark.
 
 import 'package:flutter/material.dart';
 import '../theme/toolbar.dart' show ToolbarChip, toolbarSortPill;
@@ -60,12 +50,12 @@ class AppToolbar extends StatelessWidget {
     this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
     this.showBottomBorder = true,
 
-    // Trailing content
-    this.trailing,                 // if provided, overrides sort/actions rendering
-    this.sortLabel,                // if non-null + onSortTap non-null → show Sort pill
+    // Trailing controls (right side)
+    this.trailing,                 // full override of the trailing area
+    this.sortLabel,                // shown only if both label and onSortTap provided
     this.sortIcon,
     this.onSortTap,
-    this.actions,                  // optional list of square action buttons
+    this.actions,                  // zero or more compact square actions
   });
 
   /// Labels for the chip row, e.g. ["All","Entertainment","Sports"].
@@ -98,7 +88,9 @@ class AppToolbar extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
 
     Widget buildSortPill() {
-      if (sortLabel == null || onSortTap == null) return const SizedBox.shrink();
+      if (sortLabel == null || onSortTap == null) {
+        return const SizedBox.shrink();
+      }
       return InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onSortTap,
@@ -152,21 +144,27 @@ class AppToolbar extends StatelessWidget {
     }
 
     Widget buildTrailing() {
-      // Full override (alerts can pass a single custom pill, etc.)
       if (trailing != null) return trailing!;
 
-      // Compose: [Sort pill?] [actions...]
       final List<Widget> right = [];
       final sort = buildSortPill();
-      if (sort is! SizedBox) right.add(sort);
+      if (sort is! SizedBox) {
+        right.add(sort);
+      }
 
-      if (actions != null && actions!.isNotEmpty) {
+      final acts = actions ?? const <AppToolbarAction>[];
+      if (acts.isNotEmpty) {
         if (right.isNotEmpty) right.add(const SizedBox(width: 8));
-        right.addAll(actions!.map(buildSquareAction));
+        for (int i = 0; i < acts.length; i++) {
+          if (i > 0) right.add(const SizedBox(width: 8));
+          right.add(buildSquareAction(acts[i]));
+        }
       }
 
       if (right.isEmpty) return const SizedBox.shrink();
-      return Wrap(spacing: 8, runSpacing: 8, children: right);
+
+      // Single-line cluster pinned to the right
+      return Row(mainAxisSize: MainAxisSize.min, children: right);
     }
 
     return Container(
@@ -178,9 +176,8 @@ class AppToolbar extends StatelessWidget {
       ),
       padding: padding,
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // LEFT: scrollable chip row
+          // LEFT: scrollable chips (take remaining space)
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -209,7 +206,7 @@ class AppToolbar extends StatelessWidget {
 
           const SizedBox(width: 12),
 
-          // RIGHT: sort / actions / custom trailing
+          // RIGHT: sort + actions
           buildTrailing(),
         ],
       ),
