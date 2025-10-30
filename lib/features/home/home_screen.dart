@@ -777,102 +777,8 @@ class _FiltersRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Chip for inactive tab.
-    Widget _chipInactive(String label, VoidCallback onTap) {
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: _accent.withOpacity(0.4),
-              width: 1,
-            ),
-          ),
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 13,
-              height: 1.2,
-              fontWeight: FontWeight.w500,
-              color: _accent,
-            ),
-          ),
-        ),
-      );
-    }
-
-    // Chip for active tab.
-    Widget _chipActive(String label, VoidCallback onTap, Key? k) {
-      return InkWell(
-        key: k,
-        borderRadius: BorderRadius.circular(999),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: _accent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: _accent,
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _accent.withOpacity(0.4),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: const Text(
-            'placeholder', // replaced below
-          ),
-        ),
-      );
-    }
-
-    // We can't keep "placeholder" text above; so build final versions here.
-    Widget _buildTabChip(int index, String label, Key itemKey) {
-      final selected = (activeIndex == index);
-
-      if (!selected) {
-        return Container(
-          key: itemKey,
-          child: _chipInactive(label, () => onSelect(index)),
-        );
-      }
-
-      return InkWell(
-        key: itemKey,
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => onSelect(index),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: _accent,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: _accent, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: _accent.withOpacity(0.4),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: const Text(
-            '', // replaced below
-          ),
-        ),
-      );
-    }
-
-    // To avoid the placeholder hack, let's just inline the content:
-    Widget _tabChipFinal(int index, String label, Key itemKey) {
+    // To avoid the placeholder hack, just inline the content:
+    Widget _tabChip(int index, String label, Key itemKey) {
       final selected = (activeIndex == index);
 
       final bgColor = selected ? _accent : Colors.transparent;
@@ -996,11 +902,11 @@ class _FiltersRow extends StatelessWidget {
               physics: const BouncingScrollPhysics(),
               child: Row(
                 children: [
-                  _tabChipFinal(0, 'All', chipKeys[0]),
+                  _tabChip(0, 'All', chipKeys[0]),
                   const SizedBox(width: 8),
-                  _tabChipFinal(1, 'Entertainment', chipKeys[1]),
+                  _tabChip(1, 'Entertainment', chipKeys[1]),
                   const SizedBox(width: 8),
-                  _tabChipFinal(2, 'Sports', chipKeys[2]),
+                  _tabChip(2, 'Sports', chipKeys[2]),
                 ],
               ),
             ),
