@@ -2,7 +2,7 @@
 //
 // Reusable bottom sheets used by RootShell:
 //  • ThemePickerSheet       -> returns ThemeMode
-//  • CategoryPickerSheet    -> returns Set<String>
+//  • CategoryPickerSheet    -> returns Set<String> of category KEYS
 //  • ContentTypePickerSheet -> returns String ('all'|'read'|'video'|'audio')
 //
 // Neutral styling; no hardcoded reds.
@@ -10,7 +10,76 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// THEME ──────────────────────────────────────────────────────────────────────
+/// ───────────────────────────────────────────────────────────────────────────
+/// CATEGORY REGISTRY — SINGLE SOURCE OF TRUTH
+/// Edit this list ONLY to add/remove/rename categories.
+/// Order here is the display order in toolbars and pickers.
+/// Keep the first item as the "All" catch-all.
+/// ───────────────────────────────────────────────────────────────────────────
+class CategoryDef {
+  final String key;         // e.g. 'sports'
+  final String label;       // e.g. 'Sports'
+  final IconData icon;      // UI icon for sheets
+  final String description; // one-line hint in picker
+  const CategoryDef({
+    required this.key,
+    required this.label,
+    required this.icon,
+    required this.description,
+  });
+}
+
+const List<CategoryDef> kCategoryDefs = <CategoryDef>[
+  CategoryDef(
+    key: 'all',
+    label: 'All',
+    icon: Icons.apps_rounded,
+    description: 'Everything we have (Entertainment)',
+  ),
+  CategoryDef(
+    key: 'entertainment',
+    label: 'Entertainment',
+    icon: Icons.local_movies_rounded,
+    description: 'Movies, OTT, on-air drama, box office',
+  ),
+  CategoryDef(
+    key: 'sports',
+    label: 'Sports',
+    icon: Icons.sports_cricket_rounded,
+    description: 'Match talk, highlights (coming soon)',
+  ),
+  CategoryDef(
+    key: 'travel',
+    label: 'Travel',
+    icon: Icons.flight_takeoff_rounded,
+    description: 'Trips, destinations, culture clips (coming soon)',
+  ),
+  CategoryDef(
+    key: 'fashion',
+    label: 'Fashion',
+    icon: Icons.checkroom_rounded,
+    description: 'Looks, red carpet, style drops (coming soon)',
+  ),
+];
+
+/// Helpers other files can import (no duplication anywhere).
+String get kAllCategoryKey => kCategoryDefs.first.key;
+List<String> get kCategoryKeysOrdered =>
+    List.unmodifiable(kCategoryDefs.map((d) => d.key));
+List<String> get kCategoryLabelsOrdered =>
+    List.unmodifiable(kCategoryDefs.map((d) => d.label));
+String categoryLabelFor(String key) =>
+    kCategoryDefs.firstWhere(
+      (d) => d.key == key,
+      orElse: () => kCategoryDefs.first,
+    ).label;
+CategoryDef categoryDefFor(String key) =>
+    kCategoryDefs.firstWhere(
+      (d) => d.key == key,
+      orElse: () => kCategoryDefs.first,
+    );
+
+/// THEME ─────────────────────────────────────────────────────────────────────
 class ThemePickerSheet extends StatelessWidget {
   const ThemePickerSheet({super.key, required this.current});
   final ThemeMode current;
@@ -63,7 +132,8 @@ class ThemePickerSheet extends StatelessWidget {
 }
 
 /// CATEGORIES ────────────────────────────────────────────────────────────────
-/// Uses the same keys as RootShell.CategoryPrefs: 'all','entertainment','sports','travel','fashion'.
+/// Returns a Set<String> of KEYS selected by the user.
+/// Consumes kCategoryDefs so registry stays single-source.
 class CategoryPickerSheet extends StatefulWidget {
   const CategoryPickerSheet({super.key, required this.initial});
   final Set<String> initial;
@@ -74,40 +144,37 @@ class CategoryPickerSheet extends StatefulWidget {
 
 class _CategoryPickerSheetState extends State<CategoryPickerSheet> {
   late Set<String> _local;
-  static const _kAll = 'all';
 
   @override
   void initState() {
     super.initState();
-    _local = Set<String>.of(widget.initial);
+    _local = widget.initial.isEmpty ? {kAllCategoryKey} : Set<String>.of(widget.initial);
   }
 
   void _toggle(String key) {
-    if (key == _kAll) {
-      _local..clear()..add(_kAll);
+    if (key == kAllCategoryKey) {
+      _local..clear()..add(kAllCategoryKey);
     } else {
-      _local.contains(key) ? _local.remove(key) : _local.add(key);
-      _local.remove(_kAll);
-      if (_local.isEmpty) _local.add(_kAll);
+      if (_local.contains(key)) {
+        _local.remove(key);
+      } else {
+        _local..remove(kAllCategoryKey)..add(key);
+      }
+      if (_local.isEmpty) _local.add(kAllCategoryKey);
     }
     setState(() {});
   }
 
   bool _checked(String key) => _local.contains(key);
 
-  Widget _row({
-    required String key,
-    required IconData icon,
-    required String title,
-    required String desc,
-  }) {
+  Widget _catRow(CategoryDef def) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final active = _checked(key);
+    final active = _checked(def.key);
 
     return InkWell(
       borderRadius: BorderRadius.circular(10),
-      onTap: () => _toggle(key),
+      onTap: () => _toggle(def.key),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(
@@ -115,23 +182,26 @@ class _CategoryPickerSheetState extends State<CategoryPickerSheet> {
           children: [
             Checkbox(
               value: active,
-              onChanged: (_) => _toggle(key),
+              onChanged: (_) => _toggle(def.key),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
             ),
             const SizedBox(width: 8),
-            Icon(icon, size: 20, color: active ? scheme.primary : scheme.onSurfaceVariant),
+            Icon(def.icon, size: 20,
+                color: active ? scheme.primary : scheme.onSurfaceVariant),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title,
+                  Text(def.label,
                     style: theme.textTheme.bodyLarge?.copyWith(
                       fontWeight: active ? FontWeight.w600 : FontWeight.w500,
                     ),
                   ),
-                  Text(desc,
-                    style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                  Text(def.description,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -164,11 +234,8 @@ class _CategoryPickerSheetState extends State<CategoryPickerSheet> {
             ),
             const SizedBox(height: 16),
 
-            _row(key: 'all',            icon: Icons.apps_rounded,             title: 'All',            desc: 'Everything we have (Entertainment)'),
-            _row(key: 'entertainment',  icon: Icons.local_movies_rounded,     title: 'Entertainment',  desc: 'Movies, OTT, on-air drama, box office'),
-            _row(key: 'sports',         icon: Icons.sports_cricket_rounded,   title: 'Sports',         desc: 'Match talk, highlights (coming soon)'),
-            _row(key: 'travel',         icon: Icons.flight_takeoff_rounded,   title: 'Travel',         desc: 'Trips, destinations, culture clips (coming soon)'),
-            _row(key: 'fashion',        icon: Icons.checkroom_rounded,        title: 'Fashion',        desc: 'Looks, red carpet, style drops (coming soon)'),
+            // Render all categories in the registry (in order)
+            for (final def in kCategoryDefs) _catRow(def),
 
             const SizedBox(height: 24),
             SizedBox(
