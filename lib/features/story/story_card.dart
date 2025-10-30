@@ -223,10 +223,10 @@ class _StoryCardState extends State<StoryCard> {
 
     String? freshnessText;
     if (publishedAt != null && addedAt != null) {
-        final diff = addedAt.difference(publishedAt);
-        if (diff.inMinutes.abs() >= 1) {
-          freshnessText = _formatGapShort(diff);
-        }
+      final diff = addedAt.difference(publishedAt);
+      if (diff.inMinutes.abs() >= 1) {
+        freshnessText = _formatGapShort(diff);
+      }
     }
 
     final hasUrl = _linkUrl != null;
@@ -260,7 +260,8 @@ class _StoryCardState extends State<StoryCard> {
           ),
           if (_hover)
             BoxShadow(
-              color: const Color(0xFFdc2626).withOpacity(0.18),
+              // use themed primary instead of hard-coded red
+              color: scheme.primary.withOpacity(0.18),
               blurRadius: 30,
               spreadRadius: 0,
               offset: const Offset(0, 0),
@@ -420,7 +421,7 @@ class _StoryCardState extends State<StoryCard> {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          // Red Watch/Read button
+                                          // Primary Watch/Read button
                                           Semantics(
                                             button: true,
                                             label:
@@ -446,16 +447,16 @@ class _StoryCardState extends State<StoryCard> {
                                                     : null,
                                                 style:
                                                     ElevatedButton.styleFrom(
+                                                  // use themed primary
                                                   backgroundColor:
-                                                      const Color(0xFFdc2626),
+                                                      scheme.primary,
                                                   foregroundColor:
                                                       Colors.white,
                                                   elevation: 0,
                                                   minimumSize:
                                                       const Size(0, 36),
                                                   padding:
-                                                      const EdgeInsets
-                                                          .symmetric(
+                                                      const EdgeInsets.symmetric(
                                                     horizontal: 12,
                                                   ),
                                                   shape:
@@ -628,7 +629,8 @@ class _MetaLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = const Color(0xFFdc2626);
+    // use themed primary instead of hard-coded red
+    final accent = Theme.of(context).colorScheme.primary;
     final style = _styleForKind(kindRaw);
 
     final pill = kindLabel.isEmpty
