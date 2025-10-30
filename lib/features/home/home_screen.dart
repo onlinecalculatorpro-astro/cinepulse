@@ -566,7 +566,7 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildScaffold(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface;
+    final bgColor = isDark ? kDarkBgEnd : theme.colorScheme.surface;
 
     // Responsive breakpoint
     final screenWidth = MediaQuery.of(context).size.width;
@@ -593,12 +593,12 @@ class _HomeScreenState extends State<HomeScreen>
                   end: Alignment.bottomCenter,
                   colors: isDark
                       ? [
-                          const Color(0xFF1e2537).withOpacity(0.9),
-                          const Color(0xFF0b0f17).withOpacity(0.95),
+                          kCardTop.withOpacity(0.90),
+                          kDarkBgEnd.withOpacity(0.95),
                         ]
                       : [
                           theme.colorScheme.surface.withOpacity(0.95),
-                          theme.colorScheme.surface.withOpacity(0.9),
+                          theme.colorScheme.surface.withOpacity(0.90),
                         ],
                 ),
                 border: Border(
@@ -695,7 +695,7 @@ class _HomeScreenState extends State<HomeScreen>
           _FiltersRow(
             activeIndex: _tab.index,
             sortLabel: _sortModeLabel(_sortMode),
-            sortMode: _sortMode,
+            sortMode: _SortMode.latest == _sortMode ? _SortMode.latest : _sortMode,
             isDark: isDark,
             theme: theme,
             chipKeys: _chipKeys,
@@ -777,7 +777,7 @@ class _FiltersRow extends StatelessWidget {
       final selected = (activeIndex == index);
 
       final bgColor = selected ? acc : Colors.transparent;
-      final textColor = selected ? Colors.white : acc;
+      final textColor = selected ? cs.onPrimary : acc;
       final borderClr = selected ? acc : acc.withOpacity(0.35);
       final fontWeight = selected ? FontWeight.w600 : FontWeight.w500;
 
@@ -876,7 +876,7 @@ class _FiltersRow extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0b0f17) : theme.colorScheme.surface,
+        color: isDark ? kDarkBgEnd : theme.colorScheme.surface,
         border: Border(
           bottom: BorderSide(
             width: 1,
@@ -1078,10 +1078,10 @@ class _FeedListState extends State<_FeedList>
                 ),
               ],
             ),
-            child: const Icon(
+            child: Icon(
               Icons.bookmark_rounded,
               size: 14,
-              color: Colors.white,
+              color: cs.onPrimary,
             ),
           ),
         ),
@@ -1359,9 +1359,7 @@ class _HeaderIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
-    final acc = cs.primary;
 
     return Tooltip(
       message: tooltip,
@@ -1376,14 +1374,14 @@ class _HeaderIconButton extends StatelessWidget {
             color: neutralPillBg(context),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: acc.withOpacity(0.30),
+              color: cs.primary.withOpacity(0.30),
               width: 1,
             ),
           ),
           child: Icon(
             icon,
             size: 16,
-            color: isDark ? Colors.white : Colors.black87,
+            color: primaryTextColor(context),
           ),
         ),
       ),
@@ -1419,13 +1417,13 @@ class _BrandLogo extends StatelessWidget {
               ),
             ],
           ),
-          child: const Center(
+          child: Center(
             child: Text(
               '🎬',
               style: TextStyle(
                 fontSize: 16,
                 height: 1,
-                color: Colors.white,
+                color: cs.onPrimary,
               ),
             ),
           ),
@@ -1459,36 +1457,39 @@ class _HomeCrashedView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
     return Container(
-      color: Colors.black,
+      color: scheme.background,
       width: double.infinity,
       height: double.infinity,
       padding: const EdgeInsets.all(16),
       child: SafeArea(
         child: SingleChildScrollView(
           child: DefaultTextStyle(
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
-              color: Colors.redAccent,
+              color: freshnessColor(context), // brand freshness red
               fontFamily: 'monospace',
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'HomeScreen crashed while building.\n'
                   'Screenshot this and send it 👇\n',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    color: Colors.redAccent,
+                    color: freshnessColor(context),
                   ),
                 ),
-                const Text('Error:'),
-                Text(error),
+                Text('Error:', style: TextStyle(color: primaryTextColor(context))),
+                Text(error, style: TextStyle(color: primaryTextColor(context))),
                 const SizedBox(height: 12),
-                const Text('Stack:'),
-                Text(stack),
+                Text('Stack:', style: TextStyle(color: primaryTextColor(context))),
+                Text(stack, style: TextStyle(color: primaryTextColor(context))),
               ],
             ),
           ),
