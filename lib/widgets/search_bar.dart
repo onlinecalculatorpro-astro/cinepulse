@@ -111,10 +111,10 @@ class _SearchBarInputState extends State<SearchBarInput> {
     final Color textColor = isDark ? Colors.white : Colors.black87;
     final Color hintColor = isDark ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.5);
 
-    // Keybindings: ESC to clear/exit (use const LogicalKeySet & const Intent in a const map).
+    // Keybindings: ESC to clear/exit (non-const map to avoid web const issues).
     return Shortcuts(
-      shortcuts: const <ShortcutActivator, Intent>{
-        LogicalKeySet(LogicalKeyboardKey.escape): DismissIntent(),
+      shortcuts: <ShortcutActivator, Intent>{
+        LogicalKeySet(LogicalKeyboardKey.escape): const DismissIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -139,7 +139,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
             ),
             child: Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.search_rounded,
                   size: 18,
                   color: _accent,
@@ -201,7 +201,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                           ),
                         ],
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.close_rounded,
                         size: 16,
                         color: _accent,
