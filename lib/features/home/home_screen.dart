@@ -1,58 +1,11 @@
 // lib/features/home/home_screen.dart
 //
 // HomeScreen = main "Home" tab.
-//
-// Responsibilities:
-//   • Renders the main feed grid (cards / skeletons / errors)
-//   • Shows the global header bar and filter row
-//   • Handles inline search, sorting, paging, pull-to-refresh,
-//     offline fallback, and realtime updates
-//
-// -----------------------------------------------------------------------------
-// NAV / HEADER BEHAVIOR
-// -----------------------------------------------------------------------------
-//
-// COMPACT (<768px width):
-//   - Bottom nav (RootShell) already shows [Home][Discover][Saved][Alerts].
-//   - So Home header only shows utility icons: [Search] [Refresh] [Menu]
-//   - Tapping [Search] reveals the inline search bar row.
-//
-// WIDE (≥768px width):
-//   - No bottom nav, so header must expose cross-tab CTAs.
-//   - Home is considered "current", so we DO NOT show a "Home" pill.
-//   - We DO show: [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
-//   - [Search] still toggles the inline search bar row.
-//
-// -----------------------------------------------------------------------------
-// LAYOUT
-// -----------------------------------------------------------------------------
-//
-// Row 1: Frosted header bar (logo + CTAs)
-// Row 2: AppToolbar (category chips + sort pill)
-//        - Offline banner appears ABOVE this row if offline
-// Row 3: Inline search bar (visible after tapping [Search])
-// Body : TabBarView with a feed per category
-//
-// The feed supports:
-//   - local paging cache
-//   - manual refresh (Refresh CTA)
-//   - auto-refresh every 2 minutes (only when foreground and not offline)
-//   - realtime WebSocket ping triggers (debounced)
-//   - offline mode fallback (cached content)
-//   - client-side sorting modes
-//   - client-side text search
-//
-// -----------------------------------------------------------------------------
-// SORT MODES
-// -----------------------------------------------------------------------------
-// Latest first     (_SortMode.latest)
-// Trending now     (_SortMode.trending)
-// Most viewed      (_SortMode.views)
-// Editor’s pick    (_SortMode.editorsPick)
-//
-// Sorting is applied client-side on the in-memory list for the
-// currently-selected tab.
-// -----------------------------------------------------------------------------
+// Updates in this rewrite:
+//  • Search row opens/closes smoothly (AnimatedSize) and autofocuses
+//  • Uses shared SearchBarInput with `[🔍][text][✕]`
+//  • Grid only rebuilds on search text changes via ValueListenableBuilder
+//  • Minor perf polish for realtime/refresh checks
 
 import 'dart:async';
 import 'dart:convert';
@@ -67,9 +20,8 @@ import 'package:web_socket_channel/status.dart' as ws_status;
 import '../../core/api.dart';            // fetchFeed(), kApiBaseUrl
 import '../../core/cache.dart';          // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
-import '../../core/utils.dart';          // fadeRoute(), deepLinkForStoryId()
 import '../../theme/theme_colors.dart';  // brand + text helpers
-import '../../widgets/app_toolbar.dart'; // ✅ shared toolbar row
+import '../../widgets/app_toolbar.dart'; // shared toolbar row
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
 import '../../widgets/search_bar.dart';  // SearchBarInput
@@ -147,7 +99,6 @@ class _HomeScreenState extends State<HomeScreen>
 
   // timers / streams
   StreamSubscription? _connSub;
-  Timer? _searchDebounce;
   Timer? _autoRefresh;
 
   // realtime WS
@@ -173,7 +124,6 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     _tab.addListener(_onTabChanged);
-
     WidgetsBinding.instance.addObserver(this);
 
     // Connectivity watcher.
@@ -215,14 +165,10 @@ class _HomeScreenState extends State<HomeScreen>
     // Silent periodic refresh.
     _autoRefresh =
         Timer.periodic(_kAutoRefreshEvery, (_) => _tickAutoRefresh());
-
-    // Debounced local search.
-    _search.addListener(_onSearchChanged);
   }
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     _realtimeDebounceTimer?.cancel();
     _autoRefresh?.cancel();
 
@@ -234,7 +180,6 @@ class _HomeScreenState extends State<HomeScreen>
     _connSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
 
-    _search.removeListener(_onSearchChanged);
     _search.dispose();
 
     _tab.removeListener(_onTabChanged);
@@ -262,7 +207,6 @@ class _HomeScreenState extends State<HomeScreen>
   /* ──────────────────────────────────────────────────────────────────────
    * Realtime WebSocket handling
    * ────────────────────────────────────────────────────────────────────── */
-
   String _buildWsUrl() {
     final base = kApiBaseUrl;
     final u = Uri.parse(base);
@@ -344,7 +288,6 @@ class _HomeScreenState extends State<HomeScreen>
   /* ──────────────────────────────────────────────────────────────────────
    * Internal helpers
    * ────────────────────────────────────────────────────────────────────── */
-
   bool _hasNetworkFrom(dynamic event) {
     if (event is ConnectivityResult) {
       return event != ConnectivityResult.none;
@@ -353,13 +296,6 @@ class _HomeScreenState extends State<HomeScreen>
       return event.any((r) => r != ConnectivityResult.none);
     }
     return true;
-  }
-
-  void _onSearchChanged() {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-      if (mounted) setState(() {});
-    });
   }
 
   void _ensureChipVisible(int tabIndex) {
@@ -382,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _onTabChanged() {
     if (!mounted) return;
-    setState(() {});
+    setState(() {}); // update AppToolbar active chip
     _ensureChipVisible(_tab.index);
   }
 
@@ -462,10 +398,7 @@ class _HomeScreenState extends State<HomeScreen>
             ),
             subtitle: Text(
               subtitle,
-              style: TextStyle(
-                fontSize: 13,
-                color: secondaryTextColor(ctx),
-              ),
+              style: TextStyle(fontSize: 13, color: secondaryTextColor(ctx)),
             ),
             trailing:
                 selected ? Icon(Icons.check_rounded, color: cs.primary) : null,
@@ -547,7 +480,6 @@ class _HomeScreenState extends State<HomeScreen>
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    // ✅ Use themed background, not hard-coded navy
     final bgColor = theme.scaffoldBackgroundColor;
 
     // Responsive breakpoint
@@ -570,7 +502,6 @@ class _HomeScreenState extends State<HomeScreen>
               height: 64,
               padding: const EdgeInsets.symmetric(horizontal: 16),
               decoration: BoxDecoration(
-                // ✅ AppBar tint uses cs.surface for both modes
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
@@ -592,8 +523,6 @@ class _HomeScreenState extends State<HomeScreen>
                   const Spacer(),
 
                   if (isWide) ...[
-                    // DESKTOP / WIDE (≥768px):
-                    // [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
                     _HeaderIconButton(
                       tooltip: 'Search',
                       icon: Icons.search_rounded,
@@ -632,8 +561,6 @@ class _HomeScreenState extends State<HomeScreen>
                       onTap: widget.onMenuPressed,
                     ),
                   ] else ...[
-                    // COMPACT (<768px):
-                    // [Search] [Refresh] [Menu]
                     _HeaderIconButton(
                       tooltip: 'Search',
                       icon: Icons.search_rounded,
@@ -669,7 +596,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: OfflineBanner(),
             ),
 
-          // Row 2: ✅ shared AppToolbar (chips + sort pill with correct contrast)
+          // Row 2: shared AppToolbar (chips + sort pill)
           AppToolbar(
             tabs: _tabs.values.toList(growable: false),
             activeIndex: _tab.index,
@@ -680,36 +607,49 @@ class _HomeScreenState extends State<HomeScreen>
             onSortTap: () => _showSortSheet(context),
           ),
 
-          // Row 3: inline search bar (only when visible)
-          if (showSearchRow)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: SearchBarInput(
-                controller: _search,
-                onExitSearch: () {
-                  setState(() {
-                    _search.clear();
-                    FocusScope.of(context).unfocus();
-                    _showHeaderSearch = false;
-                  });
-                },
-              ),
-            ),
+          // Row 3: inline search bar (smooth show/hide + autofocus)
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: showSearchRow
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    child: SearchBarInput(
+                      controller: _search,
+                      autofocus: true,
+                      onExitSearch: () {
+                        setState(() {
+                          _search.clear();
+                          _showHeaderSearch = false;
+                        });
+                        FocusScope.of(context).unfocus();
+                      },
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
 
           // Feed content (TabBarView)
           Expanded(
-            child: TabBarView(
-              controller: _tab,
-              children: _tabs.keys.map((tabKey) {
-                final feed = _feeds[tabKey]!;
-                return _FeedList(
-                  key: PageStorageKey('feed-$tabKey'),
-                  feed: feed,
-                  searchText: _search,
-                  offline: _offline,
-                  sortMode: _sortMode,
+            // Rebuild only the grid area when search text changes.
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _search,
+              builder: (context, _, __) {
+                return TabBarView(
+                  controller: _tab,
+                  children: _tabs.keys.map((tabKey) {
+                    final feed = _feeds[tabKey]!;
+                    return _FeedList(
+                      key: PageStorageKey('feed-$tabKey'),
+                      feed: feed,
+                      searchText: _search,
+                      offline: _offline,
+                      sortMode: _sortMode,
+                    );
+                  }).toList(),
                 );
-              }).toList(),
+              },
             ),
           ),
         ],
