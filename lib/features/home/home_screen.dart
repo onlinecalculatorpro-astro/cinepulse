@@ -6,6 +6,7 @@
 //  • Uses shared SearchBarInput with `[🔍][text][✕]`
 //  • Grid only rebuilds on search text changes via ValueListenableBuilder
 //  • Minor perf polish for realtime/refresh checks
+//  • Inline search row is locally themed (no red) on mobile & desktop
 
 import 'dart:async';
 import 'dart:convert';
@@ -609,22 +610,57 @@ class _HomeScreenState extends State<HomeScreen>
 
           // Row 3: inline search bar (smooth show/hide + autofocus)
           AnimatedSize(
+            vsync: this,
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
             alignment: Alignment.topCenter,
             child: showSearchRow
                 ? Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: SearchBarInput(
-                      controller: _search,
-                      autofocus: true,
-                      onExitSearch: () {
-                        setState(() {
-                          _search.clear();
-                          _showHeaderSearch = false;
-                        });
-                        FocusScope.of(context).unfocus();
-                      },
+                    // Local theme override so the search doesn't inherit any red.
+                    child: Theme(
+                      data: Theme.of(context).copyWith(
+                        inputDecorationTheme: InputDecorationTheme(
+                          filled: true,
+                          fillColor: neutralPillBg(context),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          hintStyle: TextStyle(color: faintTextColor(context)),
+                          prefixIconColor: secondaryTextColor(context),
+                          suffixIconColor: secondaryTextColor(context),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: outlineHairline(context),
+                              width: 1,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(
+                              color: outlineHairline(context),
+                              width: 1.2,
+                            ),
+                          ),
+                        ),
+                        textSelectionTheme: TextSelectionThemeData(
+                          cursorColor: secondaryTextColor(context),
+                          selectionColor:
+                              Theme.of(context).colorScheme.primary.withOpacity(0.15),
+                          selectionHandleColor: secondaryTextColor(context),
+                        ),
+                      ),
+                      child: SearchBarInput(
+                        controller: _search,
+                        autofocus: true,
+                        onExitSearch: () {
+                          setState(() {
+                            _search.clear();
+                            _showHeaderSearch = false;
+                          });
+                          FocusScope.of(context).unfocus();
+                        },
+                      ),
                     ),
                   )
                 : const SizedBox.shrink(),
