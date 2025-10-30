@@ -14,15 +14,13 @@
 //
 // COMPACT (<768px width):
 //   - Bottom nav (RootShell) already shows [Home][Discover][Saved][Alerts].
-//   - So Home header only shows utility icons:
-//        [Search] [Refresh] [Menu]
+//   - So Home header only shows utility icons: [Search] [Refresh] [Menu]
 //   - Tapping [Search] reveals the inline search bar row.
 //
 // WIDE (≥768px width):
 //   - No bottom nav, so header must expose cross-tab CTAs.
 //   - Home is considered "current", so we DO NOT show a "Home" pill.
-//   - We DO show:
-//        [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
+//   - We DO show: [Search] [Saved] [Alerts] [Discover] [Refresh] [Menu]
 //   - [Search] still toggles the inline search bar row.
 //
 // -----------------------------------------------------------------------------
@@ -30,9 +28,7 @@
 // -----------------------------------------------------------------------------
 //
 // Row 1: Frosted header bar (logo + CTAs)
-// Row 2: Filter row
-//        - Category chips: All / Entertainment / Sports
-//        - Sort pill ("Latest first", "Trending now", etc.)
+// Row 2: AppToolbar (category chips + sort pill)
 //        - Offline banner appears ABOVE this row if offline
 // Row 3: Inline search bar (visible after tapping [Search])
 // Body : TabBarView with a feed per category
@@ -56,13 +52,6 @@
 //
 // Sorting is applied client-side on the in-memory list for the
 // currently-selected tab.
-//
-// -----------------------------------------------------------------------------
-// NOTE ABOUT showSearchBar
-// -----------------------------------------------------------------------------
-// RootShell used to control search visibility. Now HomeScreen controls it
-// internally via the [Search] CTA in the header. We keep `showSearchBar`
-// as a legacy prop (RootShell always passes false).
 // -----------------------------------------------------------------------------
 
 import 'dart:async';
@@ -75,15 +64,15 @@ import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
-import '../../core/api.dart'; // fetchFeed(), kApiBaseUrl
-import '../../core/cache.dart'; // FeedDiskCache, FeedCache, SavedStore
+import '../../core/api.dart';            // fetchFeed(), kApiBaseUrl
+import '../../core/cache.dart';          // FeedDiskCache, FeedCache, SavedStore
 import '../../core/models.dart';
-import '../../core/utils.dart'; // fadeRoute(), deepLinkForStoryId()
-import '../../theme/theme_colors.dart'; // brand + text helpers
-import '../../theme/toolbar.dart'; // ToolbarChip, toolbarSortPill  ✅ NEW
+import '../../core/utils.dart';          // fadeRoute(), deepLinkForStoryId()
+import '../../theme/theme_colors.dart';  // brand + text helpers (outlineHairline, neutralPillBg)
+import '../../widgets/app_toolbar.dart'; // ✅ shared toolbar row
 import '../../widgets/error_view.dart';
 import '../../widgets/offline_banner.dart';
-import '../../widgets/search_bar.dart'; // SearchBarInput
+import '../../widgets/search_bar.dart';  // SearchBarInput
 import '../../widgets/skeleton_card.dart';
 import '../story/story_card.dart';
 
@@ -431,6 +420,19 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
+  IconData _iconForSort(_SortMode mode) {
+    switch (mode) {
+      case _SortMode.latest:
+        return Icons.access_time_rounded;
+      case _SortMode.trending:
+        return Icons.local_fire_department_rounded;
+      case _SortMode.views:
+        return Icons.visibility_rounded;
+      case _SortMode.editorsPick:
+        return Icons.star_rounded;
+    }
+  }
+
   Future<void> _showSortSheet(BuildContext sheetContext) async {
     final picked = await showModalBottomSheet<_SortMode>(
       context: sheetContext,
@@ -473,7 +475,7 @@ class _HomeScreenState extends State<HomeScreen>
 
         return SafeArea(
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: MainSize.min,
             children: [
               option(
                 mode: _SortMode.latest,
@@ -544,7 +546,6 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildScaffold(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
 
     // ✅ Use themed background, not hard-coded navy
     final bgColor = theme.scaffoldBackgroundColor;
@@ -668,16 +669,15 @@ class _HomeScreenState extends State<HomeScreen>
               child: OfflineBanner(),
             ),
 
-          // Row 2: category chips + sort pill
-          _FiltersRow(
+          // Row 2: ✅ shared AppToolbar (chips + sort pill with correct contrast)
+          AppToolbar(
+            tabs: _tabs.values.toList(growable: false),
             activeIndex: _tab.index,
-            sortLabel: _sortModeLabel(_sortMode),
-            sortMode: _sortMode,
-            isDark: isDark,
-            theme: theme,
-            chipKeys: _chipKeys,
             onSelect: _onTabTap,
-            onSortTap: (ctx) => _showSortSheet(ctx),
+            chipKeys: _chipKeys,
+            sortLabel: _sortModeLabel(_sortMode),
+            sortIcon: _iconForSort(_sortMode),
+            onSortTap: () => _showSortSheet(context),
           ),
 
           // Row 3: inline search bar (only when visible)
@@ -710,128 +710,6 @@ class _HomeScreenState extends State<HomeScreen>
                   sortMode: _sortMode,
                 );
               }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/* ──────────────────────────────────────────────────────────────────────────
- * Filters row under header (Row 2)
- *  - Horizontal chips for All / Entertainment / Sports
- *  - Sort pill on the right (neutral onSurface text/icons in both themes)
- * ───────────────────────────────────────────────────────────────────────── */
-class _FiltersRow extends StatelessWidget {
-  const _FiltersRow({
-    required this.activeIndex,
-    required this.sortLabel,
-    required this.sortMode,
-    required this.isDark,
-    required this.theme,
-    required this.chipKeys,
-    required this.onSelect,
-    required this.onSortTap,
-  });
-
-  final int activeIndex;
-  final String sortLabel;
-  final _SortMode sortMode;
-  final bool isDark;
-  final ThemeData theme;
-  final List<GlobalKey> chipKeys;
-  final ValueChanged<int> onSelect;
-  final void Function(BuildContext ctx) onSortTap;
-
-  IconData _iconForSort(_SortMode mode) {
-    switch (mode) {
-      case _SortMode.latest:
-        return Icons.access_time_rounded;
-      case _SortMode.trending:
-        return Icons.local_fire_department_rounded;
-      case _SortMode.views:
-        return Icons.visibility_rounded;
-      case _SortMode.editorsPick:
-        return Icons.star_rounded;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: cs.surface,
-        border: Border(
-          bottom: BorderSide(width: 1, color: outlineHairline(context)),
-        ),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Horizontal scroll row of chips (theme-driven via ToolbarChip).
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              child: Row(
-                children: [
-                  ToolbarChip(
-                    key: chipKeys[0],
-                    label: 'All',
-                    active: activeIndex == 0,
-                    onTap: () => onSelect(0),
-                  ),
-                  const SizedBox(width: 8),
-                  ToolbarChip(
-                    key: chipKeys[1],
-                    label: 'Entertainment',
-                    active: activeIndex == 1,
-                    onTap: () => onSelect(1),
-                  ),
-                  const SizedBox(width: 8),
-                  ToolbarChip(
-                    key: chipKeys[2],
-                    label: 'Sports',
-                    active: activeIndex == 2,
-                    onTap: () => onSelect(2),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Sort pill (neutral text/icons for contrast in dark & light).
-          InkWell(
-            borderRadius: BorderRadius.circular(999),
-            onTap: () => onSortTap(context),
-            child: toolbarSortPill(
-              context: context,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(_iconForSort(sortMode), size: 16, color: cs.onSurface),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      sortLabel,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        height: 1.2,
-                        fontWeight: FontWeight.w500,
-                        color: cs.onSurface,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  Icon(Icons.arrow_drop_down_rounded,
-                      size: 18, color: cs.onSurface),
-                ],
-              ),
             ),
           ),
         ],
