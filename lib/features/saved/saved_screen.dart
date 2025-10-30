@@ -6,10 +6,10 @@
 // WIDE (≥768px):    [Home] [Search] [Alerts] [Discover] [Refresh] [Menu]
 // COMPACT (<768px): [Search] [Refresh] [Menu]
 // Search toggles an inline bar INSIDE Saved (Row 3).
-// Row 2 = shared AppToolbar (chips + sort pill; theme-safe colors)
+// Row 2  = shared AppToolbar (chips + sort pill; theme-safe colors)
 // Row 2b = Saved-only actions (Export / Clear)
-// Row 2.5 = "N items"
-// Body = grid of StoryCard.
+// Row 2.5 = "N items" (for current chip + search result)
+// Body   = grid of StoryCard.
 // ----------------------------------------------------------------------
 
 import 'dart:async';
@@ -46,6 +46,11 @@ class SavedScreen extends StatefulWidget {
 }
 
 class _SavedScreenState extends State<SavedScreen> {
+  static const List<String> _tabs = ['All', 'Entertainment', 'Sports'];
+
+  final List<GlobalKey> _chipKeys =
+      List.generate(_tabs.length, (_) => GlobalKey());
+
   SavedSort _sort = SavedSort.recent;
   int _activeCatIndex = 0;
 
@@ -81,8 +86,47 @@ class _SavedScreenState extends State<SavedScreen> {
     });
   }
 
-  void _setCategory(int i) => setState(() => _activeCatIndex = i);
+  void _setCategory(int i) {
+    if (i < 0 || i >= _tabs.length) return;
+    setState(() => _activeCatIndex = i);
+
+    // Ensure the tapped chip scrolls into view.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _chipKeys[i].currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+        );
+      }
+    });
+  }
+
   void _refreshSaved() => setState(() {}); // local only
+
+  /* ─────────────── Category filter helpers ─────────────── */
+
+  String _verticalOf(Story s) {
+    try {
+      final dyn = (s as dynamic);
+      final v = dyn.vertical ?? dyn.category ?? dyn.section ?? '';
+      if (v is String) return v.toLowerCase();
+    } catch (_) {}
+    return '';
+  }
+
+  bool _matchesActiveCategory(Story s) {
+    if (_activeCatIndex == 0) return true; // All
+    final v = _verticalOf(s);
+    if (_activeCatIndex == 1) {
+      return v.contains('entertain');
+    } else {
+      return v.contains('sport');
+    }
+  }
 
   /* ─────────────── Export / Clear all ─────────────── */
 
@@ -224,20 +268,25 @@ class _SavedScreenState extends State<SavedScreen> {
           );
         }
 
-        // ordered + locally filtered
+        // 1) order; 2) category filter; 3) search filter
         final ids = SavedStore.instance.orderedIds(_sort);
-        final stories = ids.map(FeedCache.get).whereType<Story>().toList(growable: false);
+        final base = ids.map(FeedCache.get).whereType<Story>().toList(growable: false);
+        final byCategory = base.where(_matchesActiveCategory).toList(growable: false);
+
         final q = _query.text.trim().toLowerCase();
-        final filtered = q.isEmpty
-            ? stories
-            : stories.where((s) {
+        final filtered = (q.isEmpty)
+            ? byCategory
+            : byCategory.where((s) {
                 final title = s.title.toLowerCase();
                 final summ = (s.summary ?? '').toLowerCase();
                 return title.contains(q) || summ.contains(q);
-              }).toList();
+              }).toList(growable: false);
 
-        final total = stories.length;
-        final countText = switch (total) { 0 => 'No items', 1 => '1 item', _ => '$total items' };
+        final countText = switch (filtered.length) {
+          0 => 'No items',
+          1 => '1 item',
+          _ => '${filtered.length} items'
+        };
 
         return Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
@@ -305,11 +354,10 @@ class _SavedScreenState extends State<SavedScreen> {
             children: [
               // Row 2: ✅ shared toolbar (chips + sort pill with neutral text)
               AppToolbar(
-                tabs: const ['All', 'Entertainment', 'Sports'],
+                tabs: _tabs,
                 activeIndex: _activeCatIndex,
                 onSelect: _setCategory,
-                // You can pass GlobalKeys if you want auto-scroll-to-active; optional:
-                chipKeys: List.generate(3, (_) => GlobalKey()),
+                chipKeys: _chipKeys,
                 sortLabel: (_sort == SavedSort.recent) ? 'Recent' : 'Title',
                 sortIcon: (_sort == SavedSort.recent) ? Icons.history : Icons.sort_by_alpha,
                 onSortTap: () => _showSortSheet(context),
@@ -337,7 +385,7 @@ class _SavedScreenState extends State<SavedScreen> {
                 ),
               ),
 
-              // Row 2.5: count
+              // Row 2.5: count (for current chip/search result)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Text(
@@ -378,10 +426,22 @@ class _SavedScreenState extends State<SavedScreen> {
                     final bottomPad = 28.0 + bottomSafe;
 
                     if (filtered.isEmpty) {
+                      // Empty because nothing saved OR no match.
+                      final isSearching = _query.text.trim().isNotEmpty || _activeCatIndex != 0;
                       return ListView(
                         padding: EdgeInsets.fromLTRB(horizontalPad, 24, horizontalPad, bottomPad),
                         physics: const AlwaysScrollableScrollPhysics(),
-                        children: const [_EmptySaved()],
+                        children: [
+                          if (!isSearching)
+                            const _EmptySaved()
+                          else
+                            Center(
+                              child: Text(
+                                'No matching items.',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                              ),
+                            ),
+                        ],
                       );
                     }
 
