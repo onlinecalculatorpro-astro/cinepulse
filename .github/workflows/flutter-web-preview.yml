@@ -15,8 +15,9 @@ jobs:
     name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
+      # Single sources of truth
       API_BASE_URL:   ${{ secrets.API_BASE_URL }}    # e.g. https://api.nutshellnewsapp.com
-      DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}  # e.g. https://app.nutshellnewsapp.com
+      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL }}  # e.g. https://app.nutshellnewsapp.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,24 +49,35 @@ jobs:
             echo "arg=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build
+      - name: Build (with single-source bases)
         env:
-          API_BASE_URL_NORM:   ${{ secrets.API_BASE_URL }}
-          DEEP_LINK_BASE_NORM: ${{ secrets.DEEP_LINK_BASE }}
+          API_NORM:   ${{ secrets.API_BASE_URL }}
+          SHARE_NORM: ${{ secrets.SHARE_BASE_URL }}
         shell: bash
         run: |
           set -euo pipefail
-          api="${API_BASE_URL_NORM%/}"
-          deep="${DEEP_LINK_BASE_NORM%/}"
+          api="${API_NORM%/}"
+          share="${SHARE_NORM%/}"
 
+          # --dart-define keys expected by your app code:
+          #   API_BASE_URL      → core/api.dart
+          #   SHARE_BASE_URL    → core/deep_links.dart (kShareSite / buildShareUrl)
+          # Back-compat define for older code (safe no-op if unused):
+          #   DEEP_LINK_BASE    → equals SHARE_BASE_URL
           flutter build web --release \
             ${{ steps.args.outputs.arg }} \
             --pwa-strategy=none \
-            --dart-define=CINE_API_BASE="$api" \
             --dart-define=API_BASE_URL="$api" \
-            --dart-define=DEEP_LINK_BASE="$deep"
+            --dart-define=SHARE_BASE_URL="$share" \
+            --dart-define=DEEP_LINK_BASE="$share"
 
-          printf '{"commit":"%s","built_at":"%s"}\n' "$GITHUB_SHA" "$(date -u +%FT%TZ)" > build/web/version.json
+          # Stamp build metadata
+          jq -n --arg commit "$GITHUB_SHA" \
+                --arg built_at "$(date -u +%FT%TZ)" \
+                --arg api "$api" \
+                --arg share "$share" \
+                '{commit:$commit,built_at:$built_at,api_base:$api,share_base:$share}' \
+            > build/web/version.json
 
       - name: Upload web build
         uses: actions/upload-artifact@v4
@@ -78,11 +90,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}   # raw OpenSSH private key (no base64)
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}   # raw OpenSSH private key
       VPS_HOST:        ${{ secrets.VPS_HOST }}          # e.g. 72.60.218.209
       VPS_USER:        ${{ secrets.VPS_USER }}          # e.g. root (or a sudo user)
       SSH_PORT:        ${{ secrets.SSH_PORT }}          # optional (defaults to 22)
-      WEB_ROOT:        ${{ secrets.WEB_ROOT }}          # optional (defaults below)
+      WEB_ROOT:        ${{ secrets.WEB_ROOT }}          # optional (default below)
+      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL }}    # for smoke test
     steps:
       - name: Download build
         uses: actions/download-artifact@v4
@@ -96,17 +109,16 @@ jobs:
           set -euo pipefail
           mkdir -p ~/.ssh
           printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
-          # strip any accidental CRLFs that cause "error in libcrypto"
           sed -i 's/\r$//' ~/.ssh/id_vps
           chmod 600 ~/.ssh/id_vps
 
           : "${SSH_PORT:=22}"
           : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
 
-          # add host key to avoid interactive prompt
+          # Host key to known_hosts (non-interactive)
           ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
 
-          # quick non-interactive sanity check (fails fast if key is bad)
+          # Fail fast if key/host is wrong
           ssh -i ~/.ssh/id_vps -o BatchMode=yes -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" true
 
           {
@@ -132,5 +144,15 @@ jobs:
             "chown -R www-data:www-data '${WEB_ROOT}' || true; \
              (systemctl reload nginx || service nginx reload || true)"
 
-      - name: Smoke test
-        run: curl -fsS -I https://app.nutshellnewsapp.com | sed -n '1,10p'
+      - name: Smoke test (HEAD)
+        shell: bash
+        run: |
+          url="${SHARE_BASE_URL%/}"
+          curl -fsS -I "$url" | sed -n '1,15p'
+
+      - name: Smoke test (version.json)
+        shell: bash
+        run: |
+          url="${SHARE_BASE_URL%/}/version.json"
+          echo "GET $url"
+          curl -fsS "$url" | jq .
