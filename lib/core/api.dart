@@ -1,20 +1,20 @@
 // lib/core/api.dart
 //
-// CinePulse HTTP client & endpoints
+// NutshellNews HTTP client & endpoints
 //
 // Responsibilities:
 // - Resolve which backend base URL to talk to (prod by default).
-// - Provide typed helpers to call the CinePulse API.
+// - Provide typed helpers to call the NutshellNews API.
 // - Handle retry/backoff, decode responses, and pagination.
-// - Build deep links for story pages.
-// - Build CORS-safe thumbnail URLs using the backend /v1/img proxy.
+// - Proxy thumbnails via API /v1/img to keep CORS clean.
 //
 // Production changes:
-// - kApiBaseUrl is now the single source of truth for ALL network access
+// - kApiBaseUrl is the single source of truth for ALL network access
 //   including thumbnails (proxyImageUrl()).
 // - proxyImageUrl() ALWAYS points to API_BASE_URL/v1/img?u=..., never the
-//   Netlify origin.
+//   app origin.
 // - We send X-CinePulse-Client and nginx is configured to allow it in CORS.
+//   (Keep this header name unless you also update server CORS.)
 // - We keep cursor pagination and ApiPage model.
 
 import 'dart:async';
@@ -24,6 +24,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'deep_links.dart' show kShareBaseUrl, buildShareUrl; // <-- use single source
 
 /// ------------------------------------------------------------
 /// Resolve base URLs
@@ -54,22 +55,8 @@ String _resolveApiBase() {
   return 'https://api.nutshellnewsapp.com';
 }
 
-String _resolveDeepBase() {
-  // Optional override:
-  //   --dart-define=DEEP_LINK_BASE=https://cinepulse.app/#/s
-  const fromDefine = String.fromEnvironment('DEEP_LINK_BASE');
-  if (fromDefine.isNotEmpty) return fromDefine;
-
-  // On web builds, default deep link base to current origin.
-  if (kIsWeb) return '${Uri.base.origin}/#/s';
-
-  // Mobile fallback:
-  return 'https://cinepulse.netlify.app/#/s';
-}
-
-/// Public bases used everywhere else.
+/// Public base used everywhere else.
 final String kApiBaseUrl = _resolveApiBase();
-final String kDeepLinkBase = _resolveDeepBase();
 
 /// A small flavor string you can show in debug banners / settings pages.
 String get currentApiFlavor {
@@ -79,11 +66,17 @@ String get currentApiFlavor {
   return 'prod';
 }
 
-/// Build a CinePulse deep link to open a story inside the app UI.
-Uri deepLinkForStoryId(String storyId) {
-  final encoded = Uri.encodeComponent(storyId);
-  return Uri.parse('$kDeepLinkBase/$encoded');
-}
+/// --------------------------------------------------------------------------
+/// Deep links (delegate to single source of truth in deep_links.dart)
+/// --------------------------------------------------------------------------
+
+// Deprecated compatibility base (do not use directly in new code).
+@Deprecated('Use buildShareUrl(id) from deep_links.dart')
+final String kDeepLinkBase = '$kShareBaseUrl/#/s';
+
+/// Back-compat shim for older call sites.
+/// Always builds: https://app.nutshellnewsapp.com/#/s/<encoded-id>
+Uri deepLinkForStoryId(String storyId) => Uri.parse(buildShareUrl(storyId));
 
 /// ------------------------------------------------------------
 /// Image proxy helper
@@ -91,11 +84,7 @@ Uri deepLinkForStoryId(String storyId) {
 /// Web browsers block <img src="https://i.ytimg.com/..."> if the remote
 /// host doesn't send CORS headers. We solve this by routing all images
 /// through our API's /v1/img proxy, which DOES send CORS. This MUST use
-/// the API domain, not the Netlify origin, otherwise you get 404 + CORS
-/// errors like we saw in DevTools.
-///
-/// Usage in widgets:
-///   Image.network(proxyImageUrl(story.thumbUrl))
+/// the API domain, not the app origin.
 /// ------------------------------------------------------------
 String proxyImageUrl(String rawImageUrl) {
   if (rawImageUrl.isEmpty) return '';
@@ -150,7 +139,6 @@ class ApiClient {
       try {
         final r = await op().timeout(_timeout);
         if (_isRetriableStatus(r.statusCode) && i < attempts) {
-          // soft backoff then retry
           await Future<void>.delayed(backoff * (i + 1));
           continue;
         }
@@ -180,19 +168,13 @@ class ApiClient {
   Never _fail(http.Response r) {
     final path = r.request?.url.path ?? '';
     var body = r.body;
-    if (body.length > 400) {
-      body = '${body.substring(0, 400)}…';
-    }
+    if (body.length > 400) body = '${body.substring(0, 400)}…';
 
     if (r.statusCode == 429) {
-      throw Exception(
-        'API $path rate limited (429). Please try again shortly.',
-      );
+      throw Exception('API $path rate limited (429). Please try again shortly.');
     }
     if (r.statusCode >= 500) {
-      throw Exception(
-        'API $path failed (${r.statusCode}). Please try again.',
-      );
+      throw Exception('API $path failed (${r.statusCode}). Please try again.');
     }
     throw Exception('API $path failed (${r.statusCode}): $body');
   }
@@ -206,14 +188,12 @@ class ApiClient {
         .toList(growable: false);
 
     final cursor = map['next_cursor'];
-    final nextCursor =
-        (cursor is String && cursor.isNotEmpty) ? cursor : null;
+    final nextCursor = (cursor is String && cursor.isNotEmpty) ? cursor : null;
 
     return ApiPage(items: items, nextCursor: nextCursor);
   }
 
   /// Normalize Flutter tab keys to server categories.
-  /// If something weird hits us, fall back to "all".
   String _normalizeTab(String tab) {
     switch (tab) {
       case 'all':
@@ -228,7 +208,6 @@ class ApiClient {
   }
 
   /// Build a URL against kApiBaseUrl, with optional query params.
-  /// This preserves the upstream path (/v1/feed, /v1/story/..., etc.).
   Uri _build(String path, [Map<String, String>? q]) {
     final pieces = <String>[
       if (_base.path.isNotEmpty && _base.path != '/') _base.path,
@@ -242,14 +221,6 @@ class ApiClient {
   // Public API calls
   // ------------------------------------------------------------
 
-  /// Fetch 1 page of the feed with cursor pagination.
-  ///
-  /// - `tab` = "all", "trailers", ...
-  /// - `since` = optional DateTime to only include newer stories.
-  /// - `cursor` = opaque string from previous page's next_cursor.
-  /// - `limit` = page size.
-  ///
-  /// Returns ApiPage(items, nextCursor).
   Future<ApiPage> fetchFeedPage({
     String tab = 'all',
     DateTime? since,
@@ -264,10 +235,8 @@ class ApiClient {
     };
 
     if (since != null) {
-      // Send RFC3339 UTC
-      params['since'] = since.toUtc().toIso8601String();
+      params['since'] = since.toUtc().toIso8601String(); // RFC3339 UTC
     }
-
     if (cursor != null && cursor.isNotEmpty) {
       params['cursor'] = cursor;
     }
@@ -285,18 +254,15 @@ class ApiClient {
     }
   }
 
-  /// Convenience shim for older code that just wants "List<Story>".
   Future<List<Story>> fetchFeed({
     String tab = 'all',
     DateTime? since,
     int limit = 30,
   }) async {
-    final page =
-        await fetchFeedPage(tab: tab, since: since, limit: limit);
+    final page = await fetchFeedPage(tab: tab, since: since, limit: limit);
     return page.items;
   }
 
-  /// Full-text search.
   Future<List<Story>> searchStories(
     String query, {
     int limit = 10,
@@ -319,8 +285,6 @@ class ApiClient {
     }
   }
 
-  /// Fetch a single story by ID.
-  /// We URL-encode storyId so characters like ":" or "/" don't break the path.
   Future<Story> fetchStory(String storyId) async {
     final safeId = Uri.encodeComponent(storyId);
     final uri = _build('/v1/story/$safeId');
@@ -338,8 +302,6 @@ class ApiClient {
     }
   }
 
-  /// Ask the API /health endpoint for feed_len, etc.
-  /// We use this for diagnostics, maybe "is backend alive" banners.
   Future<int> fetchApproxFeedLength() async {
     final uri = _build('/health');
     try {
