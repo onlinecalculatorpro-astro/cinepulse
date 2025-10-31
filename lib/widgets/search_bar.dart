@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey, LogicalKeySet;
 import '../theme/theme_colors.dart'; // neutralPillBg, outlineHairline, primaryTextColor
 
-// Visual constants (safe across Windows/Chrome @125% DPI etc.)
-const double _kSearchBarHeight = 48; // Material min touch height
-const double _kIconSize = 20;        // balanced with 48px bar
+// Tweaks: slimmer bar but still cross-platform safe
+const double _kSearchBarHeight = 44; // was 48
+const double _kIconSize = 18;        // was 20
 const double _kCornerRadius = 8;
 
 /// Inline search field used in Row 3 of tabs.
@@ -80,9 +80,9 @@ class _SearchBarInputState extends State<SearchBarInput> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    final textCol = primaryTextColor(context);
-    final hintCol = textCol.withOpacity(0.60);
-    final outline = _focusNode.hasFocus ? cs.primary : outlineHairline(context);
+    final textCol   = primaryTextColor(context);
+    final hintCol   = textCol.withOpacity(0.60);
+    final outline   = _focusNode.hasFocus ? cs.primary : outlineHairline(context);
 
     // ESC closes the bar
     return Shortcuts(
@@ -101,7 +101,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             curve: Curves.easeOut,
-            height: _kSearchBarHeight, // thicker + consistent
+            height: _kSearchBarHeight,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               color: neutralPillBg(context),
@@ -126,7 +126,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                     maxLines: 1,
                     cursorColor: cs.primary,
                     textAlignVertical: TextAlignVertical.center,
-                    // Prevent ascender/descender clipping across platforms/DPI
+                    // lock line metrics to avoid clipping at this thinner height
                     strutStyle: const StrutStyle(height: 1.35, forceStrutHeight: true),
                     onTapOutside: (_) => FocusScope.of(context).unfocus(),
                     style: theme.textTheme.bodyMedium?.copyWith(
@@ -136,7 +136,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                       fontWeight: FontWeight.w500,
                     ),
                     decoration: InputDecoration(
-                      isCollapsed: true, // compact, but height comes from parent
+                      isCollapsed: true,
                       border: InputBorder.none,
                       hintText: widget.hintText,
                       hintStyle: theme.textTheme.bodyMedium?.copyWith(
