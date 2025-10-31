@@ -641,6 +641,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
 
           // Row 3: inline search bar (smooth show/hide + autofocus)
+          // NOTE: no external height wrapper → lets SearchBarInput own its 48px height.
           AnimatedSize(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
@@ -648,50 +649,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: showSearchRow
                 ? Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    // Local theme override so the search doesn't inherit any red.
-                    child: Theme(
-                      data: Theme.of(context).copyWith(
-                        inputDecorationTheme: InputDecorationTheme(
-                          filled: true,
-                          fillColor: neutralPillBg(context),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 10),
-                          hintStyle: TextStyle(color: faintTextColor(context)),
-                          prefixIconColor: secondaryTextColor(context),
-                          suffixIconColor: secondaryTextColor(context),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(
-                              color: outlineHairline(context),
-                              width: 1,
-                            ),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(
-                              color: outlineHairline(context),
-                              width: 1.2,
-                            ),
-                          ),
-                        ),
-                        textSelectionTheme: TextSelectionThemeData(
-                          cursorColor: secondaryTextColor(context),
-                          selectionColor:
-                              Theme.of(context).colorScheme.primary.withOpacity(0.15),
-                          selectionHandleColor: secondaryTextColor(context),
-                        ),
-                      ),
-                      child: SearchBarInput(
-                        controller: _search,
-                        autofocus: true,
-                        onExitSearch: () {
-                          setState(() {
-                            _search.clear();
-                            _showHeaderSearch = false;
-                          });
-                          FocusScope.of(context).unfocus();
-                        },
-                      ),
+                    child: SearchBarInput(
+                      controller: _search,
+                      autofocus: true,
+                      onExitSearch: () {
+                        setState(() {
+                          _search.clear();
+                          _showHeaderSearch = false;
+                        });
+                        FocusScope.of(context).unfocus();
+                      },
                     ),
                   )
                 : const SizedBox.shrink(),
