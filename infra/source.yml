@@ -1,11 +1,10 @@
 # =============================================================================
 # NutshellNews Root Source Config
 # =============================================================================
-# This file defines global behavior and references per-vertical source lists.
-# The scheduler will:
+# Loader order:
 #   1) Load THIS file.
-#   2) Read each file in include_verticals (below).
-#   3) Merge all youtube channels + rss feeds/buckets + any throttle overrides
+#   2) Read each YAML listed under include_verticals.
+#   3) Merge all YouTube channels + RSS feeds/buckets + throttle overrides
 #      into one in-memory config for polling.
 # =============================================================================
 
@@ -16,23 +15,23 @@ meta:
   share_base_url: "https://app.nutshellnewsapp.com/#/s"
 
 # -----------------------------------------------------------------------------
-# Global throttle / courtesy
-# Minimum seconds to wait before hitting the same domain again.
-# Vertical files can override/extend this map.
+# Global throttle / courtesy (vertical files can override/extend)
 # -----------------------------------------------------------------------------
 throttle:
   per_domain_min_seconds:
-    default: 0
-    youtube.com: 0
-    googlevideo.com: 0
-    bollywoodhungama.com: 0
-    filmcompanion.in: 0
-    pinkvilla.com: 0
-    koimoi.com: 0
-    tellyupdates.com: 0
+    default: 180
+    youtube.com: 120
+    googlevideo.com: 120
+    bollywoodhungama.com: 180
+    pinkvilla.com: 240
+    indianexpress.com: 180
+    thehindu.com: 180
+    hindustantimes.com: 180
+    ndtv.com: 180
+    timesofindia.indiatimes.com: 240
 
 # -----------------------------------------------------------------------------
-# YouTube defaults (channels themselves are defined in vertical files)
+# YouTube defaults (channels are defined in vertical files)
 # -----------------------------------------------------------------------------
 youtube:
   defaults:
@@ -42,10 +41,10 @@ youtube:
     published_after_hours: 72
     language: "en"
     region: "IN"
-  channels: []   # actual channels come from infra/verticals/*.yml
+  channels: []   # populated from infra/verticals/*.yml
 
 # -----------------------------------------------------------------------------
-# RSS defaults (feeds themselves are defined in vertical files)
+# RSS defaults (feeds are defined in vertical files)
 # -----------------------------------------------------------------------------
 rss:
   defaults:
@@ -57,12 +56,12 @@ rss:
       - "behind the scenes"
       - "interview"
       - "live stream"
-  # The scheduler's merge step will union all buckets/feeds from each vertical file
+  # merged from verticals
   feeds: []
   buckets: {}
 
 # -----------------------------------------------------------------------------
-# TMDb enrichment / trending config (global)
+# TMDb enrichment / trending (global)
 # -----------------------------------------------------------------------------
 tmdb:
   api_key_env: "TMDB_API_KEY"
@@ -126,26 +125,34 @@ ranking_weights:
 # Scheduler / poller behavior (global)
 # -----------------------------------------------------------------------------
 scheduler:
-  poll_interval_min: 5           # run a full poll loop every 5 minutes
+  poll_interval_min: 5           # full poll loop every 5 minutes
   published_after_hours: 36      # ignore items older than 36h
   use_sources_file: true
-  # Enable RSS buckets defined inside included vertical files:
+
+  # Enable ONLY buckets that actually exist in the included vertical files
+  # Entertainment buckets:
   rss_buckets_enabled:
-    - news_india
-    - news_hindi_tv_ott
-    - top_stories_national       # ← NEW: wire the national top stories bucket
+    - trade_authority
+    - mainstream_quality
+    - entertainment_filtered
+    - ott_streaming
+    - reality_tv
+    # Top-stories (national) buckets:
+    - mainstream_national
+    - business_macro
+    - explainers_longform
+
   per_run_limits:
     youtube_channels: 10         # max YT channels per loop
     rss_feeds: 12                # max RSS feeds per loop
+
   poll_spread_sec: 2             # delay between individual polls
   poll_jitter_sec: 10            # random jitter between loops
 
 # -----------------------------------------------------------------------------
-# Which vertical config files to merge in
-# Add more vertical YAMLs here (sports, travel, tech, etc.) over time.
-# Paths are relative to this root file unless absolute.
+# Vertical config files to merge
+# (add more: sports, travel, tech, etc.)
 # -----------------------------------------------------------------------------
 include_verticals:
   - verticals/top_stories_national.yml
   - verticals/entertainment.yml
-  - verticals/top_stories_national.yml   # ← NEW
