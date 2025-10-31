@@ -16,11 +16,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Single sources of truth
-      API_BASE_URL:   ${{ secrets.API_BASE_URL }}    # e.g. https://api.nutshellnewsapp.com
-      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL }}  # e.g. https://app.nutshellnewsapp.com
+      API_BASE_URL:   ${{ secrets.API_BASE_URL }}     # e.g. https://api.nutshellnewsapp.com
+      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL }}   # e.g. https://app.nutshellnewsapp.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate build secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in API_BASE_URL SHARE_BASE_URL; do
+            val="${!v:-}"
+            if [ -z "$val" ]; then
+              echo "::error title=Missing secret::$v is not set"; exit 1
+            fi
+            if ! printf '%s' "$val" | grep -Eq '^https?://'; then
+              echo "::error title=Bad URL::$v must start with http(s)://"; exit 1
+            fi
+          done
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -59,11 +73,6 @@ jobs:
           api="${API_NORM%/}"
           share="${SHARE_NORM%/}"
 
-          # --dart-define keys expected by your app code:
-          #   API_BASE_URL      → core/api.dart
-          #   SHARE_BASE_URL    → core/deep_links.dart (kShareSite / buildShareUrl)
-          # Back-compat define for older code (safe no-op if unused):
-          #   DEEP_LINK_BASE    → equals SHARE_BASE_URL
           flutter build web --release \
             ${{ steps.args.outputs.arg }} \
             --pwa-strategy=none \
@@ -71,13 +80,16 @@ jobs:
             --dart-define=SHARE_BASE_URL="$share" \
             --dart-define=DEEP_LINK_BASE="$share"
 
-          # Stamp build metadata
-          jq -n --arg commit "$GITHUB_SHA" \
-                --arg built_at "$(date -u +%FT%TZ)" \
-                --arg api "$api" \
-                --arg share "$share" \
-                '{commit:$commit,built_at:$built_at,api_base:$api,share_base:$share}' \
-            > build/web/version.json
+          # Stamp build metadata (avoid jq dependency)
+          mkdir -p build/web
+          cat > build/web/version.json <<EOF
+          {
+            "commit": "${GITHUB_SHA}",
+            "built_at": "$(date -u +%FT%TZ)",
+            "api_base": "${api}",
+            "share_base": "${share}"
+          }
+          EOF
 
       - name: Upload web build
         uses: actions/upload-artifact@v4
@@ -95,13 +107,22 @@ jobs:
       VPS_USER:        ${{ secrets.VPS_USER }}          # e.g. root (or a sudo user)
       SSH_PORT:        ${{ secrets.SSH_PORT }}          # optional (defaults to 22)
       WEB_ROOT:        ${{ secrets.WEB_ROOT }}          # optional (default below)
-      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL }}    # for smoke test
+      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL }}    # for smoke tests
     steps:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
           name: web-build
           path: build/web
+
+      - name: Validate deploy vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SHARE_BASE_URL:?SHARE_BASE_URL is required}"
+          if ! printf '%s' "$SHARE_BASE_URL" | grep -Eq '^https?://'; then
+            echo "::error title=Bad URL::SHARE_BASE_URL must start with http(s)://"; exit 1
+          fi
 
       - name: Prepare SSH
         shell: bash
@@ -115,10 +136,7 @@ jobs:
           : "${SSH_PORT:=22}"
           : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
 
-          # Host key to known_hosts (non-interactive)
           ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
-
-          # Fail fast if key/host is wrong
           ssh -i ~/.ssh/id_vps -o BatchMode=yes -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" true
 
           {
@@ -147,12 +165,15 @@ jobs:
       - name: Smoke test (HEAD)
         shell: bash
         run: |
+          set -euo pipefail
           url="${SHARE_BASE_URL%/}"
+          echo "HEAD $url"
           curl -fsS -I "$url" | sed -n '1,15p'
 
       - name: Smoke test (version.json)
         shell: bash
         run: |
+          set -euo pipefail
           url="${SHARE_BASE_URL%/}/version.json"
           echo "GET $url"
-          curl -fsS "$url" | jq .
+          curl -fsS "$url" | sed -n '1,80p'
