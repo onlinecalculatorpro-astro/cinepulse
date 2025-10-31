@@ -48,6 +48,9 @@ import 'core/utils.dart'; // fadeRoute()
 // NEW: shared category state + helpers (single source of truth)
 import 'core/category_prefs.dart';
 
+// Deep-link site (single source of truth)
+import 'core/deep_links.dart' show kShareSite;
+
 // Feature tabs
 import 'features/alerts/alerts_screen.dart';
 import 'features/discover/discover_screen.dart';
@@ -191,11 +194,14 @@ class _RootShellState extends State<RootShell> {
   /* ───────────────────────── deep link (/s/<id>) ───────────────────────── */
 
   void _captureInitialDeepLink() {
-    final frag = Uri.base.fragment;
+    // Support both "#/s/<id>" and "/#/s/<id>" (encoded ID allowed).
+    final frag = Uri.base.fragment; // after '#'
     final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
     final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
     if (match != null) {
-      _pendingDeepLinkId = match.group(2);
+      final raw = match.group(2) ?? '';
+      // IMPORTANT: decode the encoded component (e.g., "rss%3Akoimoi.com%3A…")
+      _pendingDeepLinkId = Uri.decodeComponent(raw);
     }
   }
 
@@ -490,9 +496,9 @@ class _RootShellState extends State<RootShell> {
               },
 
               // SHARE / LEGAL
-              appShareUrl: 'https://cinepulse.netlify.app',
-              privacyUrl: 'https://example.com/privacy', // TODO real link
-              termsUrl: 'https://example.com/terms', // TODO real link
+              appShareUrl: kShareSite, // ← single source of truth
+              privacyUrl: 'https://example.com/privacy', // TODO: real link
+              termsUrl: 'https://example.com/terms',     // TODO: real link
             );
           },
         ),
@@ -690,7 +696,7 @@ class _AppLanguageSheetState extends State<_AppLanguageSheet> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Change CinePulse UI chrome. Headlines and story text still '
+              'Change NutshellNews UI chrome. Headlines and story text still '
               'follow your content settings.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
@@ -758,7 +764,7 @@ class _ResponsiveWidth extends StatelessWidget {
 }
 
 /* ───────────────────────── CINE BOTTOM NAV BAR ───────────────────────── */
-class CineBottomNavBar extends StatelessWidget {
+class CineBottomNavBar extends StatelessWidget { // keeping symbol name for safety
   const CineBottomNavBar({
     super.key,
     required this.currentIndex,
