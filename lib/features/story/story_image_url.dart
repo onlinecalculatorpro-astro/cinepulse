@@ -1,10 +1,12 @@
 // lib/features/story/story_image_url.dart
 //
-// Shared logic to choose a safe hero image URL for a Story.
-// - prefer posterUrl, fallback to thumbUrl
-// - drop obvious junk (demo.tagdiv.com etc.)
-// - avoid /v1/img proxy URLs on web (CORS / broken thumbs)
-// - if the URL is relative, prefix API_BASE_URL from --dart-define
+// Choose a safe hero image URL for a Story.
+// Policy (to avoid browser CORS):
+//   • Prefer posterUrl, fall back to thumbUrl.
+//   • Reject junk/demo domains.
+//   • For any absolute http/https URL, return API /v1/img?u=<encoded>.
+//   • For relative paths, prefix API_BASE_URL directly.
+//   • If API_BASE_URL is missing, fall back to the original URL.
 //
 // Usage:
 //   final imgUrl = resolveStoryImageUrl(story);
@@ -12,67 +14,54 @@
 
 import '../../core/models.dart';
 
-// This reads the value you pass in CI with
-//   --dart-define=API_BASE_URL=https://api.whatever.com
-// IMPORTANT: no trailing slash in that secret (your workflow already trims it)
-const String _API_BASE = String.fromEnvironment(
-  'API_BASE_URL',
-  defaultValue: '',
-);
+// Set in CI with:
+//   --dart-define=API_BASE_URL=https://api.nutshellnewsapp.com
+// (no trailing slash; your workflow trims it)
+const String _API_BASE = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+
+bool _isHttp(Uri u) => u.hasScheme && (u.scheme == 'http' || u.scheme == 'https');
+
+bool _isJunk(String url) {
+  // Block obvious demo/placeholder hosts etc.
+  if (url.contains('demo.tagdiv.com')) return true;
+  return false;
+}
+
+String _proxy(String absoluteUrl) {
+  if (_API_BASE.isEmpty) return absoluteUrl; // graceful fallback
+  final enc = Uri.encodeComponent(absoluteUrl);
+  return '$_API_BASE/v1/img?u=$enc';
+}
 
 String resolveStoryImageUrl(Story story) {
-  // 1. pick candidate from story
+  // 1) pick candidate
   final cand = (story.posterUrl?.isNotEmpty == true)
       ? story.posterUrl!
       : (story.thumbUrl ?? '');
-
-  if (cand.isEmpty) return '';
-
-  // 2. reject obvious garbage domains
-  if (cand.contains('demo.tagdiv.com')) return '';
+  if (cand.isEmpty || _isJunk(cand)) return '';
 
   final uri = Uri.tryParse(cand);
   if (uri == null) return '';
 
-  // Inner candidate if this was some proxy like /v1/img?u=<real-url>
-  final innerParam =
-      uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
-
-  // If that innerParam points to demo.tagdiv.com, nuke it too
-  if (innerParam.contains('demo.tagdiv.com')) {
-    return '';
+  // 2) If this is already our own proxy (/v1/img?u=...), keep it
+  final isAlreadyProxy = uri.path.toLowerCase().contains('/v1/img');
+  if (isAlreadyProxy) {
+    // Also reject proxied junk if present in inner param
+    final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
+    if (inner.isNotEmpty && _isJunk(inner)) return '';
+    return _API_BASE.isNotEmpty ? cand : (inner.isNotEmpty ? inner : cand);
   }
 
-  final pathLower = uri.path.toLowerCase();
-
-  // 3. We generally do NOT want to use `/v1/img?...` thumbnails in web,
-  //    because they'll 404/CORS on Netlify. Try to fall back to the inner real URL.
-  if (pathLower.contains('/v1/img')) {
-    final innerUri = Uri.tryParse(innerParam);
-    if (innerUri != null &&
-        innerUri.hasScheme &&
-        (innerUri.scheme == 'http' || innerUri.scheme == 'https')) {
-      return innerParam;
-    }
-    // couldn't salvage -> give up
-    return '';
+  // 3) Absolute external URL → always go through API proxy to avoid CORS
+  if (_isHttp(uri)) {
+    return _proxy(cand);
   }
 
-  // 4. If it's already absolute http/https, just use it as-is.
-  if (uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https')) {
-    return cand;
-  }
-
-  // 5. Otherwise it's probably a relative path like "/images/foo.jpg".
-  //    Prefix API_BASE_URL (which your GitHub Action passes via --dart-define).
+  // 4) Relative path → serve from API base directly
   if (_API_BASE.isNotEmpty) {
-    if (cand.startsWith('/')) {
-      return '$_API_BASE$cand';
-    } else {
-      return '$_API_BASE/$cand';
-    }
+    return cand.startsWith('/') ? '$_API_BASE$cand' : '$_API_BASE/$cand';
   }
 
-  // 6. Last resort: return whatever we had.
+  // 5) Last resort
   return cand;
 }
