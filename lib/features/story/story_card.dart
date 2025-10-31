@@ -1,6 +1,6 @@
 // lib/features/story/story_card.dart
 //
-// CinePulse card (mobile-first).
+// NutshellNews card (mobile-first).
 //
 // Uses theme tokens/helpers (theme/theme_colors.dart, app theme) — no
 // hard-coded colors for themed elements.
@@ -21,6 +21,7 @@ import '../../core/api.dart';
 import '../../core/cache.dart';
 import '../../core/models.dart';
 import '../../core/utils.dart';
+import '../../core/deep_links.dart'; // buildShareUrl(id)
 import '../../theme/theme_colors.dart';
 import 'story_pager.dart'; // StoryPagerScreen
 import 'story_image_url.dart'; // resolveStoryImageUrl
@@ -94,7 +95,7 @@ class _StoryCardState extends State<StoryCard> {
   }
 
   Future<void> _share(BuildContext context) async {
-    final deep = deepLinkForStoryId(widget.story.id).toString();
+    final deep = buildShareUrl(widget.story.id); // canonical: https://app.nutshellnewsapp.com/#/s/<id>
     try {
       if (!kIsWeb) {
         await Share.share(deep);
@@ -104,9 +105,7 @@ class _StoryCardState extends State<StoryCard> {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened',
-          ),
+          content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened'),
         ),
       );
     } catch (_) {
