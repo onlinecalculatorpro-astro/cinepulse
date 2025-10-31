@@ -31,7 +31,7 @@ import 'models.dart';
 
 String _resolveApiBase() {
   // Highest priority: explicit build-time override
-  //   flutter build web --dart-define=API_BASE_URL=https://api.onlinecalculatorpro.org
+  //   flutter build web --dart-define=API_BASE_URL=https://api.nutshellnewsapp.com
   const fromDefine = String.fromEnvironment('API_BASE_URL');
   if (fromDefine.isNotEmpty) return fromDefine;
 
@@ -51,7 +51,7 @@ String _resolveApiBase() {
   }
 
   // Default: production API
-  return 'https://api.onlinecalculatorpro.org';
+  return 'https://api.nutshellnewsapp.com';
 }
 
 String _resolveDeepBase() {
