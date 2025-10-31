@@ -146,5 +146,6 @@ scheduler:
 # Paths are relative to this root file unless absolute.
 # -----------------------------------------------------------------------------
 include_verticals:
+  - verticals/top_stories_national.yml
   - verticals/entertainment.yml
   - verticals/top_stories_national.yml   # ← NEW
