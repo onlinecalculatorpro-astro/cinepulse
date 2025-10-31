@@ -8,14 +8,13 @@
 // - Handle retry/backoff, decode responses, and pagination.
 // - Proxy thumbnails via API /v1/img to keep CORS clean.
 //
-// Production changes:
-// - kApiBaseUrl is the single source of truth for ALL network access
+// Production notes:
+// - kApiBaseUrl is the single source of truth for ALL network access,
 //   including thumbnails (proxyImageUrl()).
-// - proxyImageUrl() ALWAYS points to API_BASE_URL/v1/img?u=..., never the
-//   app origin.
-// - We send X-CinePulse-Client and nginx is configured to allow it in CORS.
-//   (Keep this header name unless you also update server CORS.)
-// - We keep cursor pagination and ApiPage model.
+// - proxyImageUrl() ALWAYS points to API_BASE_URL/v1/img?u=..., never the app origin.
+// - We send X-CinePulse-Client and nginx is configured to allow it in CORS
+//   (keep this header name unless you also update server CORS).
+// - Cursor pagination via ApiPage is preserved.
 
 import 'dart:async';
 import 'dart:convert';
@@ -24,11 +23,11 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
-import 'deep_links.dart' show kShareBaseUrl, buildShareUrl; // <-- use single source
+import 'deep_links.dart' show buildShareUrl; // single source of truth for share URLs
 
-/// ------------------------------------------------------------
-/// Resolve base URLs
-/// ------------------------------------------------------------
+// ------------------------------------------------------------
+// Resolve base URLs
+// ------------------------------------------------------------
 
 String _resolveApiBase() {
   // Highest priority: explicit build-time override
@@ -44,8 +43,7 @@ String _resolveApiBase() {
   }
 
   // Local emulator fallback (opt-in):
-  //   --dart-define=USE_LOCAL_DEV=true
-  // We assume Android emulator (10.0.2.2 -> host machine).
+  //   --dart-define=USE_LOCAL_DEV=true  (Android emulator: 10.0.2.2 -> host)
   const useLocal = String.fromEnvironment('USE_LOCAL_DEV');
   if (useLocal.toLowerCase() == 'true' || useLocal == '1') {
     return 'http://10.0.2.2:8000';
@@ -66,48 +64,54 @@ String get currentApiFlavor {
   return 'prod';
 }
 
-/// --------------------------------------------------------------------------
-/// Deep links (delegate to single source of truth in deep_links.dart)
-/// --------------------------------------------------------------------------
+// ------------------------------------------------------------
+// Deep links
+// - New code should call buildShareUrl(id) from deep_links.dart.
+// - kDeepLinkBase is kept only for legacy logging/debug messages.
+// ------------------------------------------------------------
+final String kDeepLinkBase = (() {
+  // Optional override:
+  //   --dart-define=DEEP_LINK_BASE=https://app.nutshellnewsapp.com/#/s
+  const fromDefine = String.fromEnvironment('DEEP_LINK_BASE');
+  if (fromDefine.isNotEmpty) return fromDefine;
 
-// Deprecated compatibility base (do not use directly in new code).
-@Deprecated('Use buildShareUrl(id) from deep_links.dart')
-final String kDeepLinkBase = '$kShareBaseUrl/#/s';
+  // On web builds, default to current origin (supports custom domains).
+  if (kIsWeb) return '${Uri.base.origin}/#/s';
+
+  // Mobile fallback:
+  return 'https://app.nutshellnewsapp.com/#/s';
+})();
 
 /// Back-compat shim for older call sites.
 /// Always builds: https://app.nutshellnewsapp.com/#/s/<encoded-id>
 Uri deepLinkForStoryId(String storyId) => Uri.parse(buildShareUrl(storyId));
 
-/// ------------------------------------------------------------
-/// Image proxy helper
-///
-/// Web browsers block <img src="https://i.ytimg.com/..."> if the remote
-/// host doesn't send CORS headers. We solve this by routing all images
-/// through our API's /v1/img proxy, which DOES send CORS. This MUST use
-/// the API domain, not the app origin.
-/// ------------------------------------------------------------
+// ------------------------------------------------------------
+// Image proxy helper
+//
+// Browsers may block <img src="https://i.ytimg.com/..."> due to CORS.
+// Route all images through our API's /v1/img proxy which sends CORS.
+// This MUST use the API domain, not the app origin.
+// ------------------------------------------------------------
 String proxyImageUrl(String rawImageUrl) {
   if (rawImageUrl.isEmpty) return '';
   final encoded = Uri.encodeQueryComponent(rawImageUrl);
   return '$kApiBaseUrl/v1/img?u=$encoded';
 }
 
-/// ------------------------------------------------------------
-/// ApiPage: feed results + opaque cursor
-/// ------------------------------------------------------------
+// ------------------------------------------------------------
+// ApiPage: feed results + opaque cursor
+// ------------------------------------------------------------
 class ApiPage {
   final List<Story> items;
   final String? nextCursor;
 
-  const ApiPage({
-    required this.items,
-    required this.nextCursor,
-  });
+  const ApiPage({required this.items, required this.nextCursor});
 }
 
-/// ------------------------------------------------------------
-/// Low-level HTTP client with retry
-/// ------------------------------------------------------------
+// ------------------------------------------------------------
+// Low-level HTTP client with retry
+// ------------------------------------------------------------
 const _timeout = Duration(seconds: 12);
 
 class ApiClient {
@@ -117,8 +121,7 @@ class ApiClient {
   final http.Client _client = http.Client();
 
   /// Request headers for every API call.
-  /// NOTE: nginx is configured to allow X-CinePulse-Client
-  /// in Access-Control-Allow-Headers.
+  /// NOTE: nginx is configured to allow X-CinePulse-Client in CORS.
   Map<String, String> _headers() => const {
         'Accept': 'application/json',
         'Accept-Encoding': 'gzip',
@@ -323,9 +326,9 @@ class ApiClient {
 /// Singleton client shared everywhere.
 final ApiClient _api = ApiClient(baseUrl: kApiBaseUrl);
 
-/// ------------------------------------------------------------
-/// Top-level helpers (back-compat for existing widgets)
-/// ------------------------------------------------------------
+// ------------------------------------------------------------
+// Top-level helpers (back-compat for existing widgets)
+// ------------------------------------------------------------
 
 Future<List<Story>> fetchFeed({
   String tab = 'all',
