@@ -1,0 +1,105 @@
+name: Web Deploy (Flutter to VPS)
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Flutter Web
+    runs-on: ubuntu-latest
+    env:
+      API_BASE_URL:  ${{ secrets.API_BASE_URL }}   # e.g. https://api.nutshellnewsapp.com
+      DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }} # e.g. https://app.nutshellnewsapp.com
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.35.6"
+
+      - name: Cache pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-cache-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            pub-cache-${{ runner.os }}-
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Build
+        env:
+          API_BASE_URL_NORM:  ${{ secrets.API_BASE_URL }}
+          DEEP_LINK_BASE_NORM: ${{ secrets.DEEP_LINK_BASE }}
+        run: |
+          api="${API_BASE_URL_NORM%/}"
+          deep="${DEEP_LINK_BASE_NORM%/}"
+          flutter build web --release --pwa-strategy=none \
+            --dart-define=CINE_API_BASE="$api" \
+            --dart-define=API_BASE_URL="$api" \
+            --dart-define=DEEP_LINK_BASE="$deep"
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+
+  deploy:
+    name: Deploy to VPS via rsync
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}  # your VPS private key (PEM)
+      VPS_HOST:        ${{ secrets.VPS_HOST }}         # 72.60.218.209
+      VPS_USER:        ${{ secrets.VPS_USER }}         # root (or sudo user)
+      WEB_ROOT:        ${{ secrets.WEB_ROOT }}         # /var/www/nutshellnewsapp_web
+      SSH_PORT:        ${{ secrets.SSH_PORT }}         # 22 (optional)
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+
+      - name: Prepare SSH
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
+          chmod 600 ~/.ssh/id_vps
+          : "${SSH_PORT:=22}"
+          : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
+          ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+          {
+            echo "SSH_PORT=${SSH_PORT}"
+            echo "WEB_ROOT=${WEB_ROOT}"
+          } >> "$GITHUB_ENV"
+
+      - name: Ensure target dir exists
+        run: ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${WEB_ROOT}'"
+
+      - name: Rsync to VPS
+        run: |
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_vps -p ${SSH_PORT}" \
+            build/web/ "${VPS_USER}@${VPS_HOST}:${WEB_ROOT}/"
+
+      - name: Set perms and reload nginx
+        run: |
+          ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
+            "chown -R www-data:www-data '${WEB_ROOT}' || true; \
+             (systemctl reload nginx || service nginx reload || true)"
+
+      - name: Smoke test
+        run: curl -sS -I https://app.nutshellnewsapp.com | head -n 5
