@@ -3,6 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey, LogicalKeySet;
 import '../theme/theme_colors.dart'; // neutralPillBg, outlineHairline, primaryTextColor
 
+// Visual constants (safe across Windows/Chrome @125% DPI etc.)
+const double _kSearchBarHeight = 48; // Material min touch height
+const double _kIconSize = 20;        // balanced with 48px bar
+const double _kCornerRadius = 8;
+
 /// Inline search field used in Row 3 of tabs.
 /// Layout: [ 🔍 ][ expanding text field ][ ✕ ]
 class SearchBarInput extends StatefulWidget {
@@ -75,9 +80,9 @@ class _SearchBarInputState extends State<SearchBarInput> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
-    final textCol   = primaryTextColor(context);
-    final hintCol   = textCol.withOpacity(0.60);
-    final outline   = _focusNode.hasFocus ? cs.primary : outlineHairline(context);
+    final textCol = primaryTextColor(context);
+    final hintCol = textCol.withOpacity(0.60);
+    final outline = _focusNode.hasFocus ? cs.primary : outlineHairline(context);
 
     // ESC closes the bar
     return Shortcuts(
@@ -96,17 +101,17 @@ class _SearchBarInputState extends State<SearchBarInput> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             curve: Curves.easeOut,
-            height: 44,
+            height: _kSearchBarHeight, // thicker + consistent
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               color: neutralPillBg(context),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(_kCornerRadius),
               border: Border.all(color: outline, width: 1),
             ),
             child: Row(
               children: [
                 // 🔍 left
-                Icon(Icons.search_rounded, size: 18, color: cs.primary),
+                Icon(Icons.search_rounded, size: _kIconSize, color: cs.primary),
                 const SizedBox(width: 8),
 
                 // expanding text field
@@ -121,6 +126,8 @@ class _SearchBarInputState extends State<SearchBarInput> {
                     maxLines: 1,
                     cursorColor: cs.primary,
                     textAlignVertical: TextAlignVertical.center,
+                    // Prevent ascender/descender clipping across platforms/DPI
+                    strutStyle: const StrutStyle(height: 1.35, forceStrutHeight: true),
                     onTapOutside: (_) => FocusScope.of(context).unfocus(),
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontSize: 14,
@@ -129,7 +136,7 @@ class _SearchBarInputState extends State<SearchBarInput> {
                       fontWeight: FontWeight.w500,
                     ),
                     decoration: InputDecoration(
-                      isCollapsed: true,
+                      isCollapsed: true, // compact, but height comes from parent
                       border: InputBorder.none,
                       hintText: widget.hintText,
                       hintStyle: theme.textTheme.bodyMedium?.copyWith(
@@ -146,19 +153,23 @@ class _SearchBarInputState extends State<SearchBarInput> {
                 const SizedBox(width: 8),
 
                 // ✕ right — compact IconButton for better a11y & focus
-                Tooltip(message: 'Close search', waitDuration: const Duration(milliseconds: 400), child:
-                  IconButton(
+                Tooltip(
+                  message: 'Close search',
+                  waitDuration: const Duration(milliseconds: 400),
+                  child: IconButton(
                     onPressed: _exit,
                     splashRadius: 18,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-                    icon: Icon(Icons.close_rounded, size: 16, color: cs.primary),
+                    icon: Icon(Icons.close_rounded, size: 18, color: cs.primary),
                     style: ButtonStyle(
                       backgroundColor: WidgetStatePropertyAll(cs.primary.withOpacity(0.12)),
                       shape: WidgetStatePropertyAll(
-                        RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        RoundedRectangleBorder(borderRadius: BorderRadius.circular(_kCornerRadius)),
                       ),
-                      side: WidgetStatePropertyAll(BorderSide(color: cs.primary.withOpacity(0.40), width: 1)),
+                      side: WidgetStatePropertyAll(
+                        BorderSide(color: cs.primary.withOpacity(0.40), width: 1),
+                      ),
                       elevation: const WidgetStatePropertyAll(0),
                     ),
                   ),
