@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # REQUIRED repo secrets (no trailing slash):
-      #   API_BASE_URL       -> e.g. https://api.onlinecalculatorpro.org
-      #   DEEP_LINK_BASE     -> e.g. https://cinepulse.netlify.app
+      #   API_BASE_URL    -> e.g. https://api.nutshellnewsapp.com
+      #   DEEP_LINK_BASE  -> e.g. https://cinepulse.netlify.app
       API_BASE_URL: ${{ secrets.API_BASE_URL }}
       DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}
 
@@ -69,6 +69,7 @@ jobs:
           flutter build web --release \
             ${{ steps.args.outputs.args }} \
             --pwa-strategy=none \
+            --dart-define=CINE_API_BASE="$api" \
             --dart-define=API_BASE_URL="$api" \
             --dart-define=DEEP_LINK_BASE="$deep"
 
