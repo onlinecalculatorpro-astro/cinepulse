@@ -1,24 +1,25 @@
 # =============================================================================
-# CinePulse Root Source Config
+# NutshellNews Root Source Config
 # =============================================================================
 # This file defines global behavior and references per-vertical source lists.
 # The scheduler will:
-#   1. Load THIS file.
-#   2. Read each file in include_verticals (below).
-#   3. Merge all youtube channels + rss feeds/buckets + any throttle overrides
+#   1) Load THIS file.
+#   2) Read each file in include_verticals (below).
+#   3) Merge all youtube channels + rss feeds/buckets + any throttle overrides
 #      into one in-memory config for polling.
 # =============================================================================
 
 meta:
   regions:
     - IN
-  share_base_url: "https://cinepusle.netlify.app/#/s"
+  # Used for building app deep links in notifications / shares
+  share_base_url: "https://app.nutshellnewsapp.com/#/s"
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # Global throttle / courtesy
-# These are minimum seconds we wait before hitting the same domain again.
+# Minimum seconds to wait before hitting the same domain again.
 # Vertical files can override/extend this map.
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 throttle:
   per_domain_min_seconds:
     default: 0
@@ -30,9 +31,9 @@ throttle:
     koimoi.com: 0
     tellyupdates.com: 0
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # YouTube defaults (channels themselves are defined in vertical files)
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 youtube:
   defaults:
     enabled: true
@@ -43,9 +44,9 @@ youtube:
     region: "IN"
   channels: []   # actual channels come from infra/verticals/*.yml
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # RSS defaults (feeds themselves are defined in vertical files)
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 rss:
   defaults:
     enabled: true
@@ -56,14 +57,13 @@ rss:
       - "behind the scenes"
       - "interview"
       - "live stream"
-
-  # The scheduler merge step will union all buckets/feeds from each vertical file
+  # The scheduler's merge step will union all buckets/feeds from each vertical file
   feeds: []
   buckets: {}
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # TMDb enrichment / trending config (global)
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 tmdb:
   api_key_env: "TMDB_API_KEY"
   regions:
@@ -78,9 +78,9 @@ tmdb:
     - "ZEE5"
     - "Sony LIV"
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # Ranking model / heuristics (global)
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 rules:
   trailer_keywords:
     - "trailer"
@@ -122,26 +122,29 @@ ranking_weights:
   has_poster_bonus: 0.6
   trend_bonus: 1.2
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # Scheduler / poller behavior (global)
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 scheduler:
-  poll_interval_min: 5          # run a full poll loop every 15 minutes
-  published_after_hours: 36      # ignore stuff older than 72h
+  poll_interval_min: 5           # run a full poll loop every 5 minutes
+  published_after_hours: 36      # ignore items older than 36h
   use_sources_file: true
+  # Enable RSS buckets defined inside included vertical files:
   rss_buckets_enabled:
     - news_india
     - news_hindi_tv_ott
+    - top_stories_national       # ← NEW: wire the national top stories bucket
   per_run_limits:
     youtube_channels: 10         # max YT channels per loop
     rss_feeds: 12                # max RSS feeds per loop
-  poll_spread_sec: 2             # optional: wait this long between individual polls
-  poll_jitter_sec: 10             # optional: add this much random jitter between loops
+  poll_spread_sec: 2             # delay between individual polls
+  poll_jitter_sec: 10            # random jitter between loops
 
-# ----------------------------------------------------------------------------- 
-# NEW: which vertical config files to merge in
-# Add more vertical YAMLs here (sports, gaming, anime, etc.) over time.
-# Paths are relative to this root file unless you point to an absolute path.
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
+# Which vertical config files to merge in
+# Add more vertical YAMLs here (sports, travel, tech, etc.) over time.
+# Paths are relative to this root file unless absolute.
+# -----------------------------------------------------------------------------
 include_verticals:
   - verticals/entertainment.yml
+  - verticals/top_stories_national.yml   # ← NEW
