@@ -1,4 +1,4 @@
-name: Web Preview (Flutter → Netlify)
+name: Web Deploy (Flutter → VPS)
 
 on:
   workflow_dispatch: {}
@@ -17,7 +17,7 @@ jobs:
     env:
       # REQUIRED repo secrets (no trailing slash):
       #   API_BASE_URL    -> e.g. https://api.nutshellnewsapp.com
-      #   DEEP_LINK_BASE  -> e.g. https://cinepulse.netlify.app
+      #   DEEP_LINK_BASE  -> e.g. https://app.nutshellnewsapp.com
       API_BASE_URL: ${{ secrets.API_BASE_URL }}
       DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}
 
@@ -79,56 +79,82 @@ jobs:
       - name: Upload Web Build
         uses: actions/upload-artifact@v4
         with:
-          name: web-preview
+          name: web-build
           path: build/web
           retention-days: 7
 
   deploy:
-    name: Deploy to Netlify
+    name: Deploy to VPS via SSH/rsync
     needs: build
     runs-on: ubuntu-latest
     env:
       # REQUIRED repo secrets:
-      #   NETLIFY_AUTH_TOKEN
-      #   NETLIFY_SITE_ID
-      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+      #   SSH_PRIVATE_KEY  -> private key (PEM) that matches authorized_keys on the VPS
+      #   VPS_HOST         -> e.g. 72.60.218.209
+      #   VPS_USER         -> e.g. root (or a sudo user)
+      # OPTIONAL (recommended):
+      #   WEB_ROOT         -> e.g. /var/www/nutshellnewsapp_web
+      #   SSH_PORT         -> e.g. 22
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      VPS_HOST:        ${{ secrets.VPS_HOST }}
+      VPS_USER:        ${{ secrets.VPS_USER }}
+      WEB_ROOT:        ${{ secrets.WEB_ROOT }}
+      SSH_PORT:        ${{ secrets.SSH_PORT }}
 
     steps:
-      - name: Download web artifact (into build/web)
+      - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: web-preview
+          name: web-build
           path: build/web
 
-      - name: Add SPA redirect + cache headers
-        run: |
-          echo "/* /index.html 200" > build/web/_redirects
-          cat > build/web/_headers <<'EOF'
-          /index.html
-            Cache-Control: no-store
-
-          /flutter_service_worker.js
-            Cache-Control: no-store
-          EOF
-
-      - name: Decide whether to deploy
-        id: decide
+      - name: Prepare SSH
         shell: bash
         run: |
-          if [ -z "${NETLIFY_AUTH_TOKEN}" ] || [ -z "${NETLIFY_SITE_ID}" ]; then
-            echo "Netlify secrets missing; skipping deploy."
-            echo "SKIP_DEPLOY=1" >> "$GITHUB_ENV"
-          else
-            echo "SKIP_DEPLOY=0" >> "$GITHUB_ENV"
-          fi
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
+          chmod 600 ~/.ssh/id_vps
 
-      - name: Setup Node (Netlify CLI)
-        if: env.SKIP_DEPLOY == '0'
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+          # defaults if not provided
+          : "${SSH_PORT:=22}"
+          : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
 
-      - name: Deploy to Netlify (prod)
-        if: env.SKIP_DEPLOY == '0'
-        run: npx --yes netlify-cli@17 deploy --dir=build/web --prod --message "CI deploy $GITHUB_SHA"
+          # trust host key
+          ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+
+          # persist for later steps
+          {
+            echo "SSH_PORT=${SSH_PORT}"
+            echo "WEB_ROOT=${WEB_ROOT}"
+          } >> "$GITHUB_ENV"
+
+      - name: Create target directory (if missing)
+        run: |
+          ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
+            "mkdir -p '${WEB_ROOT}'"
+
+      - name: Rsync build to VPS
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/id_vps -p ${SSH_PORT}" \
+            build/web/ "${VPS_USER}@${VPS_HOST}:${WEB_ROOT}/"
+
+      - name: Post-deploy: permissions + nginx reload
+        run: |
+          ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" '
+            set -e
+            if command -v chown >/dev/null 2>&1; then
+              # adjust owner if you prefer root:root; www-data is typical for nginx
+              chown -R www-data:www-data "'"${WEB_ROOT}"'" || true
+            fi
+            if command -v systemctl >/dev/null 2>&1; then
+              systemctl reload nginx
+            else
+              service nginx reload || true
+            fi
+          '
+
+      - name: Smoke test (HTTPS 200)
+        run: |
+          curl -sS -I https://app.nutshellnewsapp.com | head -n 3
