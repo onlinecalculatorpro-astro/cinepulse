@@ -15,26 +15,13 @@ jobs:
     name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
-      # Single sources of truth
-      API_BASE_URL:   ${{ secrets.API_BASE_URL }}     # e.g. https://api.nutshellnewsapp.com
-      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL }}   # e.g. https://app.nutshellnewsapp.com
+      # Required
+      API_BASE_URL:   ${{ secrets.API_BASE_URL }}
+      # Optional: prefer secret → repo var → hard default
+      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL || vars.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Validate build secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-          for v in API_BASE_URL SHARE_BASE_URL; do
-            val="${!v:-}"
-            if [ -z "$val" ]; then
-              echo "::error title=Missing secret::$v is not set"; exit 1
-            fi
-            if ! printf '%s' "$val" | grep -Eq '^https?://'; then
-              echo "::error title=Bad URL::$v must start with http(s)://"; exit 1
-            fi
-          done
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -63,15 +50,16 @@ jobs:
             echo "arg=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build (with single-source bases)
-        env:
-          API_NORM:   ${{ secrets.API_BASE_URL }}
-          SHARE_NORM: ${{ secrets.SHARE_BASE_URL }}
+      - name: Build (single-source bases)
         shell: bash
         run: |
           set -euo pipefail
-          api="${API_NORM%/}"
-          share="${SHARE_NORM%/}"
+          api="${API_BASE_URL%/}"
+          share="${SHARE_BASE_URL%/}"
+
+          if [ -z "${api}" ]; then
+            echo "::error title=Missing secret::API_BASE_URL is required"; exit 1
+          fi
 
           flutter build web --release \
             ${{ steps.args.outputs.arg }} \
@@ -80,15 +68,9 @@ jobs:
             --dart-define=SHARE_BASE_URL="$share" \
             --dart-define=DEEP_LINK_BASE="$share"
 
-          # Stamp build metadata (avoid jq dependency)
           mkdir -p build/web
           cat > build/web/version.json <<EOF
-          {
-            "commit": "${GITHUB_SHA}",
-            "built_at": "$(date -u +%FT%TZ)",
-            "api_base": "${api}",
-            "share_base": "${share}"
-          }
+          { "commit":"${GITHUB_SHA}", "built_at":"$(date -u +%FT%TZ)", "api_base":"${api}", "share_base":"${share}" }
           EOF
 
       - name: Upload web build
@@ -102,27 +84,18 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}   # raw OpenSSH private key
-      VPS_HOST:        ${{ secrets.VPS_HOST }}          # e.g. 72.60.218.209
-      VPS_USER:        ${{ secrets.VPS_USER }}          # e.g. root (or a sudo user)
-      SSH_PORT:        ${{ secrets.SSH_PORT }}          # optional (defaults to 22)
-      WEB_ROOT:        ${{ secrets.WEB_ROOT }}          # optional (default below)
-      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL }}    # for smoke tests
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      VPS_HOST:        ${{ secrets.VPS_HOST }}
+      VPS_USER:        ${{ secrets.VPS_USER }}
+      SSH_PORT:        ${{ secrets.SSH_PORT }}
+      WEB_ROOT:        ${{ secrets.WEB_ROOT }}
+      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL || vars.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
     steps:
       - name: Download build
         uses: actions/download-artifact@v4
         with:
           name: web-build
           path: build/web
-
-      - name: Validate deploy vars
-        shell: bash
-        run: |
-          set -euo pipefail
-          : "${SHARE_BASE_URL:?SHARE_BASE_URL is required}"
-          if ! printf '%s' "$SHARE_BASE_URL" | grep -Eq '^https?://'; then
-            echo "::error title=Bad URL::SHARE_BASE_URL must start with http(s)://"; exit 1
-          fi
 
       - name: Prepare SSH
         shell: bash
@@ -132,13 +105,10 @@ jobs:
           printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
           sed -i 's/\r$//' ~/.ssh/id_vps
           chmod 600 ~/.ssh/id_vps
-
           : "${SSH_PORT:=22}"
           : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
-
           ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/id_vps -o BatchMode=yes -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" true
-
           {
             echo "SSH_PORT=${SSH_PORT}"
             echo "WEB_ROOT=${WEB_ROOT}"
@@ -176,4 +146,4 @@ jobs:
           set -euo pipefail
           url="${SHARE_BASE_URL%/}/version.json"
           echo "GET $url"
-          curl -fsS "$url" | sed -n '1,80p'
+          curl -fsS "$url" | sed -n '1,120p'
