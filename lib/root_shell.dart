@@ -26,6 +26,7 @@
 // Deep links
 // -----------------------------------------------------------------------------
 // On first launch, checks current URL for "/s/<id>" and opens details.
+// Also accepts legacy/bare links like "/rss%3Akoimoi.com%3A...".
 //
 // Responsive width
 // -----------------------------------------------------------------------------
@@ -34,7 +35,7 @@
 import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/foundation.dart' show ChangeNotifier;
+import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -45,10 +46,10 @@ import 'core/cache.dart'; // FeedCache
 import 'core/models.dart';
 import 'core/utils.dart'; // fadeRoute()
 
-// NEW: shared category state + helpers (single source of truth)
+// Shared category state + helpers (single source of truth)
 import 'core/category_prefs.dart';
 
-// Deep-link site (single source of truth)
+// Deep-link share site (single source of truth)
 import 'core/deep_links.dart' show kShareSite;
 
 // Feature tabs
@@ -139,7 +140,7 @@ class _RootShellState extends State<RootShell> {
   // Content type pref ('all' | 'read' | 'video' | 'audio')
   String _currentContentType = ContentTypePrefs.typeAll;
 
-  // Deep link bootstrap (/s/<id>)
+  // Deep link bootstrap (/s/<id> or legacy bare id)
   String? _pendingDeepLinkId;
   bool _deepLinkHandled = false;
 
@@ -191,17 +192,58 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-  /* ───────────────────────── deep link (/s/<id>) ───────────────────────── */
-
+  /* ───────────────────────── deep link (/s/<id>) ─────────────────────────
+     Accepts:
+     • "#/s/<id>" or "/#/s/<id>"
+     • "/s/<id>" (no hash) if hosted with path strategy
+     • "?id=<id>" or "#...id=<id>"
+     • Legacy bare slug as last segment, e.g. "/rss%3Akoimoi.com%3A…"
+  ──────────────────────────────────────────────────────────────────────── */
   void _captureInitialDeepLink() {
-    // Support both "#/s/<id>" and "/#/s/<id>" (encoded ID allowed).
+    // Build a unified string to search for patterns.
     final frag = Uri.base.fragment; // after '#'
-    final path = (frag.isNotEmpty ? frag : Uri.base.path).trim();
-    final match = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
-    if (match != null) {
-      final raw = match.group(2) ?? '';
-      // IMPORTANT: decode the encoded component (e.g., "rss%3Akoimoi.com%3A…")
-      _pendingDeepLinkId = Uri.decodeComponent(raw);
+    final rawPath = Uri.base.path;  // before '#'
+    final path = (frag.isNotEmpty ? '/$frag' : rawPath).trim();
+
+    // 1) Primary: "/s/<id>" anywhere (works for "#/s/<id>" and "/s/<id>")
+    final m = RegExp(r'(^|/)+s/([^/?#]+)').firstMatch(path);
+    if (m != null) {
+      _pendingDeepLinkId = Uri.decodeComponent(m.group(2)!);
+      return;
+    }
+
+    // 2) Query param "id" (either in fragment or in URL query)
+    try {
+      if (frag.isNotEmpty) {
+        // Parse fragment as a fake URI to read its query if present.
+        final fUri = Uri.parse(kIsWeb ? 'x:/$frag' : '/$frag');
+        final idQ = fUri.queryParameters['id'];
+        if (idQ != null && idQ.isNotEmpty) {
+          _pendingDeepLinkId = Uri.decodeComponent(idQ);
+          return;
+        }
+      }
+    } catch (_) {/* ignore */}
+
+    final idParam = Uri.base.queryParameters['id'];
+    if (idParam != null && idParam.isNotEmpty) {
+      _pendingDeepLinkId = Uri.decodeComponent(idParam);
+      return;
+    }
+
+    // 3) Legacy/bare: treat last non-empty segment as encoded ID
+    final segs = path.split('/').where((s) => s.isNotEmpty).toList();
+    if (segs.isNotEmpty) {
+      final last = segs.last;
+      // Ignore obvious non-IDs (html, query leftovers)
+      final looksLikeId = !last.endsWith('.html') && !last.contains('=');
+      if (looksLikeId) {
+        final decoded = Uri.decodeComponent(last);
+        // Heuristic: our IDs usually contain ":" (e.g., "rss:koimoi.com:abcd…")
+        if (decoded.contains(':')) {
+          _pendingDeepLinkId = decoded;
+        }
+      }
     }
   }
 
@@ -212,6 +254,7 @@ class _RootShellState extends State<RootShell> {
     const pollEvery = Duration(milliseconds: 200);
     final started = DateTime.now();
 
+    // Let the Home feed warm up so cached lookup can succeed quickly
     while (mounted && DateTime.now().difference(started) < maxWait) {
       final Story? cached = FeedCache.get(_pendingDeepLinkId!);
       if (cached != null) {
