@@ -1,113 +1,69 @@
 # =============================================================================
-# CinePulse Ingestion / Delivery Stack
-#
-# RUNTIME DATA FLOW (end-to-end)
-#
-#   ┌───────────────────────────────────────────────────────────────────┐
-#   │  scheduler + webhooks                                            │
-#   │    - scheduler: periodic poll of sources                        │
-#   │        * reads infra/source.yml                                  │
-#   │        * merges all vertical configs listed in include_verticals │
-#   │        * enqueues poll work into RQ queue "events"               │
-#   │    - webhooks: on-demand / push-trigger polling (YouTube WebSub, │
-#   │      RSS WebSub), also enqueues into "events"                    │
-#   └───────────────────────────────────────────────────────────────────┘
-#                                   │
-#                                   ▼
-#   ┌───────────────────────────────────────────────────────────────────┐
-#   │  workers (rq worker "events")                                     │
-#   │    - fetch raw item (RSS entry, YT upload, etc.)                  │
-#   │    - normalize → canonical story dict                             │
-#   │    - enqueue story into RQ queue "sanitize"                       │
-#   └───────────────────────────────────────────────────────────────────┘
-#                                   │
-#                                   ▼
-#   ┌───────────────────────────────────────────────────────────────────┐
-#   │  sanitizer (rq worker "sanitize")                                 │
-#   │    - dedupe by semantic signature (title+summary)                 │
-#   │    - first version of a "news event" wins                         │
-#   │    - if ACCEPTED:                                                 │
-#   │         * LPUSH story JSON into Redis FEED_KEY                    │
-#   │         * LTRIM FEED_KEY to MAX_FEED_LEN                          │
-#   │         * publish realtime fanout (pubsub + Redis stream)         │
-#   │         * optionally enqueue push jobs → "push" (notifications)   │
-#   │    - sanitizer is the ONLY writer to FEED_KEY                     │
-#   └───────────────────────────────────────────────────────────────────┘
-#                                   │
-#                                   ▼
-#   ┌───────────────────────────────────────────────────────────────────┐
-#   │  api                                                              │
-#   │    - pure read-only                                               │
-#   │    - serves /v1/feed, /v1/story/{id}, /v1/search from Redis       │
-#   │    - exposes /v1/realtime (SSE + WebSocket)                       │
-#   └───────────────────────────────────────────────────────────────────┘
-#
-#   (optional)
-#                                   │
-#                                   ▼
-#   ┌───────────────────────────────────────────────────────────────────┐
-#   │  push (rq worker "push")                                          │
-#   │    - consumes push jobs from sanitizer                            │
-#   │    - finds device tokens per topic                               │
-#   │    - builds notification payload                                 │
-#   │    - (currently stub: print; can be wired to FCM/APNs later)      │
-#   └───────────────────────────────────────────────────────────────────┘
-#
-# Redis:
-#   - shared message bus (RQ queues: "events", "sanitize", "push")
-#   - shared state (feed list, dedupe sets, rate limit counters, etc.)
-#   - persisted via redis-data volume so restarts don't lose history.
+# CinePulse / NutshellNews — Ingestion & Delivery Stack (Docker Compose)
+# =============================================================================
+# Data flow:
+#   scheduler →(enqueue "events")→ workers →(enqueue "sanitize")→ sanitizer
+#   sanitizer → FEED_KEY (Redis) → api (read-only) → clients
+#   webhooks →(enqueue "events")→ workers        (on YouTube/RSS pushes)
 # =============================================================================
 
-x-env: &defaults
+# ---------- Shared anchors ----------
+x-env: &env_defaults
   ENV: prod
   TZ: Asia/Kolkata
 
-  # Shared Redis URL
+  # Redis (shared queues + state)
   REDIS_URL: redis://redis:6379/0
+  RQ_REDIS_URL: redis://redis:6379/0
 
-  # Public feed list key in Redis (only sanitizer mutates this)
+  # Public feed list (only sanitizer mutates this)
   FEED_KEY: feed:items
 
-  # Root source config.
-  # NOTE: infra/source.yml itself references per-vertical files, e.g.:
-  #   include_verticals:
-  #     - verticals/entertainment.yml
+  # Root source config (includes vertical YAMLs via include_verticals)
   SOURCES_FILE: /app/infra/source.yml
 
-  # External API keys consumed downstream (like TMDB in workers)
+  # External keys consumed by workers (e.g. TMDB)
   TMDB_API_KEY: ${TMDB_API_KEY:-}
 
+x-secure: &secure_defaults
+  read_only: true
+  tmpfs: ["/tmp", "/var/tmp"]
+  stop_grace_period: 10s
+  security_opt:
+    - no-new-privileges:true
+  ulimits:
+    nofile:
+      soft: 65535
+      hard: 65535
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# ---------- Services ----------
 services:
-  # --------------------------------------------------
-  # REDIS (state + queues)
-  # --------------------------------------------------
+  # --------------------------------------------------------------------------
+  # Redis (state + queues)
+  # --------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
-    command:
-      - redis-server
-      - --save
-      - ""
-      - --appendonly
-      - "yes"
+    command: ["redis-server", "--save", "", "--appendonly", "yes"]
     restart: unless-stopped
     volumes:
       - redis-data:/data
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
-      test: sh -c 'redis-cli ping | grep -q PONG'
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
+    <<: *secure_defaults
 
-  # --------------------------------------------------
-  # SCHEDULER
-  # --------------------------------------------------
-  # Periodic ingestion scheduler:
-  #   - reads infra/source.yml (which references vertical YAMLs)
-  #   - merges all enabled channels + feeds from those verticals
-  #   - enqueues poll work into RQ queue "events"
+  # --------------------------------------------------------------------------
+  # Scheduler (periodic polling; merges infra/source.yml + verticals)
+  # --------------------------------------------------------------------------
   scheduler:
     build:
       context: ..
@@ -116,31 +72,19 @@ services:
     restart: unless-stopped
     env_file: ../.env
     environment:
-      <<: *defaults
+      <<: *env_defaults
+      # Optional runtime overrides (uncomment to force):
+      # ONE_SHOT: "1"            # run a single cycle then exit (for manual tests)
+      # LOG_LEVEL: "info"
     depends_on:
       redis:
         condition: service_healthy
-    command:
-      - python
-      - -m
-      - apps.scheduler.main
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
-    stop_grace_period: 10s
+    command: ["python", "-m", "apps.scheduler.main"]
+    <<: *secure_defaults
 
-  # --------------------------------------------------
-  # WEBHOOKS
-  # --------------------------------------------------
-  # HTTP-triggered ingestion:
-  #   - YouTube PubSubHubbub callbacks
-  #   - RSS WebSub callbacks
-  #   - manual /subscribe endpoints
-  #
-  # On notify:
-  #   - decides which channel/feed updated
-  #   - enqueues fresh poll into "events" immediately
+  # --------------------------------------------------------------------------
+  # Webhooks (YouTube PubSubHubbub / RSS WebSub → enqueue fresh polls)
+  # --------------------------------------------------------------------------
   webhooks:
     build:
       context: ..
@@ -148,35 +92,19 @@ services:
       target: webhooks
     restart: unless-stopped
     env_file: ../.env
-    environment:
-      <<: *defaults
+    environment: *env_defaults
     depends_on:
       redis:
         condition: service_healthy
     ports:
       - "127.0.0.1:18001:8000"
     command: >
-      uvicorn apps.webhooks.main:app
-      --host 0.0.0.0
-      --port 8000
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
-    stop_grace_period: 10s
+      uvicorn apps.webhooks.main:app --host 0.0.0.0 --port 8000
+    <<: *secure_defaults
 
-  # --------------------------------------------------
-  # WORKERS
-  # --------------------------------------------------
-  # RQ worker for queue "events":
-  #   - fetch raw source item (RSS entry, YT upload, etc.)
-  #   - run normalize_event() to build canonical `story`
-  #   - enqueue that story onto "sanitize"
-  #
-  # Workers DO NOT:
-  #   - write to FEED_KEY
-  #   - dedupe
-  #   - send push
+  # --------------------------------------------------------------------------
+  # Workers (RQ worker "events" → normalize raw → enqueue "sanitize")
+  # --------------------------------------------------------------------------
   workers:
     build:
       context: ..
@@ -184,36 +112,17 @@ services:
       target: worker
     restart: unless-stopped
     env_file: ../.env
-    environment:
-      <<: *defaults
-      # rq also reads RQ_REDIS_URL
-      RQ_REDIS_URL: redis://redis:6379/0
+    environment: *env_defaults
     depends_on:
       redis:
         condition: service_healthy
     command: >
       sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" events'
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
-    stop_grace_period: 10s
+    <<: *secure_defaults
 
-  # --------------------------------------------------
-  # SANITIZER
-  # --------------------------------------------------
-  # RQ worker for queue "sanitize":
-  #   - dedupes by story_signature(title+summary)
-  #   - first story about an event wins forever
-  #   - if accepted:
-  #       * LPUSH into FEED_KEY
-  #       * LTRIM feed length (MAX_FEED_LEN)
-  #       * publish realtime fanout via Redis:
-  #           - pub/sub channel FEED_PUBSUB
-  #           - XADD into FEED_STREAM
-  #       * OPTIONAL enqueue push job ("push" queue)
-  #
-  # ONLY sanitizer mutates FEED_KEY.
+  # --------------------------------------------------------------------------
+  # Sanitizer (RQ worker "sanitize" → dedupe → push to FEED_KEY + fanout)
+  # --------------------------------------------------------------------------
   sanitizer:
     build:
       context: ..
@@ -222,86 +131,23 @@ services:
     restart: unless-stopped
     env_file: ../.env
     environment:
-      <<: *defaults
-
-      # Dedup set of story signatures
+      <<: *env_defaults
       SEEN_KEY: feed:seen_signatures
-
-      # Max feed list length retained in Redis
       MAX_FEED_LEN: "200"
-
-      # Realtime fanout keys
       FEED_PUBSUB: feed:pub
       FEED_STREAM: feed:stream
       FEED_STREAM_MAXLEN: "5000"
-
-      # Toggle this to "1" if you are running the push worker below
-      ENABLE_PUSH_NOTIFICATIONS: "0"
-
-      # rq connection
-      RQ_REDIS_URL: redis://redis:6379/0
+      ENABLE_PUSH_NOTIFICATIONS: "0"   # set "1" only if push worker is running
     depends_on:
       redis:
         condition: service_healthy
     command: >
       sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" sanitize'
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
-    stop_grace_period: 10s
+    <<: *secure_defaults
 
-  # --------------------------------------------------
-  # PUSH (optional)
-  # --------------------------------------------------
-  # RQ worker for queue "push":
-  #   - consumes jobs created by sanitizer (if ENABLE_PUSH_NOTIFICATIONS=1)
-  #   - figures out which subscriber tokens to alert based on story.topics
-  #   - builds push payload (title, summary snippet, thumb_url)
-  #   - CURRENTLY logs to console (stub for FCM/APNs/etc.)
-  #
-  # If you don't want push right now:
-  #   - leave this service commented out
-  #   - keep ENABLE_PUSH_NOTIFICATIONS="0" in sanitizer
-  #
-  # push:
-  #   build:
-  #     context: ..
-  #     dockerfile: infra/Dockerfile
-  #     target: worker
-  #   restart: unless-stopped
-  #   env_file: ../.env
-  #   environment:
-  #     <<: *defaults
-  #     RQ_REDIS_URL: redis://redis:6379/0
-  #     PUSH_ENABLED: "1"
-  #     PUSH_SET: "push:tokens"
-  #     PUSH_META: "push:meta"
-  #     PUSH_TOPIC_PREFIX: "push:topic:"
-  #     PUSH_DEFAULT_TOPIC: "all"
-  #     PUSH_MAX_TOKENS_PER_STORY: "5000"
-  #     PUSH_BODY_MAX_CHARS: "180"
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #   command: >
-  #     sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" push'
-  #   read_only: true
-  #   tmpfs:
-  #     - /tmp
-  #     - /var/tmp
-  #   stop_grace_period: 10s
-
-  # --------------------------------------------------
-  # API
-  # --------------------------------------------------
-  # Read-only/public API:
-  #   - /v1/feed, /v1/story/{id}, /v1/search
-  #   - /v1/realtime/stream (SSE)
-  #   - /v1/realtime/ws     (WebSocket)
-  #   - /v1/img?u=...       (image proxy)
-  #
-  # It never mutates feed data — only reads from Redis.
+  # --------------------------------------------------------------------------
+  # API (read-only; serves feed/search/story + SSE/WebSocket realtime)
+  # --------------------------------------------------------------------------
   api:
     build:
       context: ..
@@ -309,8 +155,7 @@ services:
       target: api
     restart: unless-stopped
     env_file: ../.env
-    environment:
-      <<: *defaults
+    environment: *env_defaults
     depends_on:
       redis:
         condition: service_healthy
@@ -321,11 +166,41 @@ services:
     command: >
       gunicorn -w 2 -k uvicorn.workers.UvicornWorker
       -b 0.0.0.0:8000 apps.api.app.main:app
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/tmp
-    stop_grace_period: 20s
+    # (Healthcheck optional; uncomment if curl/wget exists in image)
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget -qO- localhost:8000/health || exit 1"]
+    #   interval: 20s
+    #   timeout: 3s
+    #   retries: 5
+    <<: *secure_defaults
 
+  # --------------------------------------------------------------------------
+  # Push (optional) — notifications pipeline (stub; off by default)
+  # --------------------------------------------------------------------------
+  # push:
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile
+  #     target: worker
+  #   restart: unless-stopped
+  #   env_file: ../.env
+  #   environment:
+  #     <<: *env_defaults
+  #     PUSH_ENABLED: "1"
+  #     PUSH_SET: "push:tokens"
+  #     PUSH_META: "push:meta"
+  #     PUSH_TOPIC_PREFIX: "push:topic:"
+  #     PUSH_DEFAULT_TOPIC: "all"
+  #     PUSH_MAX_TOKENS_PER_STORY: "5000"
+  #     PUSH_BODY_MAX_CHARS: "180"
+  #     ENABLE_PUSH_NOTIFICATIONS: "1"
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   command: >
+  #     sh -lc 'rq worker -u "${REDIS_URL:-redis://redis:6379/0}" push'
+  #   <<: *secure_defaults
+
+# ---------- Volumes ----------
 volumes:
   redis-data: {}
