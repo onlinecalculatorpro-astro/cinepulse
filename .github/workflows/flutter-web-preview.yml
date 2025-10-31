@@ -1,4 +1,4 @@
-name: Web Deploy (Flutter to VPS)
+name: Web Deploy (Flutter → VPS)
 
 on:
   workflow_dispatch: {}
@@ -15,8 +15,8 @@ jobs:
     name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
-      API_BASE_URL:  ${{ secrets.API_BASE_URL }}   # e.g. https://api.nutshellnewsapp.com
-      DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }} # e.g. https://app.nutshellnewsapp.com
+      API_BASE_URL:  ${{ secrets.API_BASE_URL }}     # e.g. https://api.nutshellnewsapp.com
+      DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}  # e.g. https://app.nutshellnewsapp.com
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,17 +38,35 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
+      - name: Compute renderer arg (html if supported)
+        id: args
+        shell: bash
+        run: |
+          if flutter build web -h | grep -q -- '--web-renderer'; then
+            echo "arg=--web-renderer html" >> "$GITHUB_OUTPUT"
+          else
+            echo "arg=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build
         env:
           API_BASE_URL_NORM:  ${{ secrets.API_BASE_URL }}
           DEEP_LINK_BASE_NORM: ${{ secrets.DEEP_LINK_BASE }}
         run: |
+          set -euo pipefail
           api="${API_BASE_URL_NORM%/}"
           deep="${DEEP_LINK_BASE_NORM%/}"
-          flutter build web --release --pwa-strategy=none \
+
+          flutter build web --release \
+            ${{ steps.args.outputs.arg }} \
+            --pwa-strategy=none \
             --dart-define=CINE_API_BASE="$api" \
             --dart-define=API_BASE_URL="$api" \
             --dart-define=DEEP_LINK_BASE="$deep"
+
+          # stamp build with commit + time (optional but handy)
+          printf '{"commit":"%s","built_at":"%s"}\n' "$GITHUB_SHA" "$(date -u +%FT%TZ)" \
+            > build/web/version.json
 
       - name: Upload web build
         uses: actions/upload-artifact@v4
@@ -57,15 +75,15 @@ jobs:
           path: build/web
 
   deploy:
-    name: Deploy to VPS via rsync
+    name: Deploy to VPS
     needs: build
     runs-on: ubuntu-latest
     env:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}  # your VPS private key (PEM)
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}  # PEM content (OpenSSH format)
       VPS_HOST:        ${{ secrets.VPS_HOST }}         # 72.60.218.209
-      VPS_USER:        ${{ secrets.VPS_USER }}         # root (or sudo user)
-      WEB_ROOT:        ${{ secrets.WEB_ROOT }}         # /var/www/nutshellnewsapp_web
-      SSH_PORT:        ${{ secrets.SSH_PORT }}         # 22 (optional)
+      VPS_USER:        ${{ secrets.VPS_USER }}         # root (or a sudo user)
+      SSH_PORT:        ${{ secrets.SSH_PORT }}         # optional (defaults to 22)
+      WEB_ROOT:        ${{ secrets.WEB_ROOT }}         # optional (defaults below)
     steps:
       - name: Download build
         uses: actions/download-artifact@v4
@@ -74,14 +92,22 @@ jobs:
           path: build/web
 
       - name: Prepare SSH
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
+          # Write private key exactly as provided in secret
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
           chmod 600 ~/.ssh/id_vps
+
+          # Defaults for optional vars
           : "${SSH_PORT:=22}"
           : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
+
+          # Trust server host key to avoid interactive prompt
           ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+
+          # Export for later steps
           {
             echo "SSH_PORT=${SSH_PORT}"
             echo "WEB_ROOT=${WEB_ROOT}"
@@ -92,14 +118,18 @@ jobs:
 
       - name: Rsync to VPS
         run: |
-          rsync -avz --delete -e "ssh -i ~/.ssh/id_vps -p ${SSH_PORT}" \
+          sudo apt-get update -y && sudo apt-get install -y rsync
+          rsync -avz --delete \
+            --chmod=D2755,F644 \
+            -e "ssh -i ~/.ssh/id_vps -p ${SSH_PORT}" \
             build/web/ "${VPS_USER}@${VPS_HOST}:${WEB_ROOT}/"
 
-      - name: Set perms and reload nginx
+      - name: Set perms + reload nginx
         run: |
           ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
             "chown -R www-data:www-data '${WEB_ROOT}' || true; \
              (systemctl reload nginx || service nginx reload || true)"
 
       - name: Smoke test
-        run: curl -sS -I https://app.nutshellnewsapp.com | head -n 5
+        run: |
+          curl -fsS -I https://app.nutshellnewsapp.com | sed -n '1,10p'
