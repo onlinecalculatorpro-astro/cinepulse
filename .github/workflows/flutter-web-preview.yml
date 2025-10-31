@@ -15,7 +15,7 @@ jobs:
     name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
-      API_BASE_URL:  ${{ secrets.API_BASE_URL }}     # e.g. https://api.nutshellnewsapp.com
+      API_BASE_URL:   ${{ secrets.API_BASE_URL }}    # e.g. https://api.nutshellnewsapp.com
       DEEP_LINK_BASE: ${{ secrets.DEEP_LINK_BASE }}  # e.g. https://app.nutshellnewsapp.com
     steps:
       - name: Checkout
@@ -50,8 +50,9 @@ jobs:
 
       - name: Build
         env:
-          API_BASE_URL_NORM:  ${{ secrets.API_BASE_URL }}
+          API_BASE_URL_NORM:   ${{ secrets.API_BASE_URL }}
           DEEP_LINK_BASE_NORM: ${{ secrets.DEEP_LINK_BASE }}
+        shell: bash
         run: |
           set -euo pipefail
           api="${API_BASE_URL_NORM%/}"
@@ -64,9 +65,7 @@ jobs:
             --dart-define=API_BASE_URL="$api" \
             --dart-define=DEEP_LINK_BASE="$deep"
 
-          # stamp build with commit + time (optional but handy)
-          printf '{"commit":"%s","built_at":"%s"}\n' "$GITHUB_SHA" "$(date -u +%FT%TZ)" \
-            > build/web/version.json
+          printf '{"commit":"%s","built_at":"%s"}\n' "$GITHUB_SHA" "$(date -u +%FT%TZ)" > build/web/version.json
 
       - name: Upload web build
         uses: actions/upload-artifact@v4
@@ -79,11 +78,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}  # PEM content (OpenSSH format)
-      VPS_HOST:        ${{ secrets.VPS_HOST }}         # 72.60.218.209
-      VPS_USER:        ${{ secrets.VPS_USER }}         # root (or a sudo user)
-      SSH_PORT:        ${{ secrets.SSH_PORT }}         # optional (defaults to 22)
-      WEB_ROOT:        ${{ secrets.WEB_ROOT }}         # optional (defaults below)
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}   # raw OpenSSH private key (no base64)
+      VPS_HOST:        ${{ secrets.VPS_HOST }}          # e.g. 72.60.218.209
+      VPS_USER:        ${{ secrets.VPS_USER }}          # e.g. root (or a sudo user)
+      SSH_PORT:        ${{ secrets.SSH_PORT }}          # optional (defaults to 22)
+      WEB_ROOT:        ${{ secrets.WEB_ROOT }}          # optional (defaults below)
     steps:
       - name: Download build
         uses: actions/download-artifact@v4
@@ -96,18 +95,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          # Write private key exactly as provided in secret
           printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
+          # strip any accidental CRLFs that cause "error in libcrypto"
+          sed -i 's/\r$//' ~/.ssh/id_vps
           chmod 600 ~/.ssh/id_vps
 
-          # Defaults for optional vars
           : "${SSH_PORT:=22}"
           : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
 
-          # Trust server host key to avoid interactive prompt
+          # add host key to avoid interactive prompt
           ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
 
-          # Export for later steps
+          # quick non-interactive sanity check (fails fast if key is bad)
+          ssh -i ~/.ssh/id_vps -o BatchMode=yes -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" true
+
           {
             echo "SSH_PORT=${SSH_PORT}"
             echo "WEB_ROOT=${WEB_ROOT}"
@@ -117,6 +118,7 @@ jobs:
         run: ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${WEB_ROOT}'"
 
       - name: Rsync to VPS
+        shell: bash
         run: |
           sudo apt-get update -y && sudo apt-get install -y rsync
           rsync -avz --delete \
@@ -131,5 +133,4 @@ jobs:
              (systemctl reload nginx || service nginx reload || true)"
 
       - name: Smoke test
-        run: |
-          curl -fsS -I https://app.nutshellnewsapp.com | sed -n '1,10p'
+        run: curl -fsS -I https://app.nutshellnewsapp.com | sed -n '1,10p'
