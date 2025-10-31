@@ -1,6 +1,6 @@
 // lib/features/story/story_details.dart
 //
-// Visual sync with StoryCard:
+// Visual sync with StoryCard (NutshellNews):
 //  • Meta line: [Kind] <timestamp> +Xm  (kind colors via ColorScheme,
 //    freshness uses Brand.freshRed)
 //  • CTA row: [Watch/Read] [🔖] [📤] — primary button uses scheme.primary,
@@ -18,9 +18,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/api.dart';            // deepLinkForStoryId, storyVideoUrl
+import '../../core/api.dart';            // storyVideoUrl
 import '../../core/cache.dart';          // SavedStore
 import '../../core/models.dart';
+import '../../core/deep_links.dart';     // buildShareUrl(id)
 import '../../widgets/smart_video_player.dart';
 import '../../theme/theme_colors.dart';  // primaryTextColor, secondaryTextColor, neutralPillBg, outlineHairline
 import '../../theme/app_theme.dart' show Brand; // Brand.freshRed
@@ -75,7 +76,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
   String _shareText() {
-    final deep = deepLinkForStoryId(widget.story.id).toString();
+    // Canonical NutshellNews deep link (hash routing)
+    final deep = buildShareUrl(widget.story.id);
     if (deep.isNotEmpty) return deep;
     final link = _primaryUrl?.toString();
     return (link != null && link.isNotEmpty) ? link : widget.story.title;
@@ -261,7 +263,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
             backgroundColor: cs.surface.withOpacity(0.95),
             surfaceTintColor: Colors.transparent,
             title: Text(
-              'CinePulse',
+              'NutshellNews',
               style: GoogleFonts.inter(fontWeight: FontWeight.w800),
             ),
             actions: [
