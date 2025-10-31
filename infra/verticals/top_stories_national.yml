@@ -1,234 +1,156 @@
 # =============================================================================
-# Vertical Sources: TOP_STORIES_NATIONAL (India — Hard News)
+# Vertical Sources: TOP STORIES — NATIONAL (India)
 # =============================================================================
-# PHILOSOPHY: Real top stories. Zero noise. 100% official + front-page + public-interest.
-# Free-to-read where possible, high trust, and nationally relevant.
-#
-# We allow:
-#   - Official govt/regulator notices: press notes, orders, circulars, guidelines
-#   - Public advisories & alerts: IMD, NDMA/MHA, CERT-In (critical CVEs/patch-now)
-#   - National front-page hard news (bills, court orders, ECI schedules/results)
+# PHILOSOPHY: Quality over quantity. 100% FREE sources + ZERO noise.
+# National governance, policy, economy, science/tech, courts, disaster alerts.
 #
 # We block:
-#   - Opinion/editorial/columns, long “explained” essays (can whitelist later)
-#   - Celebrity/paparazzi/gossip/airport looks
-#   - SPORTS content (scorecards, match highlights, fixtures, etc.)
-#   - City classifieds & low-signal local incidents unless national impact
+#   - SPORTS (scores, highlights, match recaps)
+#   - Paparazzi / entertainment gossip (kept in other verticals)
+#   - Clickbait outrage (“trolled”, “slammed”, “shocking”, etc.)
 # =============================================================================
 vertical: top_stories_national
 
-# Throttle config — conservative to avoid blocking; tuned per domain
+# Throttle config — polite defaults per domain
 throttle:
   per_domain_min_seconds:
-    default: 180                    # 3 min default
-    pmindia.gov.in: 180             # PMO press updates
-    rbi.org.in: 180                 # RBI releases
-    sebi.gov.in: 240                # SEBI PRs (heavier pages)
-    trai.gov.in: 240                # TRAI PRs
-    eci.gov.in: 240                 # ECI releases/schedules
-    mausam.imd.gov.in: 120          # IMD bulletins (can spike during weather events)
-    ndma.gov.in: 240                # NDMA advisories
-    cert-in.org.in: 240             # CERT-In advisories
-    ddnews.gov.in: 120              # DD News RSS
-    newsonair.gov.in: 180           # AIR News RSS
-    thehindu.com: 180               # Front-page India
-    indianexpress.com: 180          # Front-page India
-    hindustantimes.com: 240         # Front-page India
-    timesofindia.indiatimes.com: 240# Front-page India
+    default: 180              # 3 min
+    thehindu.com: 180
+    indianexpress.com: 180
+    hindustantimes.com: 180
+    ndtv.com: 180
+    timesofindia.indiatimes.com: 240
 
 # -----------------------------------------------------------------------------
-# RSS / Official & News sources for this vertical
-# Zero sports, zero gossip. Hard gates on opinion/analysis/interviews.
+# YouTube (optional) — keep empty for now; we focus on article/RSS for this vertical
+# -----------------------------------------------------------------------------
+youtube:
+  defaults:
+    enabled: false            # disable by default for this vertical
+    kind_hint: news
+    max_items_per_poll: 10
+    published_after_hours: 48
+    language: "en"
+    region: "IN"
+  channels: []
+
+# -----------------------------------------------------------------------------
+# RSS / News sources (tiered buckets)
 # -----------------------------------------------------------------------------
 rss:
   defaults:
     enabled: true
     kind_hint: news
     max_items_per_poll: 12
-    # Gate for real “hard” items across the board (can be overridden per feed)
-    include_keywords:
-      - "advisory"
-      - "notification"
-      - "order"
-      - "circular"
-      - "guidelines"
-      - "directive"
-      - "cabinet"
-      - "budget"
-      - "election"
-      - "ECI"
-      - "code of conduct"
-      - "Supreme Court"
-      - "High Court"
-      - "SC "
-      - "ban"
-      - "recall"
-      - "warning"
-      - "heatwave"
-      - "cyclone"
-      - "red alert"
-      - "policy"
-      - "ordinance"
-      - "act"
-      - "rule"
-      - "rules"
-      - "SOP"
-      - "press release"
-      - "press note"
-      - "gazette"
-      - "public notice"
-      - "judgment"
-      - "verdict"
-      - "vulnerability"
-      - "security advisory"
-      - "patch"
+    include_keywords: []
     ignore_keywords:
-      # Opinion/analysis/soft features
-      - "opinion"
-      - "editorial"
-      - "op-ed"
-      - "column"
-      - "analysis"
-      - "explained"
-      - "interview"
-      - "exclusive"
-      - "review"
-      # Celebrity/paparazzi/gossip
-      - "spotted"
-      - "airport look"
-      - "paparazzi"
-      - "gossip"
-      - "viral video"
-      - "fans react"
-      - "trolled"
-      - "slammed"
-      # SPORTS FILTER (kill even if it sneaks into India feeds)
+      # SPORTS filter (hard block)
       - "match highlights"
-      - " vs "
+      - "highlights"
+      - "scorecard"
+      - "live score"
+      - "points table"
+      - "fixtures"
+      - "vs "
       - " ODI "
       - " T20 "
-      - "IPL"
+      - "Test series"
       - "wicket"
-      - "scorecard"
+      - "innings"
       - "goal"
-      - "final score"
+      - "IPL"
+      - "ISL"
+      # Entertainment/gossip filter
+      - "Bollywood"
+      - "trailer"
+      - "teaser"
+      - "Bigg Boss"
+      - "airport look"
+      - "spotted"
+      - "poses with"
+      - "stuns in"
+      - "flaunts"
+      # Clickbait / outrage
+      - "trolled"
+      - "slammed"
+      - "brutally"
+      - "shocking"
+      - "omg"
+      - "breaks the internet"
+      - "viral video"
+      - "netizens react"
 
   buckets:
-    # === GOV & REGULATORS (Primary signal) ===================================
-    gov_and_regulators:
-      enabled: true
-      feeds:
-        - name: "PMO India — Updates"
-          enabled: true
-          url: "https://www.pmindia.gov.in/en/feed/"
-          # Official updates; allow without extra keyword gate
-          include_keywords: []
-        - name: "RBI — Press Releases"
-          enabled: true
-          url: "https://rbi.org.in/Scripts/BS_PressReleaseRSS.aspx"
-          include_keywords: []
-        - name: "SEBI — Press Releases"
-          enabled: true
-          url: "https://www.sebi.gov.in/sebiweb/rss/PRs_rss.xml"
-          include_keywords: []
-        - name: "TRAI — Press Releases"
-          enabled: true
-          url: "https://www.trai.gov.in/press-release/rss.xml"
-          include_keywords: []
-        - name: "ECI — Press Releases"
-          enabled: true
-          url: "https://eci.gov.in/press-releases/feed/"
-          include_keywords: []
-
-    # === ALERTS & DISASTER (Time-critical public interest) ====================
-    alerts_and_disaster:
-      enabled: true
-      feeds:
-        - name: "IMD — Weather/Cyclone Bulletins"
-          enabled: true
-          url: "https://mausam.imd.gov.in/imd_latest/contents/rssfeed.php"
-          # Keep it to genuine warning/bulletin language
-          include_keywords:
-            - "alert"
-            - "warning"
-            - "red alert"
-            - "orange alert"
-            - "cyclone"
-            - "depression"
-            - "landfall"
-            - "outlook"
-            - "bulletin"
-        - name: "NDMA — Advisories & Updates"
-          enabled: true
-          url: "https://ndma.gov.in/rss.xml"
-          include_keywords:
-            - "advisory"
-            - "guidelines"
-            - "SOP"
-            - "warning"
-            - "alert"
-        - name: "CERT-In — Security Advisories"
-          enabled: true
-          url: "https://www.cert-in.org.in/s2cMainServlet?pageid=PUBVWNTAD01&rss=yes"
-          include_keywords:
-            - "vulnerability"
-            - "CVE"
-            - "advisory"
-            - "patch"
-            - "update"
-            - "security"
-
-    # === PUBLIC BROADCASTERS (Concise national summaries) =====================
-    public_broadcasters:
-      enabled: true
-      feeds:
-        - name: "DD News — Bulletins"
-          enabled: true
-          url: "https://ddnews.gov.in/rss-feed"
-        - name: "AIR News — Bulletins"
-          enabled: true
-          url: "https://newsonair.gov.in/RSS"
-
-    # === NATIONAL DAILIES — FRONT PAGE (corroboration + reach) ================
-    national_dailies_frontpage:
+    # === TIER 1: Mainstream national desks (high signal) ===
+    mainstream_national:
       enabled: true
       feeds:
         - name: "The Hindu — National"
           enabled: true
-          url: "https://www.thehindu.com/news/national/feeder/default.rss"
+          url: "https://www.thehindu.com/news/national/?service=rss"
+
         - name: "Indian Express — India"
           enabled: true
           url: "https://indianexpress.com/section/india/feed/"
+
         - name: "Hindustan Times — India"
           enabled: true
-          url: "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml"
+          url: "https://www.hindustantimes.com/feeds/rss/india/rssfeed.xml"
+
+        - name: "NDTV — India"
+          enabled: true
+          url: "https://feeds.feedburner.com/ndtvnews-india-news"
+
         - name: "Times of India — India"
           enabled: true
-          url: "https://timesofindia.indiatimes.com/india/rss.cms"
+          url: "https://timesofindia.indiatimes.com/rssfeeds/-2128936835.cms"
 
-    # === FACT-CHECK (light; caps enforced downstream) =========================
-    fact_check:
+    # === TIER 2: Business & economy that rises to national relevance ===
+    business_macro:
       enabled: true
       feeds:
-        - name: "Alt News — Fact-check"
+        - name: "Mint — Top Stories"
           enabled: true
-          url: "https://www.altnews.in/feed/"
-        - name: "BOOM — Fact-check"
-          enabled: true
-          url: "https://www.boomlive.in/rss"
-        - name: "Factly — Fact-check"
-          enabled: true
-          url: "https://factly.in/feed/"
+          url: "https://www.livemint.com/rss/news"
 
+        - name: "Economic Times — News"
+          enabled: true
+          url: "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+          ignore_keywords:
+            - "market live"
+            - "closing bell"
+            - "stocks to watch"
+
+    # === TIER 3: Explainers / longform context (policy, law, science) ===
+    explainers_longform:
+      enabled: true
+      feeds:
+        - name: "Indian Express — Explained"
+          enabled: true
+          url: "https://indianexpress.com/section/explained/feed/"
+
+        - name: "The Hindu — Science/Tech (context)"
+          enabled: true
+          url: "https://www.thehindu.com/sci-tech/?service=rss"
+          ignore_keywords:
+            - "review"
+            - "how to buy"
+
+# =============================================================================
+# SOURCES REMOVED / DISABLED (noise / scope mismatch)
+# =============================================================================
+# ❌ Sports-only feeds (any domain/section dedicated to cricket/football etc.)
+# ❌ Entertainment vertical sources (trailers/gossip) — handled elsewhere
+#
 # =============================================================================
 # QUALITY / ENGAGEMENT PROFILE:
 # =============================================================================
-# - Orders, circulars, advisories, and court/government actions with national impact
-# - Alerts that materially affect people (weather, disaster, cybersecurity)
-# - Front-page India hard news; no city-churn, no soft features
+# - National desk curation (policy, governance, courts, disaster, national security)
+# - Macro/eco items with nationwide impact (budget, inflation, GDP, jobs, energy)
+# - Solid explainers that give factual context (laws, schemes, space/science milestones)
 #
-# Downstream (sanitizer/ranker) still enforces:
-# - Drop items matching ignore_keywords (opinion/interview/gossip/sports)
-# - Prefer Gov/Reg + Alerts; cap dailies; cluster cooldowns; publisher caps
-# - Real-time promotion target: ~10–20 surfaced/day; skip slots instead of filler
+# Sanitizer rules still apply:
+# - normalize_event(): tag scope & drop low-signal items
+# - summarize_story_safe(): retain attribution; avoid sensational phrasing
+# - gossip/sports terms are filtered above; sanitizer remains the final gate
 # =============================================================================
