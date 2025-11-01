@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import ipaddress
-import json
-import re
-from typing import Optional, Tuple, List
-from urllib.parse import urlparse, urlunparse, unquote, quote
+from typing import Optional, Tuple
+from urllib.parse import urlparse, unquote
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/v1", tags=["img"])
 
-# Configs
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
 TOTAL_TIMEOUT = httpx.Timeout(
@@ -25,27 +22,23 @@ TOTAL_TIMEOUT = httpx.Timeout(
 MAX_REDIRECTS = 5
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
-HARD_DENY = True  # keep enabled for safety
-
+HARD_DENY = True
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
-
 _HARD_DENY_HOST_SUFFIXES = (
     "ndtvimg.com",
     "hindustantimes.com",
     "livemint.com",
     "toiimg.com",
-    "etimg.com",
     "thehindu.com",
     "indianexpress.com",
     "business-standard.com",
     "newindianexpress.com",
     "tosshub.com",
 )
-
 _BLOCKED_HOSTS = {
     "api.nutshellnewsapp.com",
     "api",
@@ -54,6 +47,12 @@ _BLOCKED_HOSTS = {
     "127.0.0.1",
     "0.0.0.0",
 }
+SVG_PLACEHOLDER = b'''
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60">
+    <rect width="100" height="60" fill="#dee2e6"/>
+    <text x="50" y="30" font-size="14" text-anchor="middle" fill="#868e96" dy=".3em">No Image</text>
+</svg>
+'''
 
 def _cors_headers() -> dict[str, str]:
     return {
@@ -74,11 +73,8 @@ def _host_is_private_ip_literal(host: str) -> bool:
     except ValueError:
         return False
     return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
+        ip.is_private or ip.is_loopback or ip.is_link_local or
+        ip.is_reserved or ip.is_multicast
     )
 
 def _hard_deny(host: str) -> bool:
@@ -87,35 +83,21 @@ def _hard_deny(host: str) -> bool:
     h = host.lower()
     return any(h.endswith(sfx) for sfx in _HARD_DENY_HOST_SUFFIXES)
 
-def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
+def _parse_source_url(raw_u: str) -> Tuple[str, str]:
     if not raw_u:
-        raise HTTPException(status_code=422, detail="missing 'u'")
+        return "", ""
     orig_full = unquote(raw_u).strip()
     p = urlparse(orig_full)
-
-    if p.scheme not in {"http", "https"}:
-        raise HTTPException(status_code=400, detail="only http/https allowed")
-    if not p.netloc:
-        raise HTTPException(status_code=400, detail="invalid URL")
-
     host = (p.hostname or "").strip().lower()
-    path = p.path or ""
+    return orig_full, host
 
-    if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
-        raise HTTPException(status_code=400, detail="forbidden host")
-
-    if _host_is_private_ip_literal(host):
-        raise HTTPException(status_code=400, detail="forbidden host")
-
-    return orig_full, orig_full, host, path
-
-# Minimal SVG placeholder (can swap for PNG if you like)
-SVG_PLACEHOLDER = b'''
-<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60">
-    <rect width="100" height="60" fill="#dee2e6"/>
-    <text x="50" y="30" font-size="14" text-anchor="middle" fill="#868e96" dy=".3em">No Image</text>
-</svg>
-'''
+def svg_placeholder_response() -> Response:
+    headers = _cors_headers()
+    headers.update({
+        "Content-Type": "image/svg+xml",
+        "Content-Disposition": 'inline; filename="placeholder.svg"',
+    })
+    return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
 
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_img(
@@ -127,16 +109,17 @@ async def proxy_img(
         return Response(status_code=204, headers=_cors_headers())
 
     raw = u or url
-    orig_url, _, host, _ = _parse_source_url(raw or "")
+    orig_url, host = _parse_source_url(raw or "")
 
-    # Hard-deny: immediately return fallback image
+    # Invalid, forbidden, or private hosts: SVG fallback
+    if not orig_url or not host:
+        return svg_placeholder_response()
+    if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
+        return svg_placeholder_response()
+    if _host_is_private_ip_literal(host):
+        return svg_placeholder_response()
     if _hard_deny(host):
-        headers = _cors_headers()
-        headers.update({
-            "Content-Type": "image/svg+xml",
-            "Content-Disposition": 'inline; filename="placeholder.svg"',
-        })
-        return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
+        return svg_placeholder_response()
 
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
@@ -150,13 +133,7 @@ async def proxy_img(
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
             })
         except httpx.RequestError:
-            # Network issue -- show fallback
-            headers = _cors_headers()
-            headers.update({
-                "Content-Type": "image/svg+xml",
-                "Content-Disposition": 'inline; filename="placeholder.svg"',
-            })
-            return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
+            return svg_placeholder_response()
 
         ct = r.headers.get("Content-Type", "")
         if r.status_code < 400 and ct.startswith("image/"):
@@ -169,10 +146,4 @@ async def proxy_img(
                 return Response(status_code=200, headers=headers)
             return StreamingResponse(r.aiter_bytes(), status_code=200, media_type=ct, headers=headers)
         else:
-            # Serve placeholder for errors/non-image
-            headers = _cors_headers()
-            headers.update({
-                "Content-Type": "image/svg+xml",
-                "Content-Disposition": 'inline; filename="placeholder.svg"',
-            })
-            return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
+            return svg_placeholder_response()
