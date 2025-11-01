@@ -1,24 +1,24 @@
 // lib/features/story/story_image_url.dart
 //
-// Choose a safe hero image URL for a Story.
-// Policy (to avoid browser CORS):
-//   • Prefer posterUrl, fall back to thumbUrl.
-//   • Reject junk/demo domains.
-//   • For any absolute http/https URL, return API /v1/img?u=<encoded>.
-//   • For relative paths, prefix API_BASE_URL directly.
-//   • If API_BASE_URL is missing, fall back to the original URL.
+// Safe hero/thumb image resolver.
+// Policy:
+//   • Prefer posterUrl, then thumbUrl.
+//   • Drop junk/demo hosts.
+//   • Any absolute http/https URL → proxy via API /v1/img?u=<encoded> (CORS-safe).
+//   • Relative paths → prefix API_BASE_URL.
+//   • If API_BASE_URL is missing, gracefully fall back to the original URL.
+//   • Strip Chrome’s trailing “:1” suffix from paths.
 //
 // Usage:
 //   final imgUrl = resolveStoryImageUrl(story);
-//   if (imgUrl.isNotEmpty) ... CachedNetworkImage(imageUrl: imgUrl, ...);
+//   if (imgUrl.isNotEmpty) CachedNetworkImage(imageUrl: imgUrl, ...);
 
 import '../../core/models.dart';
 
-// Set in CI with:
-//   --dart-define=API_BASE_URL=https://api.nutshellnewsapp.com
-// (no trailing slash; your workflow trims it)
-const String _API_BASE = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+const String _API_BASE =
+    String.fromEnvironment('API_BASE_URL', defaultValue: ''); // no trailing slash
 
+// ---------- helpers ----------
 bool _isHttp(Uri u) => u.hasScheme && (u.scheme == 'http' || u.scheme == 'https');
 
 bool _isJunk(String url) {
@@ -28,40 +28,56 @@ bool _isJunk(String url) {
 }
 
 String _proxy(String absoluteUrl) {
-  if (_API_BASE.isEmpty) return absoluteUrl; // graceful fallback
+  if (_API_BASE.isEmpty) return absoluteUrl; // graceful fallback if not defined
   final enc = Uri.encodeComponent(absoluteUrl);
   return '$_API_BASE/v1/img?u=$enc';
 }
 
+String _prefixApiBase(String rel) {
+  if (_API_BASE.isEmpty) return rel;
+  return rel.startsWith('/') ? '$_API_BASE$rel' : '$_API_BASE/$rel';
+}
+
+String _stripChromeSuffix(String raw) {
+  // Chrome sometimes appends :<digits> to the *path* (e.g., …/img.jpg:1).
+  final u = Uri.tryParse(raw);
+  if (u == null) return raw;
+  final path = u.path.replaceFirst(RegExp(r':\d+$'), '');
+  return (path == u.path) ? raw : u.replace(path: path).toString();
+}
+
+bool _isOurProxy(Uri u) {
+  final apiHost = Uri.tryParse(_API_BASE)?.host ?? '';
+  return u.path.contains('/v1/img') && (apiHost.isEmpty || u.host == apiHost);
+}
+
+// ---------- main ----------
 String resolveStoryImageUrl(Story story) {
   // 1) pick candidate
-  final cand = (story.posterUrl?.isNotEmpty == true)
-      ? story.posterUrl!
-      : (story.thumbUrl ?? '');
+  final String cand = ((story.posterUrl?.trim().isNotEmpty ?? false)
+          ? story.posterUrl!.trim()
+          : (story.thumbUrl ?? '').trim())
+      .trim();
+
   if (cand.isEmpty || _isJunk(cand)) return '';
 
-  final uri = Uri.tryParse(cand);
+  // 2) sanitize Chrome :1 suffix early
+  final String cleaned = _stripChromeSuffix(cand);
+  final uri = Uri.tryParse(cleaned);
   if (uri == null) return '';
 
-  // 2) If this is already our own proxy (/v1/img?u=...), keep it
-  final isAlreadyProxy = uri.path.toLowerCase().contains('/v1/img');
-  if (isAlreadyProxy) {
-    // Also reject proxied junk if present in inner param
+  // 3) already our proxy? keep it (but still reject junk inner param)
+  if (_isOurProxy(uri)) {
     final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
     if (inner.isNotEmpty && _isJunk(inner)) return '';
-    return _API_BASE.isNotEmpty ? cand : (inner.isNotEmpty ? inner : cand);
+    return cleaned;
   }
 
-  // 3) Absolute external URL → always go through API proxy to avoid CORS
+  // 4) absolute external URL → go through API proxy (CORS-safe)
   if (_isHttp(uri)) {
-    return _proxy(cand);
+    return _proxy(cleaned);
   }
 
-  // 4) Relative path → serve from API base directly
-  if (_API_BASE.isNotEmpty) {
-    return cand.startsWith('/') ? '$_API_BASE$cand' : '$_API_BASE/$cand';
-  }
-
-  // 5) Last resort
-  return cand;
+  // 5) relative path → serve via API base directly
+  return _prefixApiBase(cleaned);
 }
