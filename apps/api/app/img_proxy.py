@@ -127,7 +127,8 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str, page_ref: Op
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
-        # (removed Sec-Fetch-* headers to avoid tripping some origins)
+        "Accept-Encoding": "identity",  # ensure uncompressed body → avoid length mismatches
+        # (Sec-Fetch-* intentionally omitted)
     }
 
     if mode.startswith("page_ref"):
@@ -260,8 +261,7 @@ async def proxy_img(
     headers = _cors_headers()
     if dbg:
         headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-    if "Content-Length" in winner.headers:
-        headers["Content-Length"] = winner.headers["Content-Length"]
+    # Do NOT forward Content-Length (body may be decompressed/streamed)
     headers["Content-Type"] = media_type
     headers["Content-Disposition"] = 'inline; filename="proxy-image"'
 
