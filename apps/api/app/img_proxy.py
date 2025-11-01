@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from urllib.parse import urlparse, urlunparse, unquote
 
 import httpx
@@ -12,10 +12,16 @@ from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/v1", tags=["img"])
 
+# ── Tunables ──────────────────────────────────────────────────────────────────
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
-TOTAL_TIMEOUT = httpx.Timeout(timeout=None, connect=CONNECT_TIMEOUT, read=READ_TIMEOUT, write=READ_TIMEOUT, pool=CONNECT_TIMEOUT)
-
+TOTAL_TIMEOUT = httpx.Timeout(
+    timeout=None,
+    connect=CONNECT_TIMEOUT,
+    read=READ_TIMEOUT,
+    write=READ_TIMEOUT,
+    pool=CONNECT_TIMEOUT,
+)
 MAX_REDIRECTS = 5
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
@@ -29,14 +35,14 @@ _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
 _TRAILING_COLON_NUM = re.compile(r":\d+$")
 
 _BLOCKED_HOSTS = {
-    "api.nutshellnewsapp.com",
+    "api.nutshellnewsapp.com",  # avoid recursion
     "api",
     "localhost", "localhost.localdomain",
     "127.0.0.1", "0.0.0.0",
 }
 
-# CDN host -> expected publisher Referer
-_PUBLISHER_REFERERS: list[tuple[str, str]] = [
+# CDN → publisher-site Referer
+_PUBLISHER_REFERERS: List[tuple[str, str]] = [
     ("c.ndtvimg.com",                 "https://www.ndtv.com/"),
     ("i.ndtvimg.com",                 "https://www.ndtv.com/"),
     ("i.hindustantimes.com",          "https://www.hindustantimes.com/"),
@@ -52,6 +58,7 @@ _PUBLISHER_REFERERS: list[tuple[str, str]] = [
     ("img.etb2bimg.com",              "https://economictimes.indiatimes.com/"),
 ]
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def _cors_headers() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": "*",
@@ -70,7 +77,8 @@ def _host_is_private_ip_literal(host: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast)
 
 def _looks_like_image(content_type: Optional[str]) -> bool:
     if not content_type:
@@ -92,23 +100,24 @@ def _publisher_referer_for(host: str, path: str) -> str:
     seg = _first_path_segment(path)
     return f"https://{host}/{seg}/" if seg else f"https://{host}/"
 
-def _build_headers(origin_host: str, origin_path: str, *, alt: bool) -> dict[str, str]:
-    if not alt:
-        referer_base = _publisher_referer_for(origin_host, origin_path)
-        return {
-            "User-Agent": BROWSER_UA,
-            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": referer_base,
-            "Origin": referer_base.rstrip("/"),
-            "Connection": "keep-alive",
-        }
-    return {
+def _headers_variant(origin_host: str, origin_path: str, mode: str) -> dict[str, str]:
+    # modes: "pub" (Referer+Origin), "pub_no_origin" (Referer only), "no_ref"
+    base = {
         "User-Agent": BROWSER_UA,
-        "Accept": "image/*,*/*;q=0.5",
-        "Accept-Language": "en-US,en;q=0.8",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
     }
+    if mode == "pub":
+        ref = _publisher_referer_for(origin_host, origin_path)
+        base["Referer"] = ref
+        base["Origin"] = ref.rstrip("/")
+    elif mode == "pub_no_origin":
+        ref = _publisher_referer_for(origin_host, origin_path)
+        base["Referer"] = ref
+    else:  # "no_ref"
+        pass
+    return base
 
 def _sanitize_tail_colon(full_url: str) -> str:
     p = urlparse(full_url)
@@ -138,33 +147,13 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
     sanitized_full = _sanitize_tail_colon(orig_full)
     return orig_full, sanitized_full, host, path
 
-async def _try_fetch(client: httpx.AsyncClient, full_url: str, host: str, path: str, alt: bool) -> Optional[httpx.Response]:
-    try:
-        r = await client.get(full_url, headers=_build_headers(host, path, alt=alt))
-    except httpx.RequestError:
-        return None
-
-    # If upstream gives 5xx, bubble a 502 immediately
-    if r.status_code >= 500:
-        raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
-
-    # If it's clearly an image, accept it even if 401/403/404 (rare, but some CDNs do this)
-    if _looks_like_image(r.headers.get("Content-Type", "")):
-        return r
-
-    # Otherwise, only accept success-ish
-    if r.status_code in (401, 403, 404, 451):
-        return None
-    if r.status_code >= 400:
-        return r
-    return r
-
+# ── Endpoint ──────────────────────────────────────────────────────────────────
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_img(
     request: Request,
     u: Optional[str] = Query(None, description="Absolute image URL (URL-encoded)"),
     url: Optional[str] = Query(None, description="Alias for 'u'"),
-    dbg: Optional[int] = Query(0, description="Set 1 to include debug headers"),
+    dbg: Optional[int] = Query(0, description="Set 1 to add X-Proxy-* debug headers"),
 ):
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_cors_headers())
@@ -172,15 +161,18 @@ async def proxy_img(
     raw = u or url
     orig_url, sani_url, host, path = _parse_source_url(raw or "")
 
-    attempts: list[tuple[str, bool, str]] = [
-        (orig_url, False, "orig+ref"),
-        (orig_url, True,  "orig+noref"),
-    ]
-    if sani_url != orig_url:
-        attempts += [
-            (sani_url, False, "sani+ref"),
-            (sani_url, True,  "sani+noref"),
-        ]
+    attempts: List[tuple[str, str]] = []
+    # order: orig then sanitized; for each: pub, pub_no_origin, no_ref
+    for target in (orig_url, sani_url) if sani_url != orig_url else (orig_url,):
+        attempts.extend([
+            (target, "pub"),
+            (target, "pub_no_origin"),
+            (target, "no_ref"),
+        ])
+
+    debug_notes: List[str] = []
+    winner: Optional[httpx.Response] = None
+    last_nonfatal: Optional[httpx.Response] = None
 
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
@@ -188,35 +180,59 @@ async def proxy_img(
         max_redirects=MAX_REDIRECTS,
         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
     ) as client:
-        winner: Optional[httpx.Response] = None
-        chosen: str = ""
-        for full_url, alt, label in attempts:
-            r = await _try_fetch(client, full_url, host, path, alt)
-            if r is None:
+        for full_url, mode in attempts:
+            try:
+                r = await client.get(full_url, headers=_headers_variant(host, path, mode))
+            except httpx.RequestError as e:
+                debug_notes.append(f"{mode} neterr:{type(e).__name__}")
                 continue
-            winner = r
-            chosen = label
-            break
+
+            ct = r.headers.get("Content-Type", "")
+            cts = ct.split(";", 1)[0] if ct else ""
+            debug_notes.append(f"{mode} {r.status_code} {cts or '-'}")
+
+            if r.status_code >= 500:
+                raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
+
+            if r.status_code in (401, 403, 404, 451):
+                # try next variant
+                continue
+
+            # Only accept as winner if it REALLY looks like an image
+            if r.status_code < 400 and _looks_like_image(ct):
+                winner = r
+                break
+
+            # remember the last nonfatal response so we can report better on failure
+            last_nonfatal = r
 
     if winner is None:
-        raise HTTPException(status_code=404, detail="not found")
+        # Prefer to signal why we failed
+        detail = "not found"
+        if last_nonfatal is not None:
+            ct = last_nonfatal.headers.get("Content-Type", "")
+            detail = f"blocked-or-nonimage ({last_nonfatal.status_code} {ct.split(';',1)[0] if ct else '-'})"
+        raise HTTPException(status_code=404, detail=detail)
 
+    # Prepare streaming response
     ct = winner.headers.get("Content-Type", "")
-    if not _looks_like_image(ct):
-        raise HTTPException(status_code=404, detail="not an image")
-
     media_type = ct.split(";", 1)[0] if ct else "application/octet-stream"
+
     headers = _cors_headers()
-    headers["Content-Type"] = media_type
-    headers["Content-Disposition"] = 'inline; filename="proxy-image"'
     if "Content-Length" in winner.headers:
         headers["Content-Length"] = winner.headers["Content-Length"]
+    headers["Content-Type"] = media_type
+    headers["Content-Disposition"] = 'inline; filename="proxy-image"'
+
     if dbg:
-        headers["X-Proxy-Upstream-Status"] = str(winner.status_code)
-        headers["X-Proxy-Attempt"] = chosen
-        headers["X-Proxy-From-Host"] = host
+        headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
 
     if request.method == "HEAD":
         return Response(status_code=200, headers=headers)
 
-    return StreamingResponse(winner.aiter_bytes(), status_code=200, media_type=media_type, headers=headers)
+    return StreamingResponse(
+        winner.aiter_bytes(),
+        status_code=200,
+        media_type=media_type,
+        headers=headers,
+    )
