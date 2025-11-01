@@ -1,4 +1,3 @@
-# apps/api/app/img_proxy.py
 from __future__ import annotations
 
 import ipaddress
@@ -13,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/v1", tags=["img"])
 
-# ── Tunables ──────────────────────────────────────────────────────────────────
+# Configs
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
 TOTAL_TIMEOUT = httpx.Timeout(
@@ -26,8 +25,7 @@ TOTAL_TIMEOUT = httpx.Timeout(
 MAX_REDIRECTS = 5
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
-# If True, short-circuit for hosts that are known to hard-block hotlinking.
-HARD_DENY = True
+HARD_DENY = True  # keep enabled for safety
 
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -35,21 +33,6 @@ BROWSER_UA = (
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
-_BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
-_TRAILING_COLON_NUM = re.compile(r":\d+$")
-
-# Never allow calls to ourselves / internal / private IP literals.
-_BLOCKED_HOSTS = {
-    "api.nutshellnewsapp.com",
-    "api",
-    "localhost",
-    "localhost.localdomain",
-    "127.0.0.1",
-    "0.0.0.0",
-}
-
-# Some popular Indian news CDNs that enforce strict anti-hotlink (403/HTML).
-# We fast-fail these when HARD_DENY=True to avoid wasted attempts.
 _HARD_DENY_HOST_SUFFIXES = (
     "ndtvimg.com",
     "hindustantimes.com",
@@ -60,27 +43,18 @@ _HARD_DENY_HOST_SUFFIXES = (
     "indianexpress.com",
     "business-standard.com",
     "newindianexpress.com",
-    "tosshub.com",  # IndiaToday CDN
+    "tosshub.com",
 )
 
-# CDN → publisher-site Referer
-_PUBLISHER_REFERERS: List[tuple[str, str]] = [
-    ("c.ndtvimg.com",                 "https://www.ndtv.com/"),
-    ("i.ndtvimg.com",                 "https://www.ndtv.com/"),
-    ("i.hindustantimes.com",          "https://www.hindustantimes.com/"),
-    ("images.hindustantimes.com",     "https://www.hindustantimes.com/"),
-    ("images.livemint.com",           "https://www.livemint.com/"),
-    ("static.toiimg.com",             "https://timesofindia.indiatimes.com/"),
-    ("img.etimg.com",                 "https://economictimes.indiatimes.com/"),
-    ("th-i.thgim.com",                "https://www.thehindu.com/"),
-    ("images.indianexpress.com",      "https://indianexpress.com/"),
-    ("images.newindianexpress.com",   "https://www.newindianexpress.com/"),
-    ("akm-img-a-in.tosshub.com",      "https://www.indiatoday.in/"),
-    ("bsmedia.business-standard.com", "https://www.business-standard.com/"),
-    ("img.etb2bimg.com",              "https://economictimes.indiatimes.com/"),
-]
+_BLOCKED_HOSTS = {
+    "api.nutshellnewsapp.com",
+    "api",
+    "localhost",
+    "localhost.localdomain",
+    "127.0.0.1",
+    "0.0.0.0",
+}
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 def _cors_headers() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": "*",
@@ -106,96 +80,6 @@ def _host_is_private_ip_literal(host: str) -> bool:
         or ip.is_reserved
         or ip.is_multicast
     )
-
-def _looks_like_image(content_type: Optional[str]) -> bool:
-    if not content_type:
-        return False
-    ct = content_type.lower().split(";", 1)[0].strip()
-    return ct.startswith("image/") or ct == "application/octet-stream"
-
-def _first_path_segment(path: str) -> str:
-    if not path.startswith("/"):
-        return ""
-    parts = path.split("/")
-    return parts[1] if len(parts) > 1 and parts[1] else ""
-
-def _publisher_referer_for(host: str, path: str) -> str:
-    h = host.lower()
-    for suffix, ref in _PUBLISHER_REFERERS:
-        if h.endswith(suffix):
-            return ref
-    # fallback: same host + first segment
-    seg = _first_path_segment(path)
-    return f"https://{host}/{seg}/" if seg else f"https://{host}/"
-
-def _self_referer_for(host: str, path: str) -> str:
-    seg = _first_path_segment(path)
-    return f"https://{host}/{seg}/" if seg else f"https://{host}/"
-
-def _sanitize_tail_colon(full_url: str) -> str:
-    p = urlparse(full_url)
-    new_path = _TRAILING_COLON_NUM.sub("", p.path or "")
-    if new_path != p.path:
-        p = p._replace(path=new_path)
-        return urlunparse(p)
-    return full_url
-
-def _weserv_urls(full_url: str) -> list[str]:
-    """
-    Build weserv proxy URL(s) robustly:
-    - Quote path safely
-    - Keep query intact
-    - Prefix https images with ssl:
-    - Disable sharpening/noise with n=-1 (no processing)
-    """
-    p = urlparse(full_url)
-    host = p.hostname or ""
-    path = quote(p.path or "", safe="/._-~%")
-    query = f"?{p.query}" if p.query else ""
-    hpq = f"{host}{path}{query}"
-    proto = "ssl:" if p.scheme == "https" else ""
-    return [f"https://images.weserv.nl/?url={proto}{hpq}&n=-1"]
-
-def _headers_variant(origin_host: str, origin_path: str, mode: str, prefer_ref: Optional[str]) -> dict[str, str]:
-    """
-    modes:
-      "ref" | "ref_no_origin" | "pub" | "self" | "pub_no_origin" | "self_no_origin" | "no_ref"
-    """
-    base = {
-        "User-Agent": BROWSER_UA,
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-        # Subtle spoofing that sometimes helps
-        "Sec-Fetch-Site": "cross-site",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Dest": "image",
-    }
-
-    if mode in ("ref", "ref_no_origin"):
-        ref = (prefer_ref or "").strip()
-        if ref:
-            pr = urlparse(ref)
-            origin = f"{pr.scheme}://{pr.netloc}" if pr.scheme and pr.netloc else ""
-            base["Referer"] = ref
-            if mode == "ref" and origin:
-                base["Origin"] = origin
-        return base
-
-    if mode in ("pub", "pub_no_origin"):
-        ref = _publisher_referer_for(origin_host, origin_path)
-    elif mode in ("self", "self_no_origin"):
-        ref = _self_referer_for(origin_host, origin_path)
-    else:
-        ref = ""
-
-    if mode in ("pub", "self"):
-        base["Referer"] = ref
-        base["Origin"] = ref.rstrip("/")
-    elif mode in ("pub_no_origin", "self_no_origin"):
-        base["Referer"] = ref
-
-    return base
 
 def _hard_deny(host: str) -> bool:
     if not HARD_DENY:
@@ -223,56 +107,36 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
     if _host_is_private_ip_literal(host):
         raise HTTPException(status_code=400, detail="forbidden host")
 
-    if _BAD_PATH_PATTERNS.search(path):
-        raise HTTPException(status_code=404, detail="not an image")
+    return orig_full, orig_full, host, path
 
-    if _hard_deny(host):
-        # Fast-fail with a stable message callers can special-case.
-        raise HTTPException(status_code=404, detail="hotlink-protected")
+# Minimal SVG placeholder (can swap for PNG if you like)
+SVG_PLACEHOLDER = b'''
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60">
+    <rect width="100" height="60" fill="#dee2e6"/>
+    <text x="50" y="30" font-size="14" text-anchor="middle" fill="#868e96" dy=".3em">No Image</text>
+</svg>
+'''
 
-    sanitized_full = _sanitize_tail_colon(orig_full)
-    return orig_full, sanitized_full, host, path
-
-# ── Endpoint ──────────────────────────────────────────────────────────────────
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_img(
     request: Request,
-    u:   Optional[str] = Query(None, description="Absolute image URL (URL-encoded)"),
+    u: Optional[str] = Query(None, description="Absolute image URL (URL-encoded)"),
     url: Optional[str] = Query(None, description="Alias for 'u'"),
-    ref: Optional[str] = Query(None, description="Optional article/page URL to use as Referer"),
-    dbg: Optional[int] = Query(0,    description="Set 1 to add X-Proxy-* debug headers"),
 ):
-    # CORS preflight
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_cors_headers())
 
     raw = u or url
-    orig_url, sani_url, host, path = _parse_source_url(raw or "")
+    orig_url, _, host, _ = _parse_source_url(raw or "")
 
-    prefer_ref: Optional[str] = None
-    if ref:
-        pr = urlparse(ref)
-        if pr.scheme in ("http", "https") and pr.netloc:
-            prefer_ref = pr.geturl()
-
-    # Attempt order: (real ref first if provided) → publisher/self variants → no_ref
-    mode_order: List[str] = []
-    if prefer_ref:
-        mode_order += ["ref", "ref_no_origin"]
-    mode_order += ["pub", "self", "pub_no_origin", "self_no_origin", "no_ref"]
-
-    targets = (orig_url, sani_url) if sani_url != orig_url else (orig_url,)
-    attempts: List[tuple[str, str]] = [(t, m) for t in targets for m in mode_order]
-
-    # Weserv last (best-effort; may still be blocked by origin)
-    weserv_targets = _weserv_urls(orig_url)
-    if sani_url != orig_url:
-        weserv_targets += _weserv_urls(sani_url)
-    attempts += [(w, "weserv") for w in weserv_targets]
-
-    debug_notes: List[str] = []
-    winner: Optional[httpx.Response] = None
-    last_nonfatal: Optional[httpx.Response] = None
+    # Hard-deny: immediately return fallback image
+    if _hard_deny(host):
+        headers = _cors_headers()
+        headers.update({
+            "Content-Type": "image/svg+xml",
+            "Content-Disposition": 'inline; filename="placeholder.svg"',
+        })
+        return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
 
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
@@ -280,67 +144,35 @@ async def proxy_img(
         max_redirects=MAX_REDIRECTS,
         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
     ) as client:
-        for full_url, mode in attempts:
-            try:
-                headers = _headers_variant(host, path, mode, prefer_ref)
-                r = await client.get(full_url, headers=headers)
-            except httpx.RequestError as e:
-                debug_notes.append(f"{mode} neterr:{type(e).__name__}")
-                continue
+        try:
+            r = await client.get(orig_url, headers={
+                "User-Agent": BROWSER_UA,
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            })
+        except httpx.RequestError:
+            # Network issue -- show fallback
+            headers = _cors_headers()
+            headers.update({
+                "Content-Type": "image/svg+xml",
+                "Content-Disposition": 'inline; filename="placeholder.svg"',
+            })
+            return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
 
-            ct = r.headers.get("Content-Type", "")
-            cts = ct.split(";", 1)[0] if ct else ""
-            debug_notes.append(f"{mode} {r.status_code} {cts or '-'}")
-
-            if r.status_code >= 500:
-                raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
-
-            if r.status_code in (401, 403, 404, 451):
-                last_nonfatal = r
-                continue
-
-            if r.status_code < 400 and _looks_like_image(ct):
-                winner = r
-                break
-
-            last_nonfatal = r
-
-    if winner is None:
-        detail = "not found"
-        if last_nonfatal is not None:
-            ct = last_nonfatal.headers.get("Content-Type", "")
-            detail = f"blocked-or-nonimage ({last_nonfatal.status_code} {ct.split(';',1)[0] if ct else '-'})"
-        err_headers = _cors_headers()
-        err_headers["X-Proxy-Host"] = host
-        if dbg:
-            err_headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-        body = json.dumps({
-            "ok": False,
-            "status": 404,
-            "error": "http_error",
-            "message": detail,
-        })
-        return Response(status_code=404, headers=err_headers, media_type="application/json", content=body)
-
-    # Success
-    ct = winner.headers.get("Content-Type", "")
-    media_type = ct.split(";", 1)[0] if ct else "application/octet-stream"
-
-    headers = _cors_headers()
-    headers["X-Proxy-Host"] = host
-    if dbg:
-        headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-    if "Content-Length" in winner.headers:
-        headers["Content-Length"] = winner.headers["Content-Length"]
-    headers["Content-Type"] = media_type
-    headers["Content-Disposition"] = 'inline; filename="proxy-image"'
-
-    if request.method == "HEAD":
-        return Response(status_code=200, headers=headers)
-
-    return StreamingResponse(
-        winner.aiter_bytes(),
-        status_code=200,
-        media_type=media_type,
-        headers=headers,
-    )
+        ct = r.headers.get("Content-Type", "")
+        if r.status_code < 400 and ct.startswith("image/"):
+            headers = _cors_headers()
+            if "Content-Length" in r.headers:
+                headers["Content-Length"] = r.headers["Content-Length"]
+            headers["Content-Type"] = ct
+            headers["Content-Disposition"] = 'inline; filename="proxy-image"'
+            if request.method == "HEAD":
+                return Response(status_code=200, headers=headers)
+            return StreamingResponse(r.aiter_bytes(), status_code=200, media_type=ct, headers=headers)
+        else:
+            # Serve placeholder for errors/non-image
+            headers = _cors_headers()
+            headers.update({
+                "Content-Type": "image/svg+xml",
+                "Content-Disposition": 'inline; filename="placeholder.svg"',
+            })
+            return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
