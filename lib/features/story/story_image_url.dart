@@ -1,8 +1,4 @@
 // lib/features/story/story_image_url.dart
-//
-// Always prefer proxy for external images (server fetch avoids CORS).
-// Allow a tiny direct-allowed list (e.g., YouTube thumbs).
-
 import '../../core/models.dart';
 
 const String _API_BASE =
@@ -21,8 +17,30 @@ bool _isJunk(String url) {
 String _stripChromeSuffix(String raw) {
   final u = Uri.tryParse(raw);
   if (u == null) return raw;
-  final p = u.path.replaceFirst(RegExp(r':\d+$'), '');
-  return (p == u.path) ? raw : u.replace(path: p).toString();
+  final newPath = u.path.replaceFirst(RegExp(r':\d+$'), '');
+  return (newPath == u.path) ? raw : u.replace(path: newPath).toString();
+}
+
+String _rootDomain(String host) {
+  final parts = host.split('.');
+  if (parts.length < 2) return host;
+  return '${parts[parts.length - 2]}.${parts.last}';
+}
+
+final String _ourRoot =
+    _rootDomain(Uri.tryParse(_API_BASE)?.host ?? ''); // e.g. nutshellnewsapp.com
+
+bool _isOurDomainHost(String host) {
+  if (_ourRoot.isEmpty) return false;
+  final h = host.toLowerCase();
+  return h == _ourRoot || h.endsWith('.$_ourRoot');
+}
+
+bool _looksLikeImageUri(Uri u) {
+  final t = u.toString().toLowerCase();
+  // common image endings or query-hinted images
+  return RegExp(r'\.(jpg|jpeg|png|webp|gif|avif)(?:$|\?)').hasMatch(t) ||
+         t.contains('/vi/') || t.contains('/thumb') || t.contains('/images/');
 }
 
 String _prefixApiBase(String rel) {
@@ -35,10 +53,10 @@ bool _isOurProxy(Uri u) {
   return u.path.contains('/v1/img') && (apiHost.isEmpty || u.host == apiHost);
 }
 
-// Tiny CORS-open allowlist (kept narrow on purpose)
+// small direct-allowlist (CORS-open CDNs)
 bool _isCorsSafeDirect(String url) {
   final u = Uri.tryParse(url);
-  if (u == null || u.host.isEmpty) return false;
+  if (u == null) return false;
   final h = u.host.toLowerCase();
   const allow = <String>[
     'i.ytimg.com', 'ytimg.com', 'yt3.ggpht.com', 'img.youtube.com',
@@ -59,30 +77,42 @@ String _proxy(String absoluteUrl, {String? ref}) {
 }
 
 String resolveStoryImageUrl(Story story) {
-  final String cand = ((story.posterUrl?.trim().isNotEmpty ?? false)
-      ? story.posterUrl!.trim()
-      : (story.thumbUrl ?? '').trim());
+  // Gather possible sources
+  final cands = <String>[
+    (story.posterUrl ?? '').trim(),
+    (story.thumbUrl ?? '').trim(),
+  ].where((s) => s.isNotEmpty).toList();
 
-  if (_isJunk(cand)) return '';
+  // 1) sanitize + filter to only real image URLs not on our domain
+  for (final raw in cands) {
+    if (_isJunk(raw)) continue;
+    final cleaned = _stripChromeSuffix(raw);
+    final u = Uri.tryParse(cleaned);
+    if (u == null || !_isHttp(u)) continue;
+    if (_isOurDomainHost(u.host)) continue;          // <-- drop article links on our own hosts
+    if (!_looksLikeImageUri(u)) continue;            // <-- must look like an image
 
-  final String cleaned = _stripChromeSuffix(cand);
-  final uri = Uri.tryParse(cleaned);
-  if (uri == null) return '';
+    // keep already-proxied images
+    if (_isOurProxy(u)) {
+      final inner = u.queryParameters['u'] ?? u.queryParameters['url'] ?? '';
+      if (_isJunk(inner)) continue;
+      return cleaned;
+    }
 
-  // Keep existing proxy URLs (but reject if inner is junk)
-  if (_isOurProxy(uri)) {
-    final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
-    if (_isJunk(inner)) return '';
-    return cleaned;
-  }
-
-  if (_isHttp(uri)) {
-    // Only a tiny allowlist goes direct; everything else via proxy (with article URL as referer)
+    // route through proxy (or direct for tiny allowlist)
     if (_isCorsSafeDirect(cleaned)) return cleaned;
     final ref = (story.url?.isNotEmpty ?? false) ? story.url : null;
     return _proxy(cleaned, ref: ref);
   }
 
-  // Relative asset under our API
-  return _prefixApiBase(cleaned);
+  // 2) if any candidate is relative, serve via API base
+  for (final raw in cands) {
+    if (_isJunk(raw)) continue;
+    final cleaned = _stripChromeSuffix(raw);
+    final u = Uri.tryParse(cleaned);
+    if (u != null && !u.hasScheme) return _prefixApiBase(cleaned);
+  }
+
+  // nothing usable
+  return '';
 }
