@@ -60,6 +60,12 @@ _PUBLISHER_REFERERS: List[tuple[str, str]] = [
     ("akm-img-a-in.tosshub.com",      "https://www.indiatoday.in/"),
     ("bsmedia.business-standard.com", "https://www.business-standard.com/"),
     ("img.etb2bimg.com",              "https://economictimes.indiatimes.com/"),
+    # ---- added allowlist entries ----
+    ("assets.bollywoodhungama.in",    "https://www.bollywoodhungama.com/"),
+    ("staticimg.amarujala.com",       "https://www.amarujala.com/"),
+    ("images.indiatvnews.com",        "https://www.indiatvnews.com/"),
+    ("static-koimoi.akamaized.net",   "https://www.koimoi.com/"),
+    ("i.ytimg.com",                   "https://www.youtube.com/"),
 ]
 
 SVG_PLACEHOLDER = b"""<svg xmlns='http://www.w3.org/2000/svg' width='100' height='60'>
@@ -121,9 +127,7 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str, page_ref: Op
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
-        "Sec-Fetch-Site": "cross-site",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Dest": "image",
+        # (removed Sec-Fetch-* headers to avoid tripping some origins)
     }
 
     if mode.startswith("page_ref"):
