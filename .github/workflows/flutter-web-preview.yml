@@ -1,22 +1,22 @@
-name: Web Deploy (Manual)
+name: Web Build → Deploy (Manual)
 
 on:
-  workflow_dispatch: {}   # manual trigger only
+  workflow_dispatch: {}   # run by hand only
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  deploy:
+  build:
+    name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
-      # Required secrets
-      API_BASE_URL:    ${{ secrets.API_BASE_URL }}
-      VPS_HOST:        ${{ secrets.VPS_HOST }}
-      VPS_USER:        ${{ secrets.VPS_USER }}
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      # Optional overrides
-      SSH_PORT:        ${{ secrets.SSH_PORT || '22' }}
-      WEB_ROOT:        ${{ secrets.WEB_ROOT || '/var/www/nutshellnewsapp_web' }}
-      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
-
+      API_BASE_URL:   ${{ secrets.API_BASE_URL }}                          # required
+      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +28,7 @@ jobs:
       - name: Install deps
         run: flutter pub get
 
-      - name: Build Flutter web (release)
+      - name: Build (release)
         shell: bash
         run: |
           set -euo pipefail
@@ -44,6 +44,35 @@ jobs:
             --dart-define=SHARE_BASE_URL="$share" \
             --dart-define=DEEP_LINK_BASE="$share"
 
+          mkdir -p build/web
+          cat > build/web/version.json <<EOF
+          {"commit":"${GITHUB_SHA}","built_at":"$(date -u +%FT%TZ)","api_base":"${api}","share_base":"${share}"}
+          EOF
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+
+  deploy:
+    name: Deploy to VPS
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST:        ${{ secrets.VPS_HOST }}               # required
+      VPS_USER:        ${{ secrets.VPS_USER }}               # required
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}        # required
+      SSH_PORT:        ${{ secrets.SSH_PORT || '22' }}
+      WEB_ROOT:        ${{ secrets.WEB_ROOT || '/var/www/nutshellnewsapp_web' }}
+      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web-build
+
       - name: Prepare SSH
         shell: bash
         run: |
@@ -55,15 +84,22 @@ jobs:
           ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/id_vps -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$WEB_ROOT'"
 
-      - name: Rsync to VPS
+      - name: Rsync files to VPS
         shell: bash
         run: |
           sudo apt-get update -y && sudo apt-get install -y rsync
           rsync -az --delete \
             --chmod=D2755,F644 \
             -e "ssh -i ~/.ssh/id_vps -p $SSH_PORT" \
-            build/web/ "$VPS_USER@$VPS_HOST:$WEB_ROOT/"
+            web-build/ "$VPS_USER@$VPS_HOST:$WEB_ROOT/"
 
       - name: Reload nginx (best-effort)
         run: ssh -i ~/.ssh/id_vps -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
              "(systemctl reload nginx || service nginx reload || true)"
+
+      - name: Smoke test (HEAD)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSI "${SHARE_BASE_URL%/}" | sed -n '1,12p'
+          curl -fsS  "${SHARE_BASE_URL%/}/version.json" | sed -n '1,120p'
