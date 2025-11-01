@@ -6,8 +6,9 @@
 //   • Drop junk/demo hosts.
 //   • Any absolute http/https URL → proxy via API /v1/img?u=<encoded> (CORS-safe).
 //   • Relative paths → prefix API_BASE_URL.
-//   • If API_BASE_URL is missing, gracefully fall back to the original URL.
+//   • If API_BASE_URL is missing, fall back to the original URL.
 //   • Strip Chrome’s trailing “:1” suffix from paths.
+//   • If URL is already our proxy, leave it (but still reject junk inside).
 //
 // Usage:
 //   final imgUrl = resolveStoryImageUrl(story);
@@ -23,14 +24,17 @@ bool _isHttp(Uri u) => u.hasScheme && (u.scheme == 'http' || u.scheme == 'https'
 
 bool _isJunk(String url) {
   // Block obvious demo/placeholder hosts etc.
+  if (url.isEmpty) return true;
   if (url.contains('demo.tagdiv.com')) return true;
   return false;
 }
 
-String _proxy(String absoluteUrl) {
-  if (_API_BASE.isEmpty) return absoluteUrl; // graceful fallback if not defined
-  final enc = Uri.encodeComponent(absoluteUrl);
-  return '$_API_BASE/v1/img?u=$enc';
+String _stripChromeSuffix(String raw) {
+  // Chrome sometimes appends :<digits> to the *path* (e.g., …/img.jpg:1).
+  final u = Uri.tryParse(raw);
+  if (u == null) return raw;
+  final newPath = u.path.replaceFirst(RegExp(r':\d+$'), '');
+  return (newPath == u.path) ? raw : u.replace(path: newPath).toString();
 }
 
 String _prefixApiBase(String rel) {
@@ -38,17 +42,23 @@ String _prefixApiBase(String rel) {
   return rel.startsWith('/') ? '$_API_BASE$rel' : '$_API_BASE/$rel';
 }
 
-String _stripChromeSuffix(String raw) {
-  // Chrome sometimes appends :<digits> to the *path* (e.g., …/img.jpg:1).
-  final u = Uri.tryParse(raw);
-  if (u == null) return raw;
-  final path = u.path.replaceFirst(RegExp(r':\d+$'), '');
-  return (path == u.path) ? raw : u.replace(path: path).toString();
-}
-
 bool _isOurProxy(Uri u) {
   final apiHost = Uri.tryParse(_API_BASE)?.host ?? '';
+  // Accept both absolute and same-host forms; path must contain /v1/img
   return u.path.contains('/v1/img') && (apiHost.isEmpty || u.host == apiHost);
+}
+
+String _proxy(String absoluteUrl, {String? ref}) {
+  if (_API_BASE.isEmpty) return absoluteUrl; // graceful fallback if not defined
+  final qp = <String, String>{'u': absoluteUrl};
+  if (ref != null && ref.isNotEmpty) {
+    final r = Uri.tryParse(ref);
+    if (r != null && (r.scheme == 'http' || r.scheme == 'https') && r.host.isNotEmpty) {
+      qp['ref'] = r.toString();
+    }
+  }
+  final uri = Uri.parse('$_API_BASE/v1/img').replace(queryParameters: qp);
+  return uri.toString();
 }
 
 // ---------- main ----------
@@ -56,10 +66,9 @@ String resolveStoryImageUrl(Story story) {
   // 1) pick candidate
   final String cand = ((story.posterUrl?.trim().isNotEmpty ?? false)
           ? story.posterUrl!.trim()
-          : (story.thumbUrl ?? '').trim())
-      .trim();
+          : (story.thumbUrl ?? '').trim());
 
-  if (cand.isEmpty || _isJunk(cand)) return '';
+  if (_isJunk(cand)) return '';
 
   // 2) sanitize Chrome :1 suffix early
   final String cleaned = _stripChromeSuffix(cand);
@@ -69,13 +78,14 @@ String resolveStoryImageUrl(Story story) {
   // 3) already our proxy? keep it (but still reject junk inner param)
   if (_isOurProxy(uri)) {
     final inner = uri.queryParameters['u'] ?? uri.queryParameters['url'] ?? '';
-    if (inner.isNotEmpty && _isJunk(inner)) return '';
+    if (_isJunk(inner)) return '';
     return cleaned;
   }
 
-  // 4) absolute external URL → go through API proxy (CORS-safe)
+  // 4) absolute external URL → go through API proxy (CORS-safe), with article URL as ref when available
   if (_isHttp(uri)) {
-    return _proxy(cleaned);
+    final ref = (story.url?.isNotEmpty ?? false) ? story.url : null;
+    return _proxy(cleaned, ref: ref);
   }
 
   // 5) relative path → serve via API base directly
