@@ -1,164 +1,68 @@
-name: Web Deploy (Flutter → VPS)
+name: Web Deploy (Tiny)
 
 on:
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Why are you running this deploy?"
-        required: false
-        default: "manual"
-
-concurrency:
-  group: web-deploy-${{ github.ref_name }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
 
 jobs:
-  build:
-    name: Build Flutter Web
+  deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     env:
-      # Required
-      API_BASE_URL:   ${{ secrets.API_BASE_URL }}
-      # Optional → secret → repo var → hard default
-      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL || vars.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      API_BASE_URL:   ${{ secrets.API_BASE_URL }}                           # required
+      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
+      VPS_HOST:       ${{ secrets.VPS_HOST }}                                # required
+      VPS_USER:       ${{ secrets.VPS_USER }}                                # required
+      SSH_PRIVATE_KEY:${{ secrets.SSH_PRIVATE_KEY }}                         # required
+      SSH_PORT:       ${{ secrets.SSH_PORT || '22' }}
+      WEB_ROOT:       ${{ secrets.WEB_ROOT || '/var/www/nutshellnewsapp_web' }}
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: "3.35.6"
+          flutter-version: '3.35.6'
 
-      - name: Cache pub packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-cache-${{ runner.os }}-${{ hashFiles('pubspec.lock') }}
-          restore-keys: |
-            pub-cache-${{ runner.os }}-
-
-      - name: flutter pub get
+      - name: Install deps
         run: flutter pub get
 
-      - name: Compute renderer arg (html if supported)
-        id: args
-        shell: bash
-        run: |
-          if flutter build web -h | grep -q -- '--web-renderer'; then
-            echo "arg=--web-renderer html" >> "$GITHUB_OUTPUT"
-          else
-            echo "arg=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Validate required secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "${API_BASE_URL:-}" ]; then
-            echo "::error title=Missing secret::API_BASE_URL is required"; exit 1
-          fi
-          echo "Using API_BASE_URL (set) and SHARE_BASE_URL=${SHARE_BASE_URL%/}"
-
-      - name: Build (release)
+      - name: Build Flutter Web (release)
         shell: bash
         run: |
           set -euo pipefail
           api="${API_BASE_URL%/}"
           share="${SHARE_BASE_URL%/}"
-
+          if [ -z "$api" ]; then
+            echo "::error title=Missing secret::API_BASE_URL is required"; exit 1
+          fi
+          # Force html renderer; skip PWA worker to avoid stale caches
           flutter build web --release \
-            ${{ steps.args.outputs.arg }} \
+            --web-renderer html \
             --pwa-strategy=none \
             --dart-define=API_BASE_URL="$api" \
             --dart-define=SHARE_BASE_URL="$share" \
             --dart-define=DEEP_LINK_BASE="$share"
 
-          mkdir -p build/web
-          cat > build/web/version.json <<EOF
-          { "commit":"${GITHUB_SHA}", "built_at":"$(date -u +%FT%TZ)", "api_base":"${api}", "share_base":"${share}" }
-          EOF
-
-      - name: Upload web build
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-build
-          path: build/web
-
-  deploy:
-    name: Deploy to VPS
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      VPS_HOST:        ${{ secrets.VPS_HOST }}
-      VPS_USER:        ${{ secrets.VPS_USER }}
-      SSH_PORT:        ${{ secrets.SSH_PORT }}
-      WEB_ROOT:        ${{ secrets.WEB_ROOT }}
-      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL || vars.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
-    steps:
-      - name: Download build
-        uses: actions/download-artifact@v4
-        with:
-          name: web-build
-          path: build/web
-
       - name: Prepare SSH
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${SSH_PRIVATE_KEY:-}" ] || [ -z "${VPS_HOST:-}" ] || [ -z "${VPS_USER:-}" ]; then
-            echo "::error title=Missing deploy secrets::SSH_PRIVATE_KEY, VPS_HOST and VPS_USER are required"; exit 1
-          fi
           mkdir -p ~/.ssh
-          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_vps
           sed -i 's/\r$//' ~/.ssh/id_vps
           chmod 600 ~/.ssh/id_vps
-          : "${SSH_PORT:=22}"
-          : "${WEB_ROOT:=/var/www/nutshellnewsapp_web}"
-          ssh-keyscan -p "${SSH_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/id_vps -o BatchMode=yes -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" true
-          {
-            echo "SSH_PORT=${SSH_PORT}"
-            echo "WEB_ROOT=${WEB_ROOT}"
-          } >> "$GITHUB_ENV"
+          ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/id_vps -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$WEB_ROOT'"
 
-      - name: Ensure target dir exists
-        run: ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${WEB_ROOT}'"
-
-      - name: Rsync to VPS
+      - name: Rsync build to VPS
         shell: bash
         run: |
           sudo apt-get update -y && sudo apt-get install -y rsync
-          rsync -avz --delete \
+          rsync -az --delete \
             --chmod=D2755,F644 \
-            -e "ssh -i ~/.ssh/id_vps -p ${SSH_PORT}" \
-            build/web/ "${VPS_USER}@${VPS_HOST}:${WEB_ROOT}/"
+            -e "ssh -i ~/.ssh/id_vps -p $SSH_PORT" \
+            build/web/ "$VPS_USER@$VPS_HOST:$WEB_ROOT/"
 
-      - name: Set perms + reload nginx
-        run: |
-          ssh -i ~/.ssh/id_vps -p "${SSH_PORT}" "${VPS_USER}@${VPS_HOST}" \
-            "chown -R www-data:www-data '${WEB_ROOT}' || true; \
-             (systemctl reload nginx || service nginx reload || true)"
-
-      - name: Smoke test (HEAD)
-        shell: bash
-        run: |
-          set -euo pipefail
-          url="${SHARE_BASE_URL%/}"
-          echo "HEAD $url"
-          curl -fsS -I "$url" | sed -n '1,15p'
-
-      - name: Smoke test (version.json)
-        shell: bash
-        run: |
-          set -euo pipefail
-          url="${SHARE_BASE_URL%/}/version.json"
-          echo "GET $url"
-          curl -fsS "$url" | sed -n '1,120p'
+      - name: Reload nginx (best effort)
+        run: ssh -i ~/.ssh/id_vps -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
+             "(systemctl reload nginx || service nginx reload || true)"
