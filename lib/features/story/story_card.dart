@@ -191,6 +191,50 @@ class _StoryCardState extends State<StoryCard> {
     return '';
   }
 
+  /* ─────────────── category/vertical label helpers (NEW) ──────────────── */
+
+  /// Try to read a vertical/category key from common fields defensively.
+  String _verticalKey(Story s) {
+    // Preferred: s.vertical
+    try {
+      final v = (s as dynamic).vertical;
+      if (v is String && v.isNotEmpty) return v;
+    } catch (_) {}
+
+    // Fallbacks used by some payloads:
+    try {
+      final v = (s as dynamic).category;
+      if (v is String && v.isNotEmpty) return v;
+    } catch (_) {}
+
+    try {
+      final topics = (s as dynamic).topics;
+      if (topics is List && topics.isNotEmpty) {
+        final t0 = topics.first;
+        if (t0 is String && t0.isNotEmpty) return t0;
+        if (t0 is Map && (t0['key'] ?? t0['name']) != null) {
+          return (t0['key'] ?? t0['name']).toString();
+        }
+      }
+    } catch (_) {}
+
+    return '';
+  }
+
+  /// Map keys to user-facing labels.
+  String _verticalDisplay(String raw) {
+    final k = raw.toLowerCase().replaceAll(' ', '').replaceAll('-', '_');
+    if (k.isEmpty || k == 'all') return '';
+    if (k == 'top_stories' || k == 'topstories' || k == 'top_stories_national') {
+      return 'Top Stories';
+    }
+    if (k == 'entertainment') return 'Entertainment';
+    if (k == 'business' || k == 'money' || k == 'markets') return 'Business';
+    if (k == 'world' || k == 'international') return 'World';
+    // default: title-case unknown keys
+    return raw.isNotEmpty ? (raw[0].toUpperCase() + raw.substring(1)) : '';
+  }
+
   /* ─────────────────────────────── build ──────────────────────────────── */
 
   @override
@@ -221,6 +265,9 @@ class _StoryCardState extends State<StoryCard> {
     final hasUrl = _linkUrl != null;
     final imageUrl = resolveStoryImageUrl(story);
     final srcText = _sourceDomain(story);
+
+    // NEW: category/vertical label
+    final categoryLabel = _verticalDisplay(_verticalKey(story));
 
     // Card chrome (theme-aware):
     final Color cardBg = theme.cardColor;
@@ -361,6 +408,8 @@ class _StoryCardState extends State<StoryCard> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     _MetaLine(
+                                      // NEW order: Category → Kind → Timestamp
+                                      categoryLabel: categoryLabel,
                                       kindRaw: kindRaw,
                                       kindLabel: _kindDisplay(kindRaw),
                                       timestampText: primaryTsText,
@@ -567,16 +616,27 @@ _KindStyle _styleForKind(BuildContext ctx, String rawKind) {
   );
 }
 
+// Category pill uses a neutral style so it doesn't fight with kind color.
+_KindStyle _styleForCategory(BuildContext ctx) {
+  return _KindStyle(
+    bg: neutralPillBg(ctx),
+    border: outlineHairline(ctx),
+    text: secondaryTextColor(ctx),
+  );
+}
+
 /* ─────────────────────── META LINE ROW WIDGET ──────────────────────────── */
 
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
+    required this.categoryLabel,
     required this.kindRaw,
     required this.kindLabel,
     required this.timestampText,
     required this.freshnessText,
   });
 
+  final String categoryLabel; // NEW
   final String kindRaw;
   final String kindLabel;
   final String? timestampText;
@@ -585,32 +645,28 @@ class _MetaLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
-    final style = _styleForKind(context, kindRaw);
+    final kindStyle = _styleForKind(context, kindRaw);
+    final catStyle = _styleForCategory(context);
 
-    final pill = kindLabel.isEmpty
-        ? const SizedBox.shrink()
-        : Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: style.bg,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: style.border,
-                width: 1,
-              ),
+    Widget _pill(String label, _KindStyle style) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: style.bg,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: style.border, width: 1),
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: style.text,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
             ),
-            child: Text(
-              kindLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: style.text,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                height: 1.2,
-              ),
-            ),
-          );
+          ),
+        );
 
     final ts = (timestampText == null)
         ? const SizedBox.shrink()
@@ -645,8 +701,12 @@ class _MetaLine extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (kindLabel.isNotEmpty) pill,
-        if (kindLabel.isNotEmpty && timestampText != null)
+        if (categoryLabel.isNotEmpty) _pill(categoryLabel, catStyle),
+        if (categoryLabel.isNotEmpty && kindLabel.isNotEmpty)
+          const SizedBox(width: 6),
+        if (kindLabel.isNotEmpty) _pill(kindLabel, kindStyle),
+        if ((categoryLabel.isNotEmpty || kindLabel.isNotEmpty) &&
+            timestampText != null)
           const SizedBox(width: 6),
         if (timestampText != null) ts,
         if (freshnessText != null) const SizedBox(width: 6),
