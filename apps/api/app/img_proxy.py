@@ -83,6 +83,9 @@ def _hard_deny(host: str) -> bool:
     h = host.lower()
     return any(h.endswith(sfx) for sfx in _HARD_DENY_HOST_SUFFIXES)
 
+def _blocked_host(host: str) -> bool:
+    return host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS)
+
 def _parse_source_url(raw_u: str) -> Tuple[str, str]:
     if not raw_u:
         return "", ""
@@ -114,11 +117,7 @@ async def proxy_img(
     # Invalid, forbidden, or private hosts: fallback image
     if not orig_url or not host:
         return svg_placeholder_response()
-    if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
-        return svg_placeholder_response()
-    if _host_is_private_ip_literal(host):
-        return svg_placeholder_response()
-    if _hard_deny(host):
+    if _blocked_host(host) or _host_is_private_ip_literal(host) or _hard_deny(host):
         return svg_placeholder_response()
 
     async with httpx.AsyncClient(
