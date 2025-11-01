@@ -884,7 +884,7 @@ extension _StoryCompat on Story {
       if (extra is Map) {
         final raw = extra['ingested_at'] ?? extra['ingestedAt'];
         if (raw is DateTime) return raw;
-        if (raw is String && v.isNotEmpty) return DateTime.tryParse(raw);
+        if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
       }
     } catch (_) {}
 
