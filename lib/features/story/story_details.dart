@@ -1,8 +1,10 @@
 // lib/features/story/story_details.dart
 //
 // Visual sync with StoryCard (NutshellNews):
-//  • Meta line: [Kind] <timestamp> +Xm  (kind colors via ColorScheme,
-//    freshness uses Brand.freshRed)
+//  • Meta line ORDER: [Category] [Kind] <timestamp> +Xm
+//    - Category pill = neutral style (doesn't clash with kind color)
+//    - Kind pill colors via ColorScheme (release/error, news/primary, ott/tertiary, trailer/secondary)
+//    - Freshness uses Brand.freshRed
 //  • CTA row: [Watch/Read] [🔖] [📤] — primary button uses scheme.primary,
 //    save/share are square pills using neutralPillBg + outlineHairline.
 //
@@ -23,7 +25,7 @@ import '../../core/cache.dart';          // SavedStore
 import '../../core/models.dart';
 import '../../core/deep_links.dart';     // buildShareUrl(id)
 import '../../widgets/smart_video_player.dart';
-import '../../theme/theme_colors.dart';  // primaryTextColor, secondaryTextColor, neutralPillBg, outlineHairline
+import '../../theme/theme_colors.dart';  // secondaryTextColor, neutralPillBg, outlineHairline
 import '../../theme/app_theme.dart' show Brand; // Brand.freshRed
 import 'story_image_url.dart';           // resolveStoryImageUrl
 
@@ -76,8 +78,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
   String get _ctaLabel => _isWatchCta ? 'Watch' : 'Read';
 
   String _shareText() {
-    // Canonical NutshellNews deep link (hash routing)
-    final deep = buildShareUrl(widget.story.id);
+    final deep = buildShareUrl(widget.story.id); // canonical deep link
     if (deep.isNotEmpty) return deep;
     final link = _primaryUrl?.toString();
     return (link != null && link.isNotEmpty) ? link : widget.story.title;
@@ -108,11 +109,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened',
-            ),
-          ),
+          SnackBar(content: Text(kIsWeb ? 'Link copied to clipboard' : 'Share sheet opened')),
         );
       }
     } catch (_) {
@@ -144,9 +141,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     if (!mounted) return;
     setState(() => _showPlayer = false);
     if (toast != null && toast.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(toast)),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(toast)));
     }
   }
 
@@ -209,6 +204,43 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
+  /* ---------------- Category/Vertical helpers (NEW, matches card) ----- */
+
+  String _verticalKey(Story s) {
+    // Preferred field if present
+    try {
+      final v = (s as dynamic).vertical;
+      if (v is String && v.isNotEmpty) return v;
+    } catch (_) {}
+    // Common fallbacks
+    try {
+      final v = (s as dynamic).category;
+      if (v is String && v.isNotEmpty) return v;
+    } catch (_) {}
+    try {
+      final topics = (s as dynamic).topics;
+      if (topics is List && topics.isNotEmpty) {
+        final t0 = topics.first;
+        if (t0 is String && t0.isNotEmpty) return t0;
+        if (t0 is Map && (t0['key'] ?? t0['name']) != null) {
+          return (t0['key'] ?? t0['name']).toString();
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  String _verticalDisplay(String raw) {
+    final k = raw.toLowerCase().replaceAll(' ', '').replaceAll('-', '_');
+    if (k.isEmpty || k == 'all') return '';
+    if (k == 'top_stories' || k == 'topstories' || k == 'top_stories_national') return 'Top Stories';
+    if (k == 'entertainment') return 'Entertainment';
+    if (k == 'business' || k == 'money' || k == 'markets') return 'Business';
+    if (k == 'world' || k == 'international') return 'World';
+    // default: title-case unknown keys
+    return raw.isNotEmpty ? (raw[0].toUpperCase() + raw.substring(1)) : '';
+  }
+
   /* ---------------- UI ---------------- */
 
   @override
@@ -249,6 +281,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
       }
     }
 
+    // NEW: category label (shown before kind)
+    final categoryLabel = _verticalDisplay(_verticalKey(story));
+
     return Scaffold(
       body: CustomScrollView(
         slivers: [
@@ -274,9 +309,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                   return IconButton(
                     tooltip: saved ? 'Remove from Saved' : 'Save bookmark',
                     onPressed: () => SavedStore.instance.toggle(widget.story.id),
-                    icon: Icon(
-                      saved ? Icons.bookmark : Icons.bookmark_add_outlined,
-                    ),
+                    icon: Icon(saved ? Icons.bookmark : Icons.bookmark_add_outlined),
                   );
                 },
               ),
@@ -306,9 +339,7 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                 onClosePlayer: () => _hidePlayer(),
                 onEndedPlayer: () => _hidePlayer(),
                 onErrorPlayer: (e) => _hidePlayer(
-                  toast: (e.toString().trim().isNotEmpty)
-                      ? e.toString()
-                      : 'Playback error',
+                  toast: (e.toString().trim().isNotEmpty) ? e.toString() : 'Playback error',
                 ),
               ),
             ),
@@ -336,8 +367,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
 
-                      // meta line (theme-aware)
+                      // meta line (Category → Kind → Timestamp + freshness)
                       _MetaLine(
+                        categoryLabel: categoryLabel,       // NEW
                         kindRaw: kindRaw,
                         kindLabel: kindLabel,
                         timestampText: primaryTsText,
@@ -364,15 +396,9 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           runSpacing: 8,
                           children: [
                             if (widget.story.languages.isNotEmpty)
-                              _Facet(
-                                label: 'Language',
-                                value: widget.story.languages.join(', '),
-                              ),
+                              _Facet(label: 'Language', value: widget.story.languages.join(', ')),
                             if (widget.story.genres.isNotEmpty)
-                              _Facet(
-                                label: 'Genre',
-                                value: widget.story.genres.join(', '),
-                              ),
+                              _Facet(label: 'Genre', value: widget.story.genres.join(', ')),
                           ],
                         ),
                       ],
@@ -404,15 +430,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                   foregroundColor: cs.onPrimary,
                                   elevation: 0,
                                   minimumSize: const Size(0, 36),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                  ),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(6),
-                                    side: BorderSide(
-                                      color: outlineHairline(context),
-                                      width: 1,
-                                    ),
+                                    side: BorderSide(color: outlineHairline(context), width: 1),
                                   ),
                                   textStyle: const TextStyle(
                                     fontWeight: FontWeight.w600,
@@ -421,16 +442,8 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                                   ),
                                 ),
                                 icon: _isWatchCta
-                                    ? Icon(
-                                        Icons.play_arrow_rounded,
-                                        size: 20,
-                                        color: cs.onPrimary,
-                                      )
-                                    : _Emoji(
-                                        emoji: '📖',
-                                        size: 16,
-                                        color: cs.onPrimary,
-                                      ),
+                                    ? Icon(Icons.play_arrow_rounded, size: 20, color: cs.onPrimary)
+                                    : _Emoji(emoji: '📖', size: 16, color: cs.onPrimary),
                                 label: Text(_ctaLabel),
                               ),
                             ),
@@ -442,12 +455,10 @@ class _StoryDetailsScreenState extends State<StoryDetailsScreen> {
                           AnimatedBuilder(
                             animation: SavedStore.instance,
                             builder: (_, __) {
-                              final saved = SavedStore.instance
-                                  .isSaved(widget.story.id);
+                              final saved = SavedStore.instance.isSaved(widget.story.id);
                               return _ActionIconBox(
                                 tooltip: saved ? 'Saved' : 'Save',
-                                onTap: () => SavedStore.instance
-                                    .toggle(widget.story.id),
+                                onTap: () => SavedStore.instance.toggle(widget.story.id),
                                 icon: const _Emoji(emoji: '🔖', size: 16),
                               );
                             },
@@ -533,18 +544,12 @@ class _HeaderHero extends StatelessWidget {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      isDark
-                          ? const Color(0xFF0F1625)
-                          : cs.surfaceVariant.withOpacity(0.2),
-                      isDark
-                          ? const Color(0xFF1E2433)
-                          : cs.surfaceVariant.withOpacity(0.4),
+                      isDark ? const Color(0xFF0F1625) : cs.surfaceVariant.withOpacity(0.2),
+                      isDark ? const Color(0xFF1E2433) : cs.surfaceVariant.withOpacity(0.4),
                     ],
                   ),
                 ),
-                child: Center(
-                  child: _SampleIcon(kind: story.kind),
-                ),
+                child: Center(child: _SampleIcon(kind: story.kind)),
               ),
             )
           else
@@ -554,18 +559,12 @@ class _HeaderHero extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    isDark
-                        ? const Color(0xFF0F1625)
-                        : cs.surfaceVariant.withOpacity(0.2),
-                    isDark
-                        ? const Color(0xFF1E2433)
-                        : cs.surfaceVariant.withOpacity(0.4),
+                    isDark ? const Color(0xFF0F1625) : cs.surfaceVariant.withOpacity(0.2),
+                    isDark ? const Color(0xFF1E2433) : cs.surfaceVariant.withOpacity(0.4),
                   ],
                 ),
               ),
-              child: Center(
-                child: _SampleIcon(kind: story.kind),
-              ),
+              child: Center(child: _SampleIcon(kind: story.kind)),
             ),
 
           // inline player overlay
@@ -574,10 +573,7 @@ class _HeaderHero extends StatelessWidget {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 980),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
                     child: SmartVideoPlayer(
@@ -640,10 +636,7 @@ class _Facet extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
           ),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.labelMedium,
-          ),
+          Text(value, style: Theme.of(context).textTheme.labelMedium),
         ],
       ),
     );
@@ -677,7 +670,7 @@ class _SampleIcon extends StatelessWidget {
   }
 }
 
-/* ---------------- Kind pill colors (theme-driven) ---------------- */
+/* ---------------- Kind/Category pill styles ---------------- */
 
 class _KindStyle {
   final Color bg;
@@ -686,7 +679,6 @@ class _KindStyle {
   const _KindStyle({required this.bg, required this.border, required this.text});
 }
 
-// Match StoryCard: release→error, news→primary, ott→tertiary, trailer→secondary, else onSurfaceVariant
 _KindStyle _styleForKind(BuildContext ctx, String rawKind) {
   final cs = Theme.of(ctx).colorScheme;
   final k = rawKind.toLowerCase().trim();
@@ -711,15 +703,27 @@ _KindStyle _styleForKind(BuildContext ctx, String rawKind) {
   );
 }
 
-// Meta line (freshness uses Brand.freshRed)
+// Category pill = neutral, theme-aware
+_KindStyle _styleForCategory(BuildContext ctx) {
+  return _KindStyle(
+    bg: neutralPillBg(ctx),
+    border: outlineHairline(ctx),
+    text: secondaryTextColor(ctx),
+  );
+}
+
+/* ---------------- Meta line (Category → Kind → Timestamp + freshness) --- */
+
 class _MetaLine extends StatelessWidget {
   const _MetaLine({
+    required this.categoryLabel, // NEW
     required this.kindRaw,
     required this.kindLabel,
     required this.timestampText,
     required this.freshnessText,
   });
 
+  final String categoryLabel;
   final String kindRaw;
   final String kindLabel;
   final String? timestampText;
@@ -727,29 +731,28 @@ class _MetaLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = _styleForKind(context, kindRaw);
+    final kindStyle = _styleForKind(context, kindRaw);
+    final catStyle = _styleForCategory(context);
 
-    final pill = kindLabel.isNotEmpty
-        ? Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: style.bg,
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: style.border, width: 1),
+    Widget _pill(String label, _KindStyle style) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: style.bg,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: style.border, width: 1),
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: style.text,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
             ),
-            child: Text(
-              kindLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: style.text,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                height: 1.2,
-              ),
-            ),
-          )
-        : const SizedBox.shrink();
+          ),
+        );
 
     final ts = (timestampText == null)
         ? const SizedBox.shrink()
@@ -769,27 +772,31 @@ class _MetaLine extends StatelessWidget {
 
     final fresh = (freshnessText == null)
         ? const SizedBox.shrink()
-        : Text(
+        : const SizedBox.shrink() // we add spacing then the red text
+            ;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (categoryLabel.isNotEmpty) _pill(categoryLabel, catStyle),
+        if (categoryLabel.isNotEmpty && kindLabel.isNotEmpty) const SizedBox(width: 6),
+        if (kindLabel.isNotEmpty) _pill(kindLabel, kindStyle),
+        if ((categoryLabel.isNotEmpty || kindLabel.isNotEmpty) && timestampText != null)
+          const SizedBox(width: 6),
+        if (timestampText != null) ts,
+        if (freshnessText != null) const SizedBox(width: 6),
+        if (freshnessText != null)
+          Text(
             freshnessText!,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               fontSize: 12,
               height: 1.3,
-              color: Brand.freshRed, // single source of truth
+              color: Brand.freshRed,
               fontWeight: FontWeight.w500,
             ),
-          );
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (kindLabel.isNotEmpty) pill,
-        if (kindLabel.isNotEmpty && timestampText != null)
-          const SizedBox(width: 6),
-        if (timestampText != null) ts,
-        if (freshnessText != null) const SizedBox(width: 6),
-        if (freshnessText != null) fresh,
+          ),
       ],
     );
   }
@@ -877,7 +884,7 @@ extension _StoryCompat on Story {
       if (extra is Map) {
         final raw = extra['ingested_at'] ?? extra['ingestedAt'];
         if (raw is DateTime) return raw;
-        if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+        if (raw is String && v.isNotEmpty) return DateTime.tryParse(raw);
       }
     } catch (_) {}
 
