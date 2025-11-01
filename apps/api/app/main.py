@@ -115,7 +115,7 @@ RL_STORY_PER_MIN = int(os.getenv("RL_STORY_PER_MIN", "240"))
 # Used to build /v1/img?u=... proxy URLs for thumbnails/posters.
 API_PUBLIC_BASE_URL = os.getenv(
     "API_PUBLIC_BASE_URL",
-    "https://api.onlinecalculatorpro.org",
+    "https://api.nutshellnewsapp.com",
 ).strip().rstrip("/")
 
 # Redis connection
@@ -508,18 +508,12 @@ def _is_since(item: dict, since_iso: Optional[str]) -> bool:
     return bool(dt and dt >= since_dt)
 
 
-def _to_proxy(u: Optional[str]) -> Optional[str]:
+def _to_proxy(u: Optional[str], ref: Optional[str]) -> Optional[str]:
     """
-    Return a proxy URL (/v1/img?u=...) for external images.
-
-    WHY WE DO THIS:
-    - We don't want the client hitting random external CDNs directly.
-    - We also want to drop obviously junk/demo/placeholder hosts so the UI
-      doesn't show ugly "demo" thumbnails and doesn't spam dead 404 images.
+    Return a proxy URL (/v1/img?u=...&ref=...) for external images.
 
     RULE:
-    - This is "transport cleanup". It's allowed.
-    - It must NOT change story meaning, attribution, tone.
+    - Transport cleanup only. Do not change story meaning or attribution.
     """
     if not u:
         return u
@@ -531,29 +525,25 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
             qs = parse_qs(parsed_outer.query)
             inner_list = qs.get("u") or qs.get("url") or []
             inner_raw = inner_list[0] if inner_list else ""
-
-            # Decode inner URL to check host
             try:
                 from urllib.parse import unquote as _unq
                 inner_url = _unq(inner_raw)
             except Exception:
                 inner_url = inner_raw
-
-            # Drop if upstream is a junk/placeholder host
             if _is_bad_image_host(inner_url):
                 return None
-
             return u
         except Exception:
-            # If parsing fails, keep original proxy URL. Better to show an
-            # image than break cards.
             return u
 
     # Absolute external URL -> wrap in proxy (unless host is junk)
     if u.startswith("http://") or u.startswith("https://"):
         if _is_bad_image_host(u):
             return None
-        return f"{API_PUBLIC_BASE_URL}/v1/img?u={quote(u, safe='')}"
+        q = f"u={quote(u, safe='')}"
+        if ref and isinstance(ref, str) and ref.startswith(("http://", "https://")):
+            q += f"&ref={quote(ref, safe='')}"
+        return f"{API_PUBLIC_BASE_URL}/v1/img?{q}"
 
     # Relative path, data:, etc. We leave it alone.
     return u
@@ -562,18 +552,6 @@ def _to_proxy(u: Optional[str]) -> Optional[str]:
 def _clean_summary_text(s: Optional[str]) -> Optional[str]:
     """
     Presentation-only cleanup for summary text before sending to clients.
-
-    We ARE allowed to:
-    - collapse repeated whitespace/newlines
-    - trim ends
-    - ensure there's a final period so UI copy doesn't feel cut off
-
-    We are NOT allowed to:
-    - remove attribution ("According to <domain>:")
-    - rewrite "reportedly", "allegedly", "criticized", etc.
-      Those are legal softeners from summarize_story_safe().
-
-    That means: THIS FUNCTION MUST NOT change meaning, only spacing.
     """
     if s is None:
         return None
@@ -588,19 +566,7 @@ def _clean_summary_text(s: Optional[str]) -> Optional[str]:
 def _adapt_for_response(it: dict) -> dict:
     """
     Transform raw story dict (what sanitizer wrote) into a response-friendly dict.
-    We ONLY do transport/layout cleanup:
-      - Ensure poster_url / thumb_url populated.
-      - Fallback normalized_at <- ingested_at.
-      - Route image URLs through the safe proxy, and drop known junk-host
-        thumbs so the client doesn't even attempt them.
-      - Normalize tags to list[str] | None.
-      - Whitespace/punctuation polish in summary ONLY (not semantic rewrite).
-
-    We DO NOT:
-      - re-summarize
-      - hype up
-      - de-attribute
-      - strip "According to <source>:" style prefixes
+    Transport/layout cleanup only.
     """
     obj = dict(it)
 
@@ -621,9 +587,10 @@ def _adapt_for_response(it: dict) -> dict:
     if not obj.get("normalized_at"):
         obj["normalized_at"] = obj.get("ingested_at")
 
-    # Route images through proxy (or drop them if host is junk)
-    obj["thumb_url"] = _to_proxy(obj.get("thumb_url"))
-    obj["poster_url"] = _to_proxy(obj.get("poster_url"))
+    # Route images through proxy (or drop them if host is junk). Include ref=story.url.
+    page_ref = obj.get("url")
+    obj["thumb_url"]  = _to_proxy(obj.get("thumb_url"), page_ref)
+    obj["poster_url"] = _to_proxy(obj.get("poster_url"), page_ref)
 
     # tags sanity
     tags_val = obj.get("tags")
@@ -644,18 +611,7 @@ def _scan_with_cursor(
     since: Optional[str],
 ) -> Tuple[List[dict], Optional[int]]:
     """
-    Cursor pagination for /v1/feed:
-
-    - We walk FEED_KEY (newest-first Redis LIST; LPUSH by sanitizer).
-    - We collect stories that pass filters.
-    - We sort them by effective timestamp desc.
-    - We return:
-        * the `limit` stories for this page
-        * `next_cursor` → the next Redis index to continue from
-
-    SAFETY NOTE:
-    This function does not "approve" content. Approval already happened in
-    sanitizer. We are just slicing/paging the safe feed for clients.
+    Cursor pagination for /v1/feed.
     """
     # Bound the scan by total list length
     try:
@@ -720,14 +676,7 @@ def _scan_with_cursor(
 @app.get("/health")
 def health():
     """
-    Basic health + some debug info:
-    - redis_ok
-    - feed_len
-    - current env/version
-
-    NOTE:
-    feed_len here is the length of FEED_KEY, which is the safe/public feed
-    after sanitizer review (not raw ingest).
+    Basic health + some debug info.
     """
     try:
         ok = _redis_client.ping()
@@ -844,12 +793,6 @@ async def search(
 ):
     """
     Naive substring search over the last MAX_SCAN stories' title+summary.
-
-    IMPORTANT:
-    We do NOT search raw scraped content. We only search the public feed,
-    which means:
-      - attribution and softening for risky claims is already applied
-      - gossip_only content was already dropped
     """
     ql = q.lower()
     res: list[dict] = []
@@ -885,10 +828,6 @@ async def story_detail(
     """
     Linear scan through recent feed items to find the item with this ID.
     O(MAX_SCAN). Good enough for now.
-
-    NOTE:
-    We ONLY scan FEED_KEY. If sanitizer didn't accept the story (for example,
-    gossip_only=True), it's not in FEED_KEY, so you'll get 404.
     """
     sid = unquote(story_id)
     for it in _iter_feed():
@@ -901,8 +840,6 @@ async def story_detail(
 def root():
     """
     Basic ping.
-    Reminder: this service MUST ONLY expose stories that passed sanitizer.
-    Do not ever add an endpoint here that returns raw worker content.
     """
     return {
         "ok": True,
