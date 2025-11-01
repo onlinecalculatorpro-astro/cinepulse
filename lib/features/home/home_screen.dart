@@ -734,7 +734,7 @@ class _FeedListState extends State<_FeedList>
     if (estCols == 1) {
       baseRatio = 0.88;
     } else if (estCols == 2) {
-      baseRatio = 0.95;
+      baseRatio = 0.92;
     } else {
       baseRatio = 1.0;
     }
