@@ -111,7 +111,7 @@ async def proxy_img(
     raw = u or url
     orig_url, host = _parse_source_url(raw or "")
 
-    # Invalid, forbidden, or private hosts: SVG fallback
+    # Invalid, forbidden, or private hosts: fallback image
     if not orig_url or not host:
         return svg_placeholder_response()
     if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
@@ -144,6 +144,11 @@ async def proxy_img(
             headers["Content-Disposition"] = 'inline; filename="proxy-image"'
             if request.method == "HEAD":
                 return Response(status_code=200, headers=headers)
-            return StreamingResponse(r.aiter_bytes(), status_code=200, media_type=ct, headers=headers)
+            return StreamingResponse(
+                r.aiter_bytes(),
+                status_code=200,
+                media_type=ct,
+                headers=headers,
+            )
         else:
             return svg_placeholder_response()
