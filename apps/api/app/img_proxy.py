@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ipaddress, re
 from typing import Optional, Tuple, List
-from urllib.parse import urlparse, urlunparse, unquote
+from urllib.parse import urlparse, urlunparse, unquote, urlunparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -10,11 +10,12 @@ from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/v1", tags=["img"])
 
+# ── Tunables ──────────────────────────────────────────────────────────────────
 CONNECT_TIMEOUT = 3.0
-READ_TIMEOUT = 10.0
-TOTAL_TIMEOUT = httpx.Timeout(timeout=None, connect=CONNECT_TIMEOUT, read=READ_TIMEOUT, write=READ_TIMEOUT, pool=CONNECT_TIMEOUT)
-MAX_REDIRECTS = 5
-CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
+READ_TIMEOUT    = 10.0
+TOTAL_TIMEOUT   = httpx.Timeout(timeout=None, connect=CONNECT_TIMEOUT, read=READ_TIMEOUT, write=READ_TIMEOUT, pool=CONNECT_TIMEOUT)
+MAX_REDIRECTS   = 5
+CACHE_CONTROL   = "public, max-age=86400, s-maxage=86400"
 
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -26,25 +27,29 @@ _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
 _TRAILING_COLON_NUM = re.compile(r":\d+$")
 
 _BLOCKED_HOSTS = {
-    "api.nutshellnewsapp.com", "api", "localhost", "localhost.localdomain", "127.0.0.1", "0.0.0.0",
+    "api.nutshellnewsapp.com", "api",
+    "localhost", "localhost.localdomain",
+    "127.0.0.1", "0.0.0.0",
 }
 
+# CDN → publisher-site Referer
 _PUBLISHER_REFERERS: List[tuple[str, str]] = [
-    ("c.ndtvimg.com", "https://www.ndtv.com/"),
-    ("i.ndtvimg.com", "https://www.ndtv.com/"),
-    ("i.hindustantimes.com", "https://www.hindustantimes.com/"),
-    ("images.hindustantimes.com", "https://www.hindustantimes.com/"),
-    ("images.livemint.com", "https://www.livemint.com/"),
-    ("static.toiimg.com", "https://timesofindia.indiatimes.com/"),
-    ("img.etimg.com", "https://economictimes.indiatimes.com/"),
-    ("th-i.thgim.com", "https://www.thehindu.com/"),
-    ("images.indianexpress.com", "https://indianexpress.com/"),
-    ("images.newindianexpress.com", "https://www.newindianexpress.com/"),
-    ("akm-img-a-in.tosshub.com", "https://www.indiatoday.in/"),
+    ("c.ndtvimg.com",                 "https://www.ndtv.com/"),
+    ("i.ndtvimg.com",                 "https://www.ndtv.com/"),
+    ("i.hindustantimes.com",          "https://www.hindustantimes.com/"),
+    ("images.hindustantimes.com",     "https://www.hindustantimes.com/"),
+    ("images.livemint.com",           "https://www.livemint.com/"),
+    ("static.toiimg.com",             "https://timesofindia.indiatimes.com/"),
+    ("img.etimg.com",                 "https://economictimes.indiatimes.com/"),
+    ("th-i.thgim.com",                "https://www.thehindu.com/"),
+    ("images.indianexpress.com",      "https://indianexpress.com/"),
+    ("images.newindianexpress.com",   "https://www.newindianexpress.com/"),
+    ("akm-img-a-in.tosshub.com",      "https://www.indiatoday.in/"),
     ("bsmedia.business-standard.com", "https://www.business-standard.com/"),
-    ("img.etb2bimg.com", "https://economictimes.indiatimes.com/"),
+    ("img.etb2bimg.com",              "https://economictimes.indiatimes.com/"),
 ]
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def _cors_headers() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": "*",
@@ -83,30 +88,6 @@ def _self_referer_for(host: str, path: str) -> str:
     seg = _first_path_segment(path)
     return f"https://{host}/{seg}/" if seg else f"https://{host}/"
 
-def _headers_variant(origin_host: str, origin_path: str, mode: str) -> dict[str, str]:
-    # modes: "pub" (Referer+Origin), "self" (Referer+Origin to CDN host),
-    #        "pub_no_origin", "self_no_origin", "no_ref"
-    base = {
-        "User-Agent": BROWSER_UA,
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-    }
-    if mode in ("pub", "pub_no_origin"):
-        ref = _publisher_referer_for(origin_host, origin_path)
-    elif mode in ("self", "self_no_origin"):
-        ref = _self_referer_for(origin_host, origin_path)
-    else:
-        ref = ""
-
-    if mode in ("pub", "self"):
-        base["Referer"] = ref
-        base["Origin"]  = ref.rstrip("/")
-    elif mode in ("pub_no_origin", "self_no_origin"):
-        base["Referer"] = ref
-    # "no_ref" → no Referer/Origin
-    return base
-
 def _sanitize_tail_colon(full_url: str) -> str:
     p = urlparse(full_url)
     new_path = _TRAILING_COLON_NUM.sub("", p.path or "")
@@ -130,12 +111,59 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
     sanitized_full = _sanitize_tail_colon(orig_full)
     return orig_full, sanitized_full, host, path
 
+def _weserv_urls(full_url: str) -> list[str]:
+    """Build one or more weserv proxy URLs as a last resort."""
+    p = urlparse(full_url)
+    host = p.hostname or ""
+    hpq  = f"{host}{p.path or ''}{('?' + p.query) if p.query else ''}"
+    urls = []
+    # https → ssl:…  |  http → plain
+    if p.scheme == "https":
+        urls.append(f"https://images.weserv.nl/?url=ssl:{hpq}")
+    else:
+        urls.append(f"https://images.weserv.nl/?url={hpq}")
+    return urls
+
+def _headers_variant(origin_host: str, origin_path: str, mode: str, prefer_ref: Optional[str]) -> dict[str, str]:
+    # modes: "ref" / "ref_no_origin" / "pub" / "self" / "pub_no_origin" / "self_no_origin" / "no_ref"
+    base = {
+        "User-Agent": BROWSER_UA,
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+    }
+    if mode in ("ref", "ref_no_origin"):
+        ref = (prefer_ref or "").strip()
+        if ref:
+            if mode == "ref":
+                base["Referer"] = ref
+                base["Origin"]  = urlparse(ref)._replace(params="", query="", fragment="").geturl().rstrip("/")
+            else:
+                base["Referer"] = ref
+        return base
+
+    if mode in ("pub", "pub_no_origin"):
+        ref = _publisher_referer_for(origin_host, origin_path)
+    elif mode in ("self", "self_no_origin"):
+        ref = _self_referer_for(origin_host, origin_path)
+    else:
+        ref = ""
+
+    if mode in ("pub", "self"):
+        base["Referer"] = ref
+        base["Origin"]  = ref.rstrip("/")
+    elif mode in ("pub_no_origin", "self_no_origin"):
+        base["Referer"] = ref
+    return base
+
+# ── Endpoint ──────────────────────────────────────────────────────────────────
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_img(
     request: Request,
-    u: Optional[str]  = Query(None, description="Absolute image URL (URL-encoded)"),
-    url: Optional[str]= Query(None, description="Alias for 'u'"),
-    dbg: Optional[int]= Query(0, description="Set 1 to add X-Proxy-* debug headers"),
+    u:   Optional[str]  = Query(None, description="Absolute image URL (URL-encoded)"),
+    url: Optional[str]  = Query(None, description="Alias for 'u'"),
+    ref: Optional[str]  = Query(None, description="Optional article/page URL to use as Referer"),
+    dbg: Optional[int]  = Query(0,    description="Set 1 to add X-Proxy-* debug headers"),
 ):
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_cors_headers())
@@ -143,10 +171,27 @@ async def proxy_img(
     raw = u or url
     orig_url, sani_url, host, path = _parse_source_url(raw or "")
 
-    # attempt order: original then sanitized; cover multiple header modes
-    modes = ("pub", "self", "pub_no_origin", "self_no_origin", "no_ref")
+    prefer_ref = None
+    if ref:
+        pr = urlparse(ref)
+        if pr.scheme in ("http", "https") and pr.netloc:
+            # keep full article URL as Referer
+            prefer_ref = pr.geturl()
+
+    # Build attempts: real ref first (if provided), then publisher/self combos, then no_ref.
+    mode_order = []
+    if prefer_ref:
+        mode_order += ["ref", "ref_no_origin"]
+    mode_order += ["pub", "self", "pub_no_origin", "self_no_origin", "no_ref"]
+
     targets = (orig_url, sani_url) if sani_url != orig_url else (orig_url,)
-    attempts: List[tuple[str, str]] = [(t, m) for t in targets for m in modes]
+    attempts: List[tuple[str, str]] = [(t, m) for t in targets for m in mode_order]
+
+    # Weserv last-resort targets (only after all direct attempts fail)
+    weserv_targets = _weserv_urls(orig_url)
+    if sani_url != orig_url:
+        weserv_targets += _weserv_urls(sani_url)
+    attempts += [(w, "weserv") for w in weserv_targets]
 
     debug_notes: List[str] = []
     winner: Optional[httpx.Response] = None
@@ -158,12 +203,13 @@ async def proxy_img(
     ) as client:
         for full_url, mode in attempts:
             try:
-                r = await client.get(full_url, headers=_headers_variant(host, path, mode))
+                headers = _headers_variant(host, path, mode, prefer_ref)
+                r = await client.get(full_url, headers=headers)
             except httpx.RequestError as e:
                 debug_notes.append(f"{mode} neterr:{type(e).__name__}")
                 continue
 
-            ct = r.headers.get("Content-Type", "")
+            ct  = r.headers.get("Content-Type", "")
             cts = ct.split(";", 1)[0] if ct else ""
             debug_notes.append(f"{mode} {r.status_code} {cts or '-'}")
 
@@ -187,7 +233,13 @@ async def proxy_img(
             detail = f"blocked-or-nonimage ({last_nonfatal.status_code} {ct.split(';',1)[0] if ct else '-'})"
         err_headers = _cors_headers()
         if dbg: err_headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-        raise HTTPException(status_code=404, detail=detail, headers=err_headers)
+        # propagate debug headers on error
+        return Response(
+            status_code=404,
+            headers=err_headers,
+            media_type="application/json",
+            content=f'{{"ok":false,"status":404,"error":"http_error","message":"{detail}"}}',
+        )
 
     ct = winner.headers.get("Content-Type", "")
     media_type = ct.split(";", 1)[0] if ct else "application/octet-stream"
