@@ -40,7 +40,9 @@ bool _looksLikeImageUri(Uri u) {
   final t = u.toString().toLowerCase();
   // common image endings or query-hinted images
   return RegExp(r'\.(jpg|jpeg|png|webp|gif|avif)(?:$|\?)').hasMatch(t) ||
-         t.contains('/vi/') || t.contains('/thumb') || t.contains('/images/');
+      t.contains('/vi/') ||
+      t.contains('/thumb') ||
+      t.contains('/images/');
 }
 
 String _prefixApiBase(String rel) {
@@ -59,7 +61,10 @@ bool _isCorsSafeDirect(String url) {
   if (u == null) return false;
   final h = u.host.toLowerCase();
   const allow = <String>[
-    'i.ytimg.com', 'ytimg.com', 'yt3.ggpht.com', 'img.youtube.com',
+    'i.ytimg.com',
+    'ytimg.com',
+    'yt3.ggpht.com',
+    'img.youtube.com',
   ];
   return allow.any((sfx) => h == sfx || h.endsWith('.$sfx'));
 }
@@ -83,21 +88,25 @@ String resolveStoryImageUrl(Story story) {
     (story.thumbUrl ?? '').trim(),
   ].where((s) => s.isNotEmpty).toList();
 
-  // 1) sanitize + filter to only real image URLs not on our domain
+  // 1) sanitize + filter to only real image URLs
   for (final raw in cands) {
     if (_isJunk(raw)) continue;
     final cleaned = _stripChromeSuffix(raw);
     final u = Uri.tryParse(cleaned);
     if (u == null || !_isHttp(u)) continue;
-    if (_isOurDomainHost(u.host)) continue;          // <-- drop article links on our own hosts
-    if (!_looksLikeImageUri(u)) continue;            // <-- must look like an image
 
-    // keep already-proxied images
+    // ✅ accept already-proxied URLs from our API even if they don't look like images
     if (_isOurProxy(u)) {
       final inner = u.queryParameters['u'] ?? u.queryParameters['url'] ?? '';
       if (_isJunk(inner)) continue;
       return cleaned;
     }
+
+    // drop article links on our own hosts
+    if (_isOurDomainHost(u.host)) continue;
+
+    // must look like an image otherwise
+    if (!_looksLikeImageUri(u)) continue;
 
     // route through proxy (or direct for tiny allowlist)
     if (_isCorsSafeDirect(cleaned)) return cleaned;
