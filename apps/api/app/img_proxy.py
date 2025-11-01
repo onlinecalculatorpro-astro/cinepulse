@@ -25,6 +25,9 @@ TOTAL_TIMEOUT = httpx.Timeout(
 MAX_REDIRECTS = 5
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
+# If True, short-circuit for hosts that are known to hard-block hotlinking.
+HARD_DENY = True
+
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -34,6 +37,7 @@ BROWSER_UA = (
 _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
 _TRAILING_COLON_NUM = re.compile(r":\d+$")
 
+# Never allow calls to ourselves / internal / private IP literals.
 _BLOCKED_HOSTS = {
     "api.nutshellnewsapp.com",
     "api",
@@ -42,6 +46,21 @@ _BLOCKED_HOSTS = {
     "127.0.0.1",
     "0.0.0.0",
 }
+
+# Some popular Indian news CDNs that enforce strict anti-hotlink (403/HTML).
+# We fast-fail these when HARD_DENY=True to avoid wasted attempts.
+_HARD_DENY_HOST_SUFFIXES = (
+    "ndtvimg.com",
+    "hindustantimes.com",
+    "livemint.com",
+    "toiimg.com",
+    "etimg.com",
+    "thehindu.com",
+    "indianexpress.com",
+    "business-standard.com",
+    "newindianexpress.com",
+    "tosshub.com",  # IndiaToday CDN
+)
 
 # CDN → publisher-site Referer
 _PUBLISHER_REFERERS: List[tuple[str, str]] = [
@@ -119,32 +138,13 @@ def _sanitize_tail_colon(full_url: str) -> str:
         return urlunparse(p)
     return full_url
 
-def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
-    if not raw_u:
-        raise HTTPException(status_code=422, detail="missing 'u'")
-    orig_full = unquote(raw_u).strip()
-    p = urlparse(orig_full)
-    if p.scheme not in {"http", "https"}:
-        raise HTTPException(status_code=400, detail="only http/https allowed")
-    if not p.netloc:
-        raise HTTPException(status_code=400, detail="invalid URL")
-    host = (p.hostname or "").strip().lower()
-    path = p.path or ""
-    if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
-        raise HTTPException(status_code=400, detail="forbidden host")
-    if _host_is_private_ip_literal(host):
-        raise HTTPException(status_code=400, detail="forbidden host")
-    if _BAD_PATH_PATTERNS.search(path):
-        raise HTTPException(status_code=404, detail="not an image")
-    sanitized_full = _sanitize_tail_colon(orig_full)
-    return orig_full, sanitized_full, host, path
-
 def _weserv_urls(full_url: str) -> list[str]:
     """
     Build weserv proxy URL(s) robustly:
     - Quote path safely
     - Keep query intact
     - Prefix https images with ssl:
+    - Disable sharpening/noise with n=-1 (no processing)
     """
     p = urlparse(full_url)
     host = p.hostname or ""
@@ -164,6 +164,10 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str, prefer_ref: 
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
+        # Subtle spoofing that sometimes helps
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Dest": "image",
     }
 
     if mode in ("ref", "ref_no_origin"):
@@ -191,6 +195,42 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str, prefer_ref: 
 
     return base
 
+def _hard_deny(host: str) -> bool:
+    if not HARD_DENY:
+        return False
+    h = host.lower()
+    return any(h.endswith(sfx) for sfx in _HARD_DENY_HOST_SUFFIXES)
+
+def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
+    if not raw_u:
+        raise HTTPException(status_code=422, detail="missing 'u'")
+    orig_full = unquote(raw_u).strip()
+    p = urlparse(orig_full)
+
+    if p.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="only http/https allowed")
+    if not p.netloc:
+        raise HTTPException(status_code=400, detail="invalid URL")
+
+    host = (p.hostname or "").strip().lower()
+    path = p.path or ""
+
+    if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
+        raise HTTPException(status_code=400, detail="forbidden host")
+
+    if _host_is_private_ip_literal(host):
+        raise HTTPException(status_code=400, detail="forbidden host")
+
+    if _BAD_PATH_PATTERNS.search(path):
+        raise HTTPException(status_code=404, detail="not an image")
+
+    if _hard_deny(host):
+        # Fast-fail with a stable message callers can special-case.
+        raise HTTPException(status_code=404, detail="hotlink-protected")
+
+    sanitized_full = _sanitize_tail_colon(orig_full)
+    return orig_full, sanitized_full, host, path
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_img(
@@ -200,6 +240,7 @@ async def proxy_img(
     ref: Optional[str] = Query(None, description="Optional article/page URL to use as Referer"),
     dbg: Optional[int] = Query(0,    description="Set 1 to add X-Proxy-* debug headers"),
 ):
+    # CORS preflight
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_cors_headers())
 
@@ -212,7 +253,7 @@ async def proxy_img(
         if pr.scheme in ("http", "https") and pr.netloc:
             prefer_ref = pr.geturl()
 
-    # Build attempts order
+    # Attempt order: (real ref first if provided) → publisher/self variants → no_ref
     mode_order: List[str] = []
     if prefer_ref:
         mode_order += ["ref", "ref_no_origin"]
@@ -221,7 +262,7 @@ async def proxy_img(
     targets = (orig_url, sani_url) if sani_url != orig_url else (orig_url,)
     attempts: List[tuple[str, str]] = [(t, m) for t in targets for m in mode_order]
 
-    # Weserv last
+    # Weserv last (best-effort, may still be blocked by origin)
     weserv_targets = _weserv_urls(orig_url)
     if sani_url != orig_url:
         weserv_targets += _weserv_urls(sani_url)
@@ -268,25 +309,28 @@ async def proxy_img(
             ct = last_nonfatal.headers.get("Content-Type", "")
             detail = f"blocked-or-nonimage ({last_nonfatal.status_code} {ct.split(';',1)[0] if ct else '-'})"
         err_headers = _cors_headers()
+        err_headers["X-Proxy-Host"] = host
         if dbg:
             err_headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
         return Response(
             status_code=404,
             headers=err_headers,
             media_type="application/json",
-            content=f'{{"ok":false,"status":404,"error":"http_error","message":"{detail}"}}',
+            content=f'{"{"}"ok":false,"status":404,"error":"http_error","message":"{detail}""}"}',
         )
 
+    # Success
     ct = winner.headers.get("Content-Type", "")
     media_type = ct.split(";", 1)[0] if ct else "application/octet-stream"
 
     headers = _cors_headers()
+    headers["X-Proxy-Host"] = host
+    if dbg:
+        headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
     if "Content-Length" in winner.headers:
         headers["Content-Length"] = winner.headers["Content-Length"]
     headers["Content-Type"] = media_type
     headers["Content-Disposition"] = 'inline; filename="proxy-image"'
-    if dbg:
-        headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
 
     if request.method == "HEAD":
         return Response(status_code=200, headers=headers)
