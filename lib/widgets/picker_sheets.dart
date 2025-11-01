@@ -17,8 +17,8 @@ import 'package:google_fonts/google_fonts.dart';
 /// Keep the first item as the "All" catch-all.
 /// ───────────────────────────────────────────────────────────────────────────
 class CategoryDef {
-  final String key;         // e.g. 'sports'
-  final String label;       // e.g. 'Sports'
+  final String key;         // e.g. 'top_stories'
+  final String label;       // e.g. 'Top Stories'
   final IconData icon;      // UI icon for sheets
   final String description; // one-line hint in picker
   const CategoryDef({
@@ -29,36 +29,37 @@ class CategoryDef {
   });
 }
 
+// ✅ Only the 5 categories we agreed on.
 const List<CategoryDef> kCategoryDefs = <CategoryDef>[
   CategoryDef(
     key: 'all',
     label: 'All',
     icon: Icons.apps_rounded,
-    description: 'Everything we have (Entertainment)',
+    description: 'Everything we have (Top Stories + Entertainment)',
+  ),
+  CategoryDef(
+    key: 'top_stories',
+    label: 'Top Stories (India)',
+    icon: Icons.public_rounded,
+    description: 'Nationwide headlines from verified sources',
   ),
   CategoryDef(
     key: 'entertainment',
     label: 'Entertainment',
     icon: Icons.local_movies_rounded,
-    description: 'Movies, OTT, on-air drama, box office',
+    description: 'Movies, OTT, box office, on-air drama',
   ),
   CategoryDef(
-    key: 'sports',
-    label: 'Sports',
-    icon: Icons.sports_cricket_rounded,
-    description: 'Match talk, highlights (coming soon)',
+    key: 'ott',
+    label: 'OTT',
+    icon: Icons.live_tv_rounded,
+    description: 'Now streaming & digital premieres',
   ),
   CategoryDef(
-    key: 'travel',
-    label: 'Travel',
-    icon: Icons.flight_takeoff_rounded,
-    description: 'Trips, destinations, culture clips (coming soon)',
-  ),
-  CategoryDef(
-    key: 'fashion',
-    label: 'Fashion',
-    icon: Icons.checkroom_rounded,
-    description: 'Looks, red carpet, style drops (coming soon)',
+    key: 'reality_tv',
+    label: 'Reality TV',
+    icon: Icons.theater_comedy_rounded,
+    description: 'On-screen drama only (evictions, fights, tasks)',
   ),
 ];
 
@@ -229,7 +230,7 @@ class _CategoryPickerSheetState extends State<CategoryPickerSheet> {
               style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 4),
-            Text('Pick what you want in your feed. We mostly cover Entertainment right now.',
+            Text('Pick what you want in your feed.',
               style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
