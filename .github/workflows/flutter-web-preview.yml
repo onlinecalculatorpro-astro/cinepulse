@@ -1,19 +1,21 @@
-name: Web Deploy (Tiny)
+name: Web Deploy (Manual)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}   # manual trigger only
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      API_BASE_URL:   ${{ secrets.API_BASE_URL }}                           # required
-      SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
-      VPS_HOST:       ${{ secrets.VPS_HOST }}                                # required
-      VPS_USER:       ${{ secrets.VPS_USER }}                                # required
-      SSH_PRIVATE_KEY:${{ secrets.SSH_PRIVATE_KEY }}                         # required
-      SSH_PORT:       ${{ secrets.SSH_PORT || '22' }}
-      WEB_ROOT:       ${{ secrets.WEB_ROOT || '/var/www/nutshellnewsapp_web' }}
+      # Required secrets
+      API_BASE_URL:    ${{ secrets.API_BASE_URL }}
+      VPS_HOST:        ${{ secrets.VPS_HOST }}
+      VPS_USER:        ${{ secrets.VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      # Optional overrides
+      SSH_PORT:        ${{ secrets.SSH_PORT || '22' }}
+      WEB_ROOT:        ${{ secrets.WEB_ROOT || '/var/www/nutshellnewsapp_web' }}
+      SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +28,7 @@ jobs:
       - name: Install deps
         run: flutter pub get
 
-      - name: Build Flutter Web (release)
+      - name: Build Flutter web (release)
         shell: bash
         run: |
           set -euo pipefail
@@ -35,7 +37,6 @@ jobs:
           if [ -z "$api" ]; then
             echo "::error title=Missing secret::API_BASE_URL is required"; exit 1
           fi
-          # Force html renderer; skip PWA worker to avoid stale caches
           flutter build web --release \
             --web-renderer html \
             --pwa-strategy=none \
@@ -54,7 +55,7 @@ jobs:
           ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/id_vps -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" "mkdir -p '$WEB_ROOT'"
 
-      - name: Rsync build to VPS
+      - name: Rsync to VPS
         shell: bash
         run: |
           sudo apt-get update -y && sudo apt-get install -y rsync
@@ -63,6 +64,6 @@ jobs:
             -e "ssh -i ~/.ssh/id_vps -p $SSH_PORT" \
             build/web/ "$VPS_USER@$VPS_HOST:$WEB_ROOT/"
 
-      - name: Reload nginx (best effort)
+      - name: Reload nginx (best-effort)
         run: ssh -i ~/.ssh/id_vps -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
              "(systemctl reload nginx || service nginx reload || true)"
