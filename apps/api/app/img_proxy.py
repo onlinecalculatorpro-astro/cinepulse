@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from typing import Optional, Tuple, List
 from urllib.parse import urlparse, urlunparse, unquote, quote
@@ -123,6 +124,7 @@ def _publisher_referer_for(host: str, path: str) -> str:
     for suffix, ref in _PUBLISHER_REFERERS:
         if h.endswith(suffix):
             return ref
+    # fallback: same host + first segment
     seg = _first_path_segment(path)
     return f"https://{host}/{seg}/" if seg else f"https://{host}/"
 
@@ -262,7 +264,7 @@ async def proxy_img(
     targets = (orig_url, sani_url) if sani_url != orig_url else (orig_url,)
     attempts: List[tuple[str, str]] = [(t, m) for t in targets for m in mode_order]
 
-    # Weserv last (best-effort, may still be blocked by origin)
+    # Weserv last (best-effort; may still be blocked by origin)
     weserv_targets = _weserv_urls(orig_url)
     if sani_url != orig_url:
         weserv_targets += _weserv_urls(sani_url)
@@ -312,12 +314,13 @@ async def proxy_img(
         err_headers["X-Proxy-Host"] = host
         if dbg:
             err_headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-        return Response(
-            status_code=404,
-            headers=err_headers,
-            media_type="application/json",
-            content=f'{"{"}"ok":false,"status":404,"error":"http_error","message":"{detail}""}"}',
-        )
+        body = json.dumps({
+            "ok": False,
+            "status": 404,
+            "error": "http_error",
+            "message": detail,
+        })
+        return Response(status_code=404, headers=err_headers, media_type="application/json", content=body)
 
     # Success
     ct = winner.headers.get("Content-Type", "")
