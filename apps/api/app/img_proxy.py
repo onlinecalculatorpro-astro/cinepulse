@@ -12,19 +12,9 @@ from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/v1", tags=["img"])
 
-# ────────────────────────────────────────────────────────────────────────────
-# Tunables
-# ────────────────────────────────────────────────────────────────────────────
-
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
-TOTAL_TIMEOUT = httpx.Timeout(
-    timeout=None,
-    connect=CONNECT_TIMEOUT,
-    read=READ_TIMEOUT,
-    write=READ_TIMEOUT,
-    pool=CONNECT_TIMEOUT,
-)
+TOTAL_TIMEOUT = httpx.Timeout(timeout=None, connect=CONNECT_TIMEOUT, read=READ_TIMEOUT, write=READ_TIMEOUT, pool=CONNECT_TIMEOUT)
 
 MAX_REDIRECTS = 5
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
@@ -39,41 +29,28 @@ _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
 _TRAILING_COLON_NUM = re.compile(r":\d+$")
 
 _BLOCKED_HOSTS = {
-    "api.nutshellnewsapp.com",  # avoid recursion
-    "api",                      # docker svc name
-    "localhost",
-    "localhost.localdomain",
-    "127.0.0.1",
-    "0.0.0.0",
+    "api.nutshellnewsapp.com",
+    "api",
+    "localhost", "localhost.localdomain",
+    "127.0.0.1", "0.0.0.0",
 }
 
-# CDN host → ordered list of referers to try (publisher then CDN self)
-_CDN_REFERERS: dict[str, list[str]] = {
-    # NDTV
-    "c.ndtvimg.com": ["https://www.ndtv.com/", "https://c.ndtvimg.com/"],
-    "i.ndtvimg.com": ["https://www.ndtv.com/", "https://i.ndtvimg.com/"],
-    # HT / Mint
-    "i.hindustantimes.com": ["https://www.hindustantimes.com/", "https://i.hindustantimes.com/"],
-    "images.hindustantimes.com": ["https://www.hindustantimes.com/", "https://images.hindustantimes.com/"],
-    "images.livemint.com": ["https://www.livemint.com/", "https://images.livemint.com/"],
-    # TOI / ET
-    "static.toiimg.com": ["https://timesofindia.indiatimes.com/", "https://static.toiimg.com/"],
-    "img.etimg.com": ["https://economictimes.indiatimes.com/", "https://img.etimg.com/"],
-    "img.etb2bimg.com": ["https://economictimes.indiatimes.com/", "https://img.etb2bimg.com/"],
-    # The Hindu
-    "th-i.thgim.com": ["https://www.thehindu.com/", "https://th-i.thgim.com/"],
-    # Indian Express
-    "images.indianexpress.com": ["https://indianexpress.com/", "https://images.indianexpress.com/"],
-    "images.newindianexpress.com": ["https://www.newindianexpress.com/", "https://images.newindianexpress.com/"],
-    # India Today / TossHub
-    "akm-img-a-in.tosshub.com": ["https://www.indiatoday.in/", "https://akm-img-a-in.tosshub.com/"],
-    # Business Standard
-    "bsmedia.business-standard.com": ["https://www.business-standard.com/", "https://bsmedia.business-standard.com/"],
-}
-
-# ────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ────────────────────────────────────────────────────────────────────────────
+# CDN host -> expected publisher Referer
+_PUBLISHER_REFERERS: list[tuple[str, str]] = [
+    ("c.ndtvimg.com",                 "https://www.ndtv.com/"),
+    ("i.ndtvimg.com",                 "https://www.ndtv.com/"),
+    ("i.hindustantimes.com",          "https://www.hindustantimes.com/"),
+    ("images.hindustantimes.com",     "https://www.hindustantimes.com/"),
+    ("images.livemint.com",           "https://www.livemint.com/"),
+    ("static.toiimg.com",             "https://timesofindia.indiatimes.com/"),
+    ("img.etimg.com",                 "https://economictimes.indiatimes.com/"),
+    ("th-i.thgim.com",                "https://www.thehindu.com/"),
+    ("images.indianexpress.com",      "https://indianexpress.com/"),
+    ("images.newindianexpress.com",   "https://www.newindianexpress.com/"),
+    ("akm-img-a-in.tosshub.com",      "https://www.indiatoday.in/"),
+    ("bsmedia.business-standard.com", "https://www.business-standard.com/"),
+    ("img.etb2bimg.com",              "https://economictimes.indiatimes.com/"),
+]
 
 def _cors_headers() -> dict[str, str]:
     return {
@@ -107,40 +84,31 @@ def _first_path_segment(path: str) -> str:
     parts = path.split("/")
     return parts[1] if len(parts) > 1 and parts[1] else ""
 
-def _referers_for(host: str, path: str) -> list[str]:
-    host = host.lower()
-    # exact/suffix match to configured CDNs
-    for cdn_host, refs in _CDN_REFERERS.items():
-        if host == cdn_host or host.endswith("." + cdn_host):
-            return refs
-    # default: try host/first-seg then host/
+def _publisher_referer_for(host: str, path: str) -> str:
+    h = host.lower()
+    for suffix, ref in _PUBLISHER_REFERERS:
+        if h.endswith(suffix):
+            return ref
     seg = _first_path_segment(path)
-    host_only = f"https://{host}/"
-    host_with_seg = f"https://{host}/{seg}/" if seg else host_only
-    return [host_with_seg, host_only]
+    return f"https://{host}/{seg}/" if seg else f"https://{host}/"
 
-def _headers_with_referer(ref: str) -> dict[str, str]:
+def _build_headers(origin_host: str, origin_path: str, *, alt: bool) -> dict[str, str]:
+    if not alt:
+        referer_base = _publisher_referer_for(origin_host, origin_path)
+        return {
+            "User-Agent": BROWSER_UA,
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": referer_base,
+            "Origin": referer_base.rstrip("/"),
+            "Connection": "keep-alive",
+        }
     return {
         "User-Agent": BROWSER_UA,
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": ref,
-        "Origin": ref.rstrip("/"),
-        "Sec-Fetch-Dest": "image",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Site": "cross-site",
+        "Accept": "image/*,*/*;q=0.5",
+        "Accept-Language": "en-US,en;q=0.8",
         "Connection": "keep-alive",
     }
-
-_NO_REF_HEADERS = {
-    "User-Agent": BROWSER_UA,
-    "Accept": "image/*,*/*;q=0.5",
-    "Accept-Language": "en-US,en;q=0.8",
-    "Sec-Fetch-Dest": "image",
-    "Sec-Fetch-Mode": "no-cors",
-    "Sec-Fetch-Site": "cross-site",
-    "Connection": "keep-alive",
-}
 
 def _sanitize_tail_colon(full_url: str) -> str:
     p = urlparse(full_url)
@@ -170,55 +138,65 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str, str]:
     sanitized_full = _sanitize_tail_colon(orig_full)
     return orig_full, sanitized_full, host, path
 
-# ────────────────────────────────────────────────────────────────────────────
-# Endpoint
-# ────────────────────────────────────────────────────────────────────────────
+async def _try_fetch(client: httpx.AsyncClient, full_url: str, host: str, path: str, alt: bool) -> Optional[httpx.Response]:
+    try:
+        r = await client.get(full_url, headers=_build_headers(host, path, alt=alt))
+    except httpx.RequestError:
+        return None
+
+    # If upstream gives 5xx, bubble a 502 immediately
+    if r.status_code >= 500:
+        raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
+
+    # If it's clearly an image, accept it even if 401/403/404 (rare, but some CDNs do this)
+    if _looks_like_image(r.headers.get("Content-Type", "")):
+        return r
+
+    # Otherwise, only accept success-ish
+    if r.status_code in (401, 403, 404, 451):
+        return None
+    if r.status_code >= 400:
+        return r
+    return r
 
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_img(
     request: Request,
     u: Optional[str] = Query(None, description="Absolute image URL (URL-encoded)"),
     url: Optional[str] = Query(None, description="Alias for 'u'"),
+    dbg: Optional[int] = Query(0, description="Set 1 to include debug headers"),
 ):
-    # Preflight
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_cors_headers())
 
     raw = u or url
     orig_url, sani_url, host, path = _parse_source_url(raw or "")
 
-    # Build attempt matrix: for each URL variant, try multiple Referers then no-Referer
-    candidate_urls = [orig_url]
+    attempts: list[tuple[str, bool, str]] = [
+        (orig_url, False, "orig+ref"),
+        (orig_url, True,  "orig+noref"),
+    ]
     if sani_url != orig_url:
-        candidate_urls.append(sani_url)
+        attempts += [
+            (sani_url, False, "sani+ref"),
+            (sani_url, True,  "sani+noref"),
+        ]
 
-    attempts: list[tuple[str, dict[str, str]]] = []
-    refs = _referers_for(host, path)
-    for cu in candidate_urls:
-        for ref in refs:
-            attempts.append((cu, _headers_with_referer(ref)))
-        attempts.append((cu, _NO_REF_HEADERS))  # last resort
-
-    winner: Optional[httpx.Response] = None
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
         follow_redirects=True,
         max_redirects=MAX_REDIRECTS,
         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
     ) as client:
-        for full_url, headers in attempts:
-            try:
-                r = await client.get(full_url, headers=headers)
-            except httpx.RequestError:
+        winner: Optional[httpx.Response] = None
+        chosen: str = ""
+        for full_url, alt, label in attempts:
+            r = await _try_fetch(client, full_url, host, path, alt)
+            if r is None:
                 continue
-            # Ignore hotlink-protection 4xx; keep trying
-            if r.status_code in (401, 403, 404, 451):
-                continue
-            if r.status_code >= 500:
-                raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
-            if r.status_code < 400:
-                winner = r
-                break
+            winner = r
+            chosen = label
+            break
 
     if winner is None:
         raise HTTPException(status_code=404, detail="not found")
@@ -233,13 +211,12 @@ async def proxy_img(
     headers["Content-Disposition"] = 'inline; filename="proxy-image"'
     if "Content-Length" in winner.headers:
         headers["Content-Length"] = winner.headers["Content-Length"]
+    if dbg:
+        headers["X-Proxy-Upstream-Status"] = str(winner.status_code)
+        headers["X-Proxy-Attempt"] = chosen
+        headers["X-Proxy-From-Host"] = host
 
     if request.method == "HEAD":
         return Response(status_code=200, headers=headers)
 
-    return StreamingResponse(
-        winner.aiter_bytes(),
-        status_code=200,
-        media_type=media_type,
-        headers=headers,
-    )
+    return StreamingResponse(winner.aiter_bytes(), status_code=200, media_type=media_type, headers=headers)
