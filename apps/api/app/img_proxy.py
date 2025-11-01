@@ -7,14 +7,14 @@ from typing import Optional, Tuple
 from urllib.parse import urlparse, urlunparse, unquote
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/v1", tags=["img"])
 
-# ---------------------------------------------------------------------------
+# ────────────────────────────────────────────────────────────────────────────
 # Tunables
-# ---------------------------------------------------------------------------
+# ────────────────────────────────────────────────────────────────────────────
 
 CONNECT_TIMEOUT = 3.0
 READ_TIMEOUT = 10.0
@@ -27,7 +27,6 @@ TOTAL_TIMEOUT = httpx.Timeout(
 )
 
 MAX_REDIRECTS = 5
-
 CACHE_CONTROL = "public, max-age=86400, s-maxage=86400"
 
 BROWSER_UA = (
@@ -42,19 +41,31 @@ _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
 # Chrome sometimes appends :1 to image URLs. Strip that.
 _TRAILING_COLON_NUM = re.compile(r":\d+$")
 
-# never allow hitting ourselves / localhost / private IP literal
+# never allow hitting ourselves / localhost / private IP literal / internal svc
 _BLOCKED_HOSTS = {
-    "api.onlinecalculatorpro.org",
+    "api.nutshellnewsapp.com",  # our own API (avoid recursion)
+    "api",                      # docker service name (internal)
     "localhost",
     "localhost.localdomain",
     "127.0.0.1",
     "0.0.0.0",
 }
 
-
-# ---------------------------------------------------------------------------
+# ────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ---------------------------------------------------------------------------
+# ────────────────────────────────────────────────────────────────────────────
+
+def _cors_headers() -> dict[str, str]:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Expose-Headers": "*",
+        "Cache-Control": CACHE_CONTROL,
+        "X-Content-Type-Options": "nosniff",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+    }
+
 
 def _host_is_private_ip_literal(host: str) -> bool:
     """
@@ -100,11 +111,8 @@ def _first_path_segment(path: str) -> str:
 
 def _build_headers(origin_host: str, origin_path: str, *, alt: bool) -> dict[str, str]:
     """
-    alt = False  -> send spoofed Referer
-    alt = True   -> no Referer (some CDNs freak out if we spoof)
-    We now include the first path segment in Referer so
-    https://demo.tagdiv.com/newspaper/... gets Referer: https://demo.tagdiv.com/newspaper/
-    instead of just https://demo.tagdiv.com/
+    alt = False  -> send spoofed Referer (host[/first-seg]/)
+    alt = True   -> no Referer (some CDNs dislike spoofing)
     """
     seg = _first_path_segment(origin_path)
     if not alt:
@@ -118,7 +126,6 @@ def _build_headers(origin_host: str, origin_path: str, *, alt: bool) -> dict[str
             "Referer": referer_base,
             "Connection": "keep-alive",
         }
-
     # alt headers (no Referer)
     return {
         "User-Agent": BROWSER_UA,
@@ -194,8 +201,8 @@ async def _try_fetch(
         # DNS/TLS/timeout/etc -> treat as "keep trying"
         return None
 
-    # A TON of WordPress demo CDNs respond with fake 404 or 403 when
-    # hotlink-protected, so we only accept success-ish <400 here.
+    # Many WordPress/CDNs hotlink-protect with fake 4xx;
+    # accept only success-ish here.
     if r.status_code in (401, 403, 404, 451):
         return None
 
@@ -204,34 +211,40 @@ async def _try_fetch(
         raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
 
     if r.status_code >= 400:
-        # other 4xx after we've tried all tricks -> we will treat as 404 later
+        # other 4xx after we've tried all tricks -> we'll treat as 404 later
         return r
 
     return r
 
-
-# ---------------------------------------------------------------------------
+# ────────────────────────────────────────────────────────────────────────────
 # Endpoint
-# ---------------------------------------------------------------------------
+# ────────────────────────────────────────────────────────────────────────────
 
-@router.get("/img")
+@router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
 async def proxy_img(
-    u: str = Query(..., description="Absolute image URL (URL-encoded)"),
+    request: Request,
+    u: Optional[str] = Query(None, description="Absolute image URL (URL-encoded)"),
+    url: Optional[str] = Query(None, description="Alias for 'u'"),
 ):
     """
     CORS-safe image proxy for thumbnails/posters.
+
     Strategy:
-      1. Build up to 4 attempts:
+      1) Build up to 4 attempts:
          a) original URL + spoofed Referer
          b) original URL + no Referer
          c) sanitized URL (strip :1) + spoofed Referer
          d) sanitized URL + no Referer
-      2. First response <400 wins.
-      3. If final response is still 4xx, we give 404.
-      4. We only stream if Content-Type looks like image/*.
+      2) First response <400 wins.
+      3) If final response is still 4xx, return 404.
+      4) Stream only if Content-Type looks like image/*.
     """
+    # CORS preflight
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=_cors_headers())
 
-    orig_url, sani_url, host, path = _parse_source_url(u)
+    raw = u or url
+    orig_url, sani_url, host, path = _parse_source_url(raw or "")
 
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
@@ -244,23 +257,18 @@ async def proxy_img(
             (orig_url, True),
         ]
         if sani_url != orig_url:
-            attempts.extend([
-                (sani_url, False),
-                (sani_url, True),
-            ])
+            attempts.extend([(sani_url, False), (sani_url, True)])
 
         winner: Optional[httpx.Response] = None
         for full_url, alt in attempts:
             r = await _try_fetch(client, full_url, host, path, alt)
             if r is None:
-                # means "not good yet, keep looping"
                 continue
             winner = r
-            # got something that is NOT one of the fake-hotlink 4xx codes
             break
 
         if winner is None:
-            # everything was 401/403/404/451 or network error → treat as "not found"
+            # everything was 401/403/404/451 or network error → "not found"
             raise HTTPException(status_code=404, detail="not found")
 
         # At this point winner.status_code could still be 4xx (other than those fakes)
@@ -271,18 +279,22 @@ async def proxy_img(
         if not _looks_like_image(ct):
             raise HTTPException(status_code=404, detail="not an image")
 
-        resp = StreamingResponse(
+        headers = _cors_headers()
+        # Preserve origin Content-Length when present
+        if "Content-Length" in winner.headers:
+            headers["Content-Length"] = winner.headers["Content-Length"]
+        # Be explicit about the media type (strip params)
+        media_type = ct.split(";", 1)[0] if ct else "application/octet-stream"
+        headers["Content-Type"] = media_type
+        headers["Content-Disposition"] = 'inline; filename="proxy-image"'
+
+        # HEAD should return headers only
+        if request.method == "HEAD":
+            return Response(status_code=200, headers=headers)
+
+        return StreamingResponse(
             winner.aiter_bytes(),
             status_code=200,
-            media_type=ct.split(";", 1)[0] if ct else "application/octet-stream",
+            media_type=media_type,
+            headers=headers,
         )
-
-        if "Content-Length" in winner.headers:
-            resp.headers["Content-Length"] = winner.headers["Content-Length"]
-
-        resp.headers["Cache-Control"] = CACHE_CONTROL
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "*"
-
-        return resp
