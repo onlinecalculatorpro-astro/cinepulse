@@ -51,6 +51,24 @@ _BLOCKED_HOSTS = {
     "0.0.0.0",
 }
 
+# CDN host → expected publisher Referer
+# (endswith match; add more as needed)
+_PUBLISHER_REFERERS: list[tuple[str, str]] = [
+    ("c.ndtvimg.com",                 "https://www.ndtv.com/"),
+    ("i.ndtvimg.com",                 "https://www.ndtv.com/"),
+    ("i.hindustantimes.com",          "https://www.hindustantimes.com/"),
+    ("images.hindustantimes.com",     "https://www.hindustantimes.com/"),
+    ("images.livemint.com",           "https://www.livemint.com/"),
+    ("static.toiimg.com",             "https://timesofindia.indiatimes.com/"),
+    ("img.etimg.com",                 "https://economictimes.indiatimes.com/"),
+    ("th-i.thgim.com",                "https://www.thehindu.com/"),
+    ("images.indianexpress.com",      "https://indianexpress.com/"),
+    ("images.newindianexpress.com",   "https://www.newindianexpress.com/"),
+    ("akm-img-a-in.tosshub.com",      "https://www.indiatoday.in/"),
+    ("bsmedia.business-standard.com", "https://www.business-standard.com/"),
+    ("img.etb2bimg.com",              "https://economictimes.indiatimes.com/"),
+]
+
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────
@@ -103,27 +121,38 @@ def _first_path_segment(path: str) -> str:
     if not path.startswith("/"):
         return ""
     parts = path.split("/")
-    # ['','newspaper','wp-content',...]
     if len(parts) > 1 and parts[1]:
         return parts[1]
     return ""
 
 
+def _publisher_referer_for(host: str, path: str) -> str:
+    """
+    If the CDN host is a known one, return its publisher-site Referer.
+    Else fall back to host[/first-seg]/.
+    """
+    h = host.lower()
+    for suffix, ref in _PUBLISHER_REFERERS:
+        if h.endswith(suffix):
+            return ref
+    seg = _first_path_segment(path)
+    return f"https://{host}/{seg}/" if seg else f"https://{host}/"
+
+
 def _build_headers(origin_host: str, origin_path: str, *, alt: bool) -> dict[str, str]:
     """
-    alt = False  -> send spoofed Referer (host[/first-seg]/)
+    alt = False  -> send publisher Referer (or host[/first-seg]/ if unknown)
     alt = True   -> no Referer (some CDNs dislike spoofing)
+    Also set Origin to the same site as Referer for stricter CDNs.
     """
-    seg = _first_path_segment(origin_path)
     if not alt:
-        referer_base = f"https://{origin_host}/"
-        if seg:
-            referer_base = f"https://{origin_host}/{seg}/"
+        referer_base = _publisher_referer_for(origin_host, origin_path)
         return {
             "User-Agent": BROWSER_UA,
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": referer_base,
+            "Origin": referer_base.rstrip("/"),
             "Connection": "keep-alive",
         }
     # alt headers (no Referer)
@@ -231,9 +260,9 @@ async def proxy_img(
 
     Strategy:
       1) Build up to 4 attempts:
-         a) original URL + spoofed Referer
+         a) original URL + publisher Referer
          b) original URL + no Referer
-         c) sanitized URL (strip :1) + spoofed Referer
+         c) sanitized URL (strip :1) + publisher Referer
          d) sanitized URL + no Referer
       2) First response <400 wins.
       3) If final response is still 4xx, return 404.
