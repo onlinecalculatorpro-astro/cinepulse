@@ -34,8 +34,9 @@ BROWSER_UA = (
 _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
 _TRAILING_COLON_NUM = re.compile(r":\d+$")
 
+# avoid recursion / SSRF to internals
 _BLOCKED_HOSTS = {
-    "api.nutshellnewsapp.com",  # avoid recursion
+    "api.nutshellnewsapp.com",
     "api",
     "localhost", "localhost.localdomain",
     "127.0.0.1", "0.0.0.0",
@@ -115,8 +116,6 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str) -> dict[str,
     elif mode == "pub_no_origin":
         ref = _publisher_referer_for(origin_host, origin_path)
         base["Referer"] = ref
-    else:  # "no_ref"
-        pass
     return base
 
 def _sanitize_tail_colon(full_url: str) -> str:
@@ -161,14 +160,11 @@ async def proxy_img(
     raw = u or url
     orig_url, sani_url, host, path = _parse_source_url(raw or "")
 
-    attempts: List[tuple[str, str]] = []
     # order: orig then sanitized; for each: pub, pub_no_origin, no_ref
-    for target in (orig_url, sani_url) if sani_url != orig_url else (orig_url,):
-        attempts.extend([
-            (target, "pub"),
-            (target, "pub_no_origin"),
-            (target, "no_ref"),
-        ])
+    attempts: List[tuple[str, str]] = []
+    targets = (orig_url, sani_url) if sani_url != orig_url else (orig_url,)
+    for t in targets:
+        attempts += [(t, "pub"), (t, "pub_no_origin"), (t, "no_ref")]
 
     debug_notes: List[str] = []
     winner: Optional[httpx.Response] = None
@@ -188,42 +184,55 @@ async def proxy_img(
                 continue
 
             ct = r.headers.get("Content-Type", "")
-            cts = ct.split(";", 1)[0] if ct else ""
-            debug_notes.append(f"{mode} {r.status_code} {cts or '-'}")
+            short_ct = ct.split(";", 1)[0] if ct else "-"
+            debug_notes.append(f"{mode} {r.status_code} {short_ct}")
 
             if r.status_code >= 500:
-                raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
+                # Bubble up with debug context
+                headers = _cors_headers()
+                if dbg:
+                    headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
+                return Response(
+                    status_code=502,
+                    headers=headers,
+                    media_type="application/json",
+                    content='{"detail":"upstream %d"}' % r.status_code,
+                )
 
             if r.status_code in (401, 403, 404, 451):
-                # try next variant
                 continue
 
-            # Only accept as winner if it REALLY looks like an image
             if r.status_code < 400 and _looks_like_image(ct):
                 winner = r
                 break
 
-            # remember the last nonfatal response so we can report better on failure
             last_nonfatal = r
 
+    # No usable image from any variant → return 404 with debug info
     if winner is None:
-        # Prefer to signal why we failed
         detail = "not found"
         if last_nonfatal is not None:
             ct = last_nonfatal.headers.get("Content-Type", "")
-            detail = f"blocked-or-nonimage ({last_nonfatal.status_code} {ct.split(';',1)[0] if ct else '-'})"
-        raise HTTPException(status_code=404, detail=detail)
+            detail = f"blocked-or-nonimage ({last_nonfatal.status_code} {(ct.split(';',1)[0] if ct else '-')})"
+        headers = _cors_headers()
+        if dbg:
+            headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
+        return Response(
+            status_code=404,
+            headers=headers,
+            media_type="application/json",
+            content=('{"detail": "%s", "attempts": %s}'
+                     % (detail.replace('"','\\"'), str(debug_notes))),
+        )
 
-    # Prepare streaming response
+    # Success
     ct = winner.headers.get("Content-Type", "")
     media_type = ct.split(";", 1)[0] if ct else "application/octet-stream"
-
     headers = _cors_headers()
     if "Content-Length" in winner.headers:
         headers["Content-Length"] = winner.headers["Content-Length"]
     headers["Content-Type"] = media_type
     headers["Content-Disposition"] = 'inline; filename="proxy-image"'
-
     if dbg:
         headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
 
