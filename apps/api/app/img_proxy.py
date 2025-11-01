@@ -220,7 +220,6 @@ async def proxy_img(
 
     debug_notes: List[str] = []
     winner: Optional[httpx.Response] = None
-    last_nonfatal: Optional[httpx.Response] = None
 
     async with httpx.AsyncClient(
         timeout=TOTAL_TIMEOUT,
@@ -239,20 +238,10 @@ async def proxy_img(
             cts = ct.split(";", 1)[0] if ct else ""
             debug_notes.append(f"{mode} {r.status_code} {cts or '-'}")
 
-            if r.status_code >= 500:
-                # treat origin meltdown as a miss; try next attempt
-                last_nonfatal = r
-                continue
-
-            if r.status_code in (401, 403, 404, 451):
-                last_nonfatal = r
-                continue
-
             if r.status_code < 400 and _looks_like_image(ct):
                 winner = r
                 break
-
-            last_nonfatal = r
+            # anything else → try next mode
 
     # No winner → placeholder, but expose attempts when dbg=1
     if winner is None:
