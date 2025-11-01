@@ -1,10 +1,15 @@
 name: Web Deploy (Flutter → VPS)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running this deploy?"
+        required: false
+        default: "manual"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: web-deploy-${{ github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -14,10 +19,11 @@ jobs:
   build:
     name: Build Flutter Web
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       # Required
       API_BASE_URL:   ${{ secrets.API_BASE_URL }}
-      # Optional: prefer secret → repo var → hard default
+      # Optional → secret → repo var → hard default
       SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL || vars.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
     steps:
       - name: Checkout
@@ -50,16 +56,21 @@ jobs:
             echo "arg=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build (single-source bases)
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${API_BASE_URL:-}" ]; then
+            echo "::error title=Missing secret::API_BASE_URL is required"; exit 1
+          fi
+          echo "Using API_BASE_URL (set) and SHARE_BASE_URL=${SHARE_BASE_URL%/}"
+
+      - name: Build (release)
         shell: bash
         run: |
           set -euo pipefail
           api="${API_BASE_URL%/}"
           share="${SHARE_BASE_URL%/}"
-
-          if [ -z "${api}" ]; then
-            echo "::error title=Missing secret::API_BASE_URL is required"; exit 1
-          fi
 
           flutter build web --release \
             ${{ steps.args.outputs.arg }} \
@@ -83,6 +94,7 @@ jobs:
     name: Deploy to VPS
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       VPS_HOST:        ${{ secrets.VPS_HOST }}
@@ -101,6 +113,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${SSH_PRIVATE_KEY:-}" ] || [ -z "${VPS_HOST:-}" ] || [ -z "${VPS_USER:-}" ]; then
+            echo "::error title=Missing deploy secrets::SSH_PRIVATE_KEY, VPS_HOST and VPS_USER are required"; exit 1
+          fi
           mkdir -p ~/.ssh
           printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/id_vps
           sed -i 's/\r$//' ~/.ssh/id_vps
