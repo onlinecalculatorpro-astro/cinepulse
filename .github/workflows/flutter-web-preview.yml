@@ -1,7 +1,7 @@
 name: Web Build → Deploy (Manual)
 
 on:
-  workflow_dispatch: {}   # run by hand only
+  workflow_dispatch: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,7 +15,7 @@ jobs:
     name: Build Flutter Web
     runs-on: ubuntu-latest
     env:
-      API_BASE_URL:   ${{ secrets.API_BASE_URL }}                          # required
+      API_BASE_URL:   ${{ secrets.API_BASE_URL }}                           # required
       SHARE_BASE_URL: ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +25,21 @@ jobs:
           channel: stable
           flutter-version: '3.35.6'
 
+      - name: Enable web
+        run: flutter config --enable-web
+
       - name: Install deps
         run: flutter pub get
+
+      - name: Compute renderer arg (use html if supported)
+        id: args
+        shell: bash
+        run: |
+          if flutter build web -h | grep -q -- '--web-renderer'; then
+            echo "arg=--web-renderer html" >> "$GITHUB_OUTPUT"
+          else
+            echo "arg=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build (release)
         shell: bash
@@ -37,8 +50,9 @@ jobs:
           if [ -z "$api" ]; then
             echo "::error title=Missing secret::API_BASE_URL is required"; exit 1
           fi
+
           flutter build web --release \
-            --web-renderer html \
+            ${{ steps.args.outputs.arg }} \
             --pwa-strategy=none \
             --dart-define=API_BASE_URL="$api" \
             --dart-define=SHARE_BASE_URL="$share" \
@@ -60,15 +74,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      VPS_HOST:        ${{ secrets.VPS_HOST }}               # required
-      VPS_USER:        ${{ secrets.VPS_USER }}               # required
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}        # required
+      VPS_HOST:        ${{ secrets.VPS_HOST }}
+      VPS_USER:        ${{ secrets.VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       SSH_PORT:        ${{ secrets.SSH_PORT || '22' }}
       WEB_ROOT:        ${{ secrets.WEB_ROOT || '/var/www/nutshellnewsapp_web' }}
       SHARE_BASE_URL:  ${{ secrets.SHARE_BASE_URL || 'https://app.nutshellnewsapp.com' }}
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: web-build
           path: web-build
@@ -97,9 +110,12 @@ jobs:
         run: ssh -i ~/.ssh/id_vps -p "$SSH_PORT" "$VPS_USER@$VPS_HOST" \
              "(systemctl reload nginx || service nginx reload || true)"
 
-      - name: Smoke test (HEAD)
+      - name: Smoke test
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSI "${SHARE_BASE_URL%/}" | sed -n '1,12p'
-          curl -fsS  "${SHARE_BASE_URL%/}/version.json" | sed -n '1,120p'
+          base="${SHARE_BASE_URL%/}"
+          echo "HEAD $base"
+          curl -fsSI "$base" | sed -n '1,12p'
+          echo "GET  $base/version.json"
+          curl -fsS  "$base/version.json" | sed -n '1,120p'
