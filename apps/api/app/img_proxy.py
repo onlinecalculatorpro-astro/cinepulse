@@ -31,13 +31,18 @@ BROWSER_UA = (
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
-_BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
-_TRAILING_COLON_NUM = re.compile(r":\d+$")
+_BAD_PATH = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
+_TRAILING_COLON_NUM = re.compile(r":\d+$")  # “…/img.jpg:1” from Chrome
 
 # Never allow internal/loopback/our own domains (avoid recursion)
 _BLOCKED_HOSTS = {
-    "api.nutshellnewsapp.com", "app.nutshellnewsapp.com",
-    "api", "localhost", "localhost.localdomain", "127.0.0.1", "0.0.0.0",
+    "api.nutshellnewsapp.com",
+    "app.nutshellnewsapp.com",
+    "api",
+    "localhost",
+    "localhost.localdomain",
+    "127.0.0.1",
+    "0.0.0.0",
 }
 
 # Publisher → homepage Referer
@@ -63,13 +68,8 @@ _PUBLISHER_REFERERS: List[tuple[str, str]] = [
     ("i.ytimg.com",                 "https://www.youtube.com/"),
 ]
 
-# Alternate hosts to try before CDN fallbacks
-_ALT_HOSTS: dict[str, List[str]] = {
-    "ndtvimg.com": ["i.ndtvimg.com", "c.ndtvimg.com"],
-}
-
-# Hosts that frequently hotlink-block (use CDN fallbacks)
-_HARD_BLOCKERS = ("ndtvimg.com", "i.ndtvimg.com", "c.ndtvimg.com")
+# NDTV alternate image hosts (try before weserv)
+_NDTV_ALTS = ("i.ndtvimg.com", "c.ndtvimg.com")
 
 SVG_PLACEHOLDER = b"""<svg xmlns='http://www.w3.org/2000/svg' width='100' height='60'>
   <rect width='100' height='60' fill='#eef1f5'/>
@@ -96,7 +96,10 @@ def _host_is_private_ip_literal(host: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+    return (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast
+    )
 
 def _looks_like_image(content_type: Optional[str]) -> bool:
     if not content_type:
@@ -120,17 +123,15 @@ def _publisher_referer_for(host: str, path: str) -> str:
 
 def _headers_variant(origin_host: str, origin_path: str, mode: str, page_ref: Optional[str]) -> dict[str, str]:
     """
-    modes: "page_ref" | "page_ref_no_origin" | "pub" | "pub_no_origin" | "self" | "self_no_origin" | "no_ref"
+    modes: "page_ref" | "page_ref_no_origin" | "pub" | "pub_no_origin" | "self" | "self_no_origin" | "no_ref" | "amp"
     """
     base = {
         "User-Agent": BROWSER_UA,
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "identity",  # keep body uncompressed for streaming
         "Connection": "keep-alive",
-        "Sec-Fetch-Site": "cross-site",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Dest": "image",
+        "Accept-Encoding": "identity",  # ensure uncompressed body → avoid length mismatches
+        # (Sec-Fetch-* intentionally omitted; some origins dislike them from non-browsers)
     }
 
     if mode.startswith("page_ref"):
@@ -147,6 +148,9 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str, page_ref: Op
     elif mode.startswith("self"):
         seg = _first_path_segment(origin_path)
         ref = f"https://{origin_host}/{seg}/" if seg else f"https://{origin_host}/"
+    elif mode == "amp":
+        # AMP usually works without ref/origin
+        return base
     else:
         ref = ""
 
@@ -177,6 +181,7 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str]:
     return _sanitize_tail_colon(orig_full), host, path
 
 def _weserv_urls(full_url: str) -> list[str]:
+    """Weserv proxy (last resort)."""
     p = urlparse(full_url)
     host = p.hostname or ""
     path = quote(p.path or "", safe="/._-~%")
@@ -185,31 +190,27 @@ def _weserv_urls(full_url: str) -> list[str]:
     proto = "ssl:" if p.scheme == "https" else ""
     return [f"https://images.weserv.nl/?url={proto}{hpq}&n=-1"]
 
-def _google_gadgets(full_url: str) -> str:
-    # very robust image CDN proxy used by many sites
-    return (
-        "https://images1-focus-opensocial.googleusercontent.com/gadgets/proxy"
-        f"?container=focus&refresh=86400&url={quote(full_url, safe='')}"
-    )
-
-def _statically(full_url: str) -> str:
+def _replace_host(full_url: str, new_host: str) -> str:
     p = urlparse(full_url)
-    host = p.hostname or ""
-    path = p.path or ""
-    q = f"?{p.query}" if p.query else ""
-    return f"https://cdn.statically.io/img/{host}{path}{q}"
+    if not p.netloc:
+        return full_url
+    return urlunparse(p._replace(netloc=new_host))
 
-def _amp_cache_candidates(full_url: str, page_ref: Optional[str]) -> list[str]:
-    """Google AMP cache relay: https://<site>-cdn.ampproject.org/i(/s)/<image-host>/<path>"""
+def _amp_urls(full_url: str, page_ref: Optional[str]) -> list[str]:
+    """
+    Google AMP cache relay:
+      https://<site-host-with-dashes>.cdn.ampproject.org/i/s/<image-host>/<path>
+    """
     try:
         img = urlparse(full_url)
         if not img.scheme or not img.netloc:
             return []
-        site_host: Optional[str] = None
+        site_host = None
         if page_ref:
             pr = urlparse(page_ref)
             if pr.netloc:
                 site_host = pr.netloc
+        # fallback: derive a plausible site host from image host (last two labels)
         if not site_host:
             parts = (img.hostname or "").split(".")
             if len(parts) >= 2:
@@ -224,22 +225,16 @@ def _amp_cache_candidates(full_url: str, page_ref: Optional[str]) -> list[str]:
     except Exception:
         return []
 
-def _alt_cdn_fallbacks(host: str, full_url: str) -> list[tuple[str, str]]:
-    """Extra neutral CDNs for hard blockers; returns (url, mode) pairs."""
-    urls: list[tuple[str, str]] = []
-    if host.endswith(_HARD_BLOCKERS):
-        urls.append((_google_gadgets(full_url), "alt_gadgets"))
-        urls.append((_statically(full_url), "alt_statically"))
-    return urls
-
-def _placeholder_response() -> Response:
+def _placeholder_response(debug: Optional[str] = None) -> Response:
     headers = _cors_headers()
     headers["Content-Type"] = "image/svg+xml"
     headers["Content-Disposition"] = 'inline; filename="placeholder.svg"'
+    if debug:
+        headers["X-Proxy-Attempts"] = debug
     return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
 
 def _is_ndtv_img_host(host: str) -> bool:
-    return host.lower().endswith("ndtvimg.com")
+    return host.endswith("ndtvimg.com")
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
@@ -248,53 +243,45 @@ async def proxy_img(
     u:   Optional[str] = Query(None, description="Absolute image URL (URL-encoded)"),
     url: Optional[str] = Query(None, description="Alias for 'u'"),
     ref: Optional[str] = Query(None, description="Article/page URL used as Referer"),
+    noamp: Optional[int] = Query(0, description="Skip AMP fallback if set"),
     dbg: Optional[int] = Query(0,    description="Set 1 to return X-Proxy-Attempts"),
 ):
+    # CORS preflight
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_cors_headers())
 
     raw = u or url
     full_url, host, path = _parse_source_url(raw or "")
 
-    # Reject bad/forbidden hosts early → placeholder
+    # Reject early → placeholder (non-noisy)
     if not full_url or not host:
         return _placeholder_response()
     if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
         return _placeholder_response()
-    if _host_is_private_ip_literal(host) or _BAD_PATH_PATTERNS.search(path or ""):
+    if _host_is_private_ip_literal(host) or _BAD_PATH.search(path or ""):
         return _placeholder_response()
 
-    # Build attempt list
+    # Build attempt list with NDTV-special handling
+    attempts: List[tuple[str, str]] = []
+
+    # 0) NDTV: AMP first (unless noamp=1), then alt image hosts
+    if _is_ndtv_img_host(host):
+        if not noamp:
+            for amp in _amp_urls(full_url, ref or "https://www.ndtv.com/"):
+                attempts.append((amp, "amp"))
+        for alt in _NDTV_ALTS:
+            if host != alt:
+                attempts.append((_replace_host(full_url, alt), "pub"))
+
+    # 1) Normal attempt modes
     modes: List[str] = []
     if ref:
         modes += ["page_ref", "page_ref_no_origin"]
     modes += ["pub", "pub_no_origin", "self", "self_no_origin", "no_ref"]
-
-    attempts: List[tuple[str, str]] = []
-
-    # 0) NDTV alt-host tries first (if applicable)
-    for suffix, cands in _ALT_HOSTS.items():
-        if host.endswith(suffix):
-            p0 = urlparse(full_url)
-            for alt in cands:
-                if (p0.hostname or "") != alt:
-                    alt_url = urlunparse(p0._replace(netloc=alt))
-                    for m in modes:
-                        attempts.append((alt_url, m))
-            break
-
-    # 1) Original URL attempts
     for m in modes:
         attempts.append((full_url, m))
 
-    # 2) AMP cache fallback (derive from ref/site)
-    for amp in _amp_cache_candidates(full_url, ref):
-        attempts.append((amp, "no_ref"))
-
-    # 3) Neutral CDN fallbacks for hard blockers
-    attempts += _alt_cdn_fallbacks(host, full_url)
-
-    # 4) Weserv last
+    # 2) Weserv last resort
     attempts += [(w, "weserv") for w in _weserv_urls(full_url)]
 
     debug_notes: List[str] = []
@@ -308,20 +295,20 @@ async def proxy_img(
     ) as client:
         for target_url, mode in attempts:
             try:
-                # NDTV cookie warm-up: if ndtvimg.com and mode uses page ref, touch ref first
+                # NDTV cookie warm-up for page_ref modes: load the page ref first (sets cookies)
                 if _is_ndtv_img_host(host) and mode.startswith("page_ref") and ref:
                     try:
                         pr = urlparse(ref)
                         if pr.scheme in ("http", "https") and pr.netloc:
-                            await client.get(ref, headers={
-                                "User-Agent": BROWSER_UA,
-                                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                                "Accept-Language": "en-US,en;q=0.9",
-                                "Connection": "keep-alive",
-                                "Sec-Fetch-Site": "none",
-                                "Sec-Fetch-Mode": "navigate",
-                                "Sec-Fetch-Dest": "document",
-                            })
+                            await client.get(
+                                ref,
+                                headers={
+                                    "User-Agent": BROWSER_UA,
+                                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                                    "Accept-Language": "en-US,en;q=0.9",
+                                    "Connection": "keep-alive",
+                                },
+                            )
                     except httpx.RequestError:
                         pass
 
@@ -337,18 +324,17 @@ async def proxy_img(
             if r.status_code < 400 and _looks_like_image(ct):
                 winner = r
                 break
+            # else: try next attempt
 
     if winner is None:
-        resp = _placeholder_response()
-        if dbg:
-            resp.headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-        return resp
+        debug = " | ".join(debug_notes) if dbg else None
+        return _placeholder_response(debug=debug)
 
+    # Success: stream the image
     media_type = (winner.headers.get("Content-Type", "") or "application/octet-stream").split(";", 1)[0]
     headers = _cors_headers()
     if dbg:
         headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-    # Do not forward Content-Length (we may be streaming/decompressed)
     headers["Content-Type"] = media_type
     headers["Content-Disposition"] = 'inline; filename="proxy-image"'
 
