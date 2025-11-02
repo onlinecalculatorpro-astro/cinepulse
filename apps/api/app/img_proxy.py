@@ -47,26 +47,35 @@ _BLOCKED_HOSTS = {
 
 # Known publisher → homepage Referer (helps on referrer checks)
 _PUBLISHER_REFERERS: List[tuple[str, str]] = [
-    ("c.ndtvimg.com",                 "https://www.ndtv.com/"),
-    ("i.ndtvimg.com",                 "https://www.ndtv.com/"),
-    ("i.hindustantimes.com",          "https://www.hindustantimes.com/"),
-    ("images.hindustantimes.com",     "https://www.hindustantimes.com/"),
-    ("images.livemint.com",           "https://www.livemint.com/"),
-    ("static.toiimg.com",             "https://timesofindia.indiatimes.com/"),
-    ("img.etimg.com",                 "https://economictimes.indiatimes.com/"),
-    ("th-i.thgim.com",                "https://www.thehindu.com/"),
-    ("images.indianexpress.com",      "https://indianexpress.com/"),
-    ("images.newindianexpress.com",   "https://www.newindianexpress.com/"),
-    ("akm-img-a-in.tosshub.com",      "https://www.indiatoday.in/"),
-    ("bsmedia.business-standard.com", "https://www.business-standard.com/"),
-    ("img.etb2bimg.com",              "https://economictimes.indiatimes.com/"),
-    # ---- added allowlist entries ----
-    ("assets.bollywoodhungama.in",    "https://www.bollywoodhungama.com/"),
-    ("staticimg.amarujala.com",       "https://www.amarujala.com/"),
-    ("images.indiatvnews.com",        "https://www.indiatvnews.com/"),
-    ("static-koimoi.akamaized.net",   "https://www.koimoi.com/"),
-    ("i.ytimg.com",                   "https://www.youtube.com/"),
+    # NDTV (generic + specific subdomains)
+    ("ndtvimg.com",                  "https://www.ndtv.com/"),
+    ("c.ndtvimg.com",                "https://www.ndtv.com/"),
+    ("i.ndtvimg.com",                "https://www.ndtv.com/"),
+
+    ("i.hindustantimes.com",         "https://www.hindustantimes.com/"),
+    ("images.hindustantimes.com",    "https://www.hindustantimes.com/"),
+    ("images.livemint.com",          "https://www.livemint.com/"),
+    ("static.toiimg.com",            "https://timesofindia.indiatimes.com/"),
+    ("img.etimg.com",                "https://economictimes.indiatimes.com/"),
+    ("th-i.thgim.com",               "https://www.thehindu.com/"),
+    ("images.indianexpress.com",     "https://indianexpress.com/"),
+    ("images.newindianexpress.com",  "https://www.newindianexpress.com/"),
+    ("akm-img-a-in.tosshub.com",     "https://www.indiatoday.in/"),
+    ("bsmedia.business-standard.com","https://www.business-standard.com/"),
+    ("img.etb2bimg.com",             "https://economictimes.indiatimes.com/"),
+    # allowlist additions
+    ("assets.bollywoodhungama.in",   "https://www.bollywoodhungama.com/"),
+    ("staticimg.amarujala.com",      "https://www.amarujala.com/"),
+    ("images.indiatvnews.com",       "https://www.indiatvnews.com/"),
+    ("static-koimoi.akamaized.net",  "https://www.koimoi.com/"),
+    ("i.ytimg.com",                  "https://www.youtube.com/"),
 ]
+
+# Alternate host candidates for certain publishers (try before weserv)
+_ALT_HOSTS: dict[str, List[str]] = {
+    # Many NDTV images are mirrored across these; some enforce stricter hotlink rules than others
+    "ndtvimg.com": ["i.ndtvimg.com", "c.ndtvimg.com"],
+}
 
 SVG_PLACEHOLDER = b"""<svg xmlns='http://www.w3.org/2000/svg' width='100' height='60'>
   <rect width='100' height='60' fill='#eef1f5'/>
@@ -127,8 +136,11 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str, page_ref: Op
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
-        "Accept-Encoding": "identity",  # ensure uncompressed body → avoid length mismatches
-        # (Sec-Fetch-* intentionally omitted)
+        "Accept-Encoding": "identity",  # avoid compressed body → content-length mismatches when streaming
+        # Realistic fetch hints (help some CDNs treat us like a browser image request)
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Dest": "image",
     }
 
     if mode.startswith("page_ref"):
@@ -214,13 +226,39 @@ async def proxy_img(
     if _host_is_private_ip_literal(host) or _BAD_PATH_PATTERNS.search(path or ""):
         return _placeholder_response()
 
-    # Attempt order: real page ref → publisher/homepage ref (with/without Origin) → self ref → no ref → weserv
+    # Build attempt list:
+    # 1) Alternate hosts (e.g., NDTV) with page ref modes (if provided), then pub/self/no_ref
+    # 2) Original host with same modes
+    # 3) Weserv last
     modes: List[str] = []
     if ref:
         modes += ["page_ref", "page_ref_no_origin"]
     modes += ["pub", "pub_no_origin", "self", "self_no_origin", "no_ref"]
 
-    attempts: List[tuple[str, str]] = [(full_url, m) for m in modes]
+    attempts: List[tuple[str, str]] = []
+
+    # Alternate host URLs for this origin (if any)
+    alts = []
+    for suffix, candidates in _ALT_HOSTS.items():
+        if host.endswith(suffix):
+            try:
+                p0 = urlparse(full_url)
+                for alt in candidates:
+                    if (p0.hostname or "") != alt:
+                        alts.append(urlunparse(p0._replace(netloc=alt)))
+            except Exception:
+                pass
+            break
+
+    for au in alts:
+        for m in modes:
+            attempts.append((au, m))
+
+    # Original URL attempts
+    for m in modes:
+        attempts.append((full_url, m))
+
+    # Weserv last
     attempts += [(w, "weserv") for w in _weserv_urls(full_url)]
 
     debug_notes: List[str] = []
@@ -246,9 +284,9 @@ async def proxy_img(
             if r.status_code < 400 and _looks_like_image(ct):
                 winner = r
                 break
-            # anything else → try next mode
+            # else keep trying
 
-    # No winner → placeholder, but expose attempts when dbg=1
+    # No winner → placeholder (with attempts when dbg=1)
     if winner is None:
         resp = _placeholder_response()
         if dbg:
@@ -261,7 +299,6 @@ async def proxy_img(
     headers = _cors_headers()
     if dbg:
         headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
-    # Do NOT forward Content-Length (body may be decompressed/streamed)
     headers["Content-Type"] = media_type
     headers["Content-Disposition"] = 'inline; filename="proxy-image"'
 
