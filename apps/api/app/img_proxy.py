@@ -32,48 +32,38 @@ BROWSER_UA = (
 )
 
 _BAD_PATH_PATTERNS = re.compile(r"/wp-login\.php|action=logout", re.IGNORECASE)
-_TRAILING_COLON_NUM = re.compile(r":\d+$")  # “…/img.jpg:1” from Chrome
+_TRAILING_COLON_NUM = re.compile(r":\d+$")
 
-# Never allow internal/loopback/our own domains (avoid recursion)
 _BLOCKED_HOSTS = {
-    "api.nutshellnewsapp.com",
-    "app.nutshellnewsapp.com",
-    "api",
-    "localhost",
-    "localhost.localdomain",
-    "127.0.0.1",
-    "0.0.0.0",
+    "api.nutshellnewsapp.com", "app.nutshellnewsapp.com",
+    "api", "localhost", "localhost.localdomain", "127.0.0.1", "0.0.0.0",
 }
 
-# Known publisher → homepage Referer (helps on referrer checks)
+# Publisher → homepage Referer
 _PUBLISHER_REFERERS: List[tuple[str, str]] = [
-    # NDTV (generic + specific subdomains)
-    ("ndtvimg.com",                  "https://www.ndtv.com/"),
-    ("c.ndtvimg.com",                "https://www.ndtv.com/"),
-    ("i.ndtvimg.com",                "https://www.ndtv.com/"),
-
-    ("i.hindustantimes.com",         "https://www.hindustantimes.com/"),
-    ("images.hindustantimes.com",    "https://www.hindustantimes.com/"),
-    ("images.livemint.com",          "https://www.livemint.com/"),
-    ("static.toiimg.com",            "https://timesofindia.indiatimes.com/"),
-    ("img.etimg.com",                "https://economictimes.indiatimes.com/"),
-    ("th-i.thgim.com",               "https://www.thehindu.com/"),
-    ("images.indianexpress.com",     "https://indianexpress.com/"),
-    ("images.newindianexpress.com",  "https://www.newindianexpress.com/"),
-    ("akm-img-a-in.tosshub.com",     "https://www.indiatoday.in/"),
+    ("ndtvimg.com",                 "https://www.ndtv.com/"),
+    ("c.ndtvimg.com",               "https://www.ndtv.com/"),
+    ("i.ndtvimg.com",               "https://www.ndtv.com/"),
+    ("i.hindustantimes.com",        "https://www.hindustantimes.com/"),
+    ("images.hindustantimes.com",   "https://www.hindustantimes.com/"),
+    ("images.livemint.com",         "https://www.livemint.com/"),
+    ("static.toiimg.com",           "https://timesofindia.indiatimes.com/"),
+    ("img.etimg.com",               "https://economictimes.indiatimes.com/"),
+    ("th-i.thgim.com",              "https://www.thehindu.com/"),
+    ("images.indianexpress.com",    "https://indianexpress.com/"),
+    ("images.newindianexpress.com", "https://www.newindianexpress.com/"),
+    ("akm-img-a-in.tosshub.com",    "https://www.indiatoday.in/"),
     ("bsmedia.business-standard.com","https://www.business-standard.com/"),
-    ("img.etb2bimg.com",             "https://economictimes.indiatimes.com/"),
-    # allowlist additions
-    ("assets.bollywoodhungama.in",   "https://www.bollywoodhungama.com/"),
-    ("staticimg.amarujala.com",      "https://www.amarujala.com/"),
-    ("images.indiatvnews.com",       "https://www.indiatvnews.com/"),
-    ("static-koimoi.akamaized.net",  "https://www.koimoi.com/"),
-    ("i.ytimg.com",                  "https://www.youtube.com/"),
+    ("img.etb2bimg.com",            "https://economictimes.indiatimes.com/"),
+    ("assets.bollywoodhungama.in",  "https://www.bollywoodhungama.com/"),
+    ("staticimg.amarujala.com",     "https://www.amarujala.com/"),
+    ("images.indiatvnews.com",      "https://www.indiatvnews.com/"),
+    ("static-koimoi.akamaized.net", "https://www.koimoi.com/"),
+    ("i.ytimg.com",                 "https://www.youtube.com/"),
 ]
 
-# Alternate host candidates for certain publishers (try before weserv)
+# Alternate hosts to try before weserv
 _ALT_HOSTS: dict[str, List[str]] = {
-    # Many NDTV images are mirrored across these; some enforce stricter hotlink rules than others
     "ndtvimg.com": ["i.ndtvimg.com", "c.ndtvimg.com"],
 }
 
@@ -102,10 +92,7 @@ def _host_is_private_ip_literal(host: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return (
-        ip.is_private or ip.is_loopback or ip.is_link_local
-        or ip.is_reserved or ip.is_multicast
-    )
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
 
 def _looks_like_image(content_type: Optional[str]) -> bool:
     if not content_type:
@@ -136,8 +123,7 @@ def _headers_variant(origin_host: str, origin_path: str, mode: str, page_ref: Op
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Connection": "keep-alive",
-        "Accept-Encoding": "identity",  # avoid compressed body → content-length mismatches when streaming
-        # Realistic fetch hints (help some CDNs treat us like a browser image request)
+        "Accept-Encoding": "identity",  # keep body uncompressed for streaming
         "Sec-Fetch-Site": "cross-site",
         "Sec-Fetch-Mode": "no-cors",
         "Sec-Fetch-Dest": "image",
@@ -187,7 +173,6 @@ def _parse_source_url(raw_u: str) -> Tuple[str, str, str]:
     return _sanitize_tail_colon(orig_full), host, path
 
 def _weserv_urls(full_url: str) -> list[str]:
-    """Weserv proxy (last resort)."""
     p = urlparse(full_url)
     host = p.hostname or ""
     path = quote(p.path or "", safe="/._-~%")
@@ -196,11 +181,43 @@ def _weserv_urls(full_url: str) -> list[str]:
     proto = "ssl:" if p.scheme == "https" else ""
     return [f"https://images.weserv.nl/?url={proto}{hpq}&n=-1"]
 
+def _amp_cache_candidates(full_url: str, page_ref: Optional[str]) -> list[str]:
+    """Google AMP cache relay: https://<site>-cdn.ampproject.org/i/s/<image-host>/<path>"""
+    try:
+        img = urlparse(full_url)
+        if not img.scheme or not img.netloc:
+            return []
+        # pick site host from ref if available; else derive from image host suffix if possible
+        site_host = None
+        if page_ref:
+            pr = urlparse(page_ref)
+            if pr.netloc:
+                site_host = pr.netloc
+        if not site_host:
+            # crude fallback: try stripping first label of image host, keep last two labels
+            parts = (img.hostname or "").split(".")
+            if len(parts) >= 2:
+                site_host = ".".join(parts[-2:])
+        if not site_host:
+            return []
+        amp_host = f"{site_host.replace('.', '-')}.cdn.ampproject.org"
+        # http → /i/, https → /i/s/
+        prefix = "/i/s/" if img.scheme == "https" else "/i/"
+        path = quote(img.path or "", safe="/._-~%")
+        q = f"?{img.query}" if img.query else ""
+        return [f"https://{amp_host}{prefix}{img.hostname}{path}{q}"]
+    except Exception:
+        return []
+
 def _placeholder_response() -> Response:
     headers = _cors_headers()
     headers["Content-Type"] = "image/svg+xml"
     headers["Content-Disposition"] = 'inline; filename="placeholder.svg"'
     return Response(status_code=200, headers=headers, content=SVG_PLACEHOLDER)
+
+def _is_ndtv_img_host(host: str) -> bool:
+    h = host.lower()
+    return h.endswith("ndtvimg.com")
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 @router.api_route("/img", methods=["GET", "HEAD", "OPTIONS"])
@@ -211,14 +228,12 @@ async def proxy_img(
     ref: Optional[str] = Query(None, description="Article/page URL used as Referer"),
     dbg: Optional[int] = Query(0,    description="Set 1 to return X-Proxy-Attempts"),
 ):
-    # CORS preflight
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=_cors_headers())
 
     raw = u or url
     full_url, host, path = _parse_source_url(raw or "")
 
-    # Reject bad/forbidden hosts early → placeholder (no console red)
     if not full_url or not host:
         return _placeholder_response()
     if host in _BLOCKED_HOSTS or any(host.endswith("." + b) for b in _BLOCKED_HOSTS):
@@ -226,10 +241,7 @@ async def proxy_img(
     if _host_is_private_ip_literal(host) or _BAD_PATH_PATTERNS.search(path or ""):
         return _placeholder_response()
 
-    # Build attempt list:
-    # 1) Alternate hosts (e.g., NDTV) with page ref modes (if provided), then pub/self/no_ref
-    # 2) Original host with same modes
-    # 3) Weserv last
+    # Build attempt list
     modes: List[str] = []
     if ref:
         modes += ["page_ref", "page_ref_no_origin"]
@@ -237,28 +249,26 @@ async def proxy_img(
 
     attempts: List[tuple[str, str]] = []
 
-    # Alternate host URLs for this origin (if any)
-    alts = []
-    for suffix, candidates in _ALT_HOSTS.items():
+    # 0) NDTV alt-host tries first (if applicable)
+    for suffix, cands in _ALT_HOSTS.items():
         if host.endswith(suffix):
-            try:
-                p0 = urlparse(full_url)
-                for alt in candidates:
-                    if (p0.hostname or "") != alt:
-                        alts.append(urlunparse(p0._replace(netloc=alt)))
-            except Exception:
-                pass
+            p0 = urlparse(full_url)
+            for alt in cands:
+                if (p0.hostname or "") != alt:
+                    alt_url = urlunparse(p0._replace(netloc=alt))
+                    for m in modes:
+                        attempts.append((alt_url, m))
             break
 
-    for au in alts:
-        for m in modes:
-            attempts.append((au, m))
-
-    # Original URL attempts
+    # 1) Original URL attempts
     for m in modes:
         attempts.append((full_url, m))
 
-    # Weserv last
+    # 2) AMP cache fallback (derive from ref/site)
+    for amp in _amp_cache_candidates(full_url, ref):
+        attempts.append((amp, "no_ref"))
+
+    # 3) Weserv last
     attempts += [(w, "weserv") for w in _weserv_urls(full_url)]
 
     debug_notes: List[str] = []
@@ -270,8 +280,26 @@ async def proxy_img(
         max_redirects=MAX_REDIRECTS,
         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
     ) as client:
+
         for target_url, mode in attempts:
             try:
+                # NDTV cookie warm-up: if ndtvimg.com and mode uses page ref, touch ref first
+                if _is_ndtv_img_host(host) and mode.startswith("page_ref") and ref:
+                    try:
+                        pr = urlparse(ref)
+                        if pr.scheme in ("http", "https") and pr.netloc:
+                            await client.get(ref, headers={
+                                "User-Agent": BROWSER_UA,
+                                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                                "Accept-Language": "en-US,en;q=0.9",
+                                "Connection": "keep-alive",
+                                "Sec-Fetch-Site": "none",
+                                "Sec-Fetch-Mode": "navigate",
+                                "Sec-Fetch-Dest": "document",
+                            })
+                    except httpx.RequestError:
+                        pass
+
                 r = await client.get(target_url, headers=_headers_variant(host, path, mode, ref))
             except httpx.RequestError as e:
                 debug_notes.append(f"{mode} neterr:{type(e).__name__}")
@@ -284,18 +312,14 @@ async def proxy_img(
             if r.status_code < 400 and _looks_like_image(ct):
                 winner = r
                 break
-            # else keep trying
 
-    # No winner → placeholder (with attempts when dbg=1)
     if winner is None:
         resp = _placeholder_response()
         if dbg:
             resp.headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
         return resp
 
-    # Success: stream the image
-    ct = winner.headers.get("Content-Type", "")
-    media_type = ct.split(";", 1)[0] if ct else "application/octet-stream"
+    media_type = (winner.headers.get("Content-Type", "") or "application/octet-stream").split(";", 1)[0]
     headers = _cors_headers()
     if dbg:
         headers["X-Proxy-Attempts"] = " | ".join(debug_notes)
