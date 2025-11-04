@@ -1,20 +1,18 @@
 # =============================================================================
-# NutshellNews Root Source Config
+# NutshellNews Root Source Config  — ENTERTAINMENT ONLY
 # =============================================================================
 # Loader order:
 #   1) Load THIS file.
 #   2) Read each YAML listed under include_verticals.
-#   3) Merge all YouTube channels + RSS feeds/buckets + throttle overrides
-#      into one in-memory config for polling.
+#   3) Merge YouTube + RSS + throttle into one in-memory config for polling.
 # =============================================================================
 
 meta:
   regions:
     - IN
-  # Used for building app deep links in notifications / shares
   share_base_url: "https://app.nutshellnewsapp.com/#/s"
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 # Global throttle / courtesy (vertical files can override/extend)
 # -----------------------------------------------------------------------------
 throttle:
@@ -30,8 +28,8 @@ throttle:
     ndtv.com: 180
     timesofindia.indiatimes.com: 240
 
-# -----------------------------------------------------------------------------
-# YouTube defaults (channels are defined in vertical files)
+# ----------------------------------------------------------------------------- 
+# YouTube defaults  (channels are defined in vertical files)
 # -----------------------------------------------------------------------------
 youtube:
   defaults:
@@ -41,10 +39,10 @@ youtube:
     published_after_hours: 72
     language: "en"
     region: "IN"
-  channels: []   # populated from infra/verticals/*.yml
+  channels: []   # populated from verticals/entertainment.yml
 
-# -----------------------------------------------------------------------------
-# RSS defaults (feeds are defined in vertical files)
+# ----------------------------------------------------------------------------- 
+# RSS defaults  (feeds are defined in vertical files)
 # -----------------------------------------------------------------------------
 rss:
   defaults:
@@ -56,11 +54,10 @@ rss:
       - "behind the scenes"
       - "interview"
       - "live stream"
-  # merged from verticals
   feeds: []
   buckets: {}
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 # TMDb enrichment / trending (global)
 # -----------------------------------------------------------------------------
 tmdb:
@@ -75,9 +72,9 @@ tmdb:
     - "Disney Plus Hotstar"
     - "JioCinema"
     - "ZEE5"
-    - "Sony LIV"
+    - "Sony LIV"  # provider list is fine; the SonyLIV *YouTube* source remains disabled in the vertical
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 # Ranking model / heuristics (global)
 # -----------------------------------------------------------------------------
 rules:
@@ -121,38 +118,31 @@ ranking_weights:
   has_poster_bonus: 0.6
   trend_bonus: 1.2
 
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------- 
 # Scheduler / poller behavior (global)
 # -----------------------------------------------------------------------------
 scheduler:
-  poll_interval_min: 5           # full poll loop every 5 minutes
-  published_after_hours: 36      # ignore items older than 36h
+  poll_interval_min: 5
+  published_after_hours: 36
   use_sources_file: true
 
-  # Enable ONLY buckets that actually exist in the included vertical files
-  # Entertainment buckets:
+  # Enable ONLY entertainment buckets
   rss_buckets_enabled:
     - trade_authority
     - mainstream_quality
     - entertainment_filtered
     - ott_streaming
     - reality_tv
-    # Top-stories (national) buckets:
-    - mainstream_national
-    - business_macro
-    - explainers_longform
 
   per_run_limits:
-    youtube_channels: 10         # max YT channels per loop
-    rss_feeds: 12                # max RSS feeds per loop
+    youtube_channels: 10
+    rss_feeds: 12
 
-  poll_spread_sec: 2             # delay between individual polls
-  poll_jitter_sec: 10            # random jitter between loops
+  poll_spread_sec: 2
+  poll_jitter_sec: 10
 
-# -----------------------------------------------------------------------------
-# Vertical config files to merge
-# (add more: sports, travel, tech, etc.)
+# ----------------------------------------------------------------------------- 
+# Vertical config files to merge  — ENTERTAINMENT ONLY
 # -----------------------------------------------------------------------------
 include_verticals:
-  - verticals/top_stories_national.yml
   - verticals/entertainment.yml
