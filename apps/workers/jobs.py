@@ -1,52 +1,25 @@
 # apps/workers/jobs.py
 #
-# PIPELINE OVERVIEW (runs in the "workers" container / RQ queue: events)
+# ROLE: RQ "events" worker — normalize raw adapter events (RSS/YouTube)
+# into canonical story dicts and hand them off to the sanitizer.
 #
-#   scheduler  → polls sources (RSS / YouTube) and enqueues AdapterEventDict jobs on "events"
+# ⚖️ Policy recap (aligned with summarizer.py & sanitizer.py):
+# - Not a generic news app. SPORTS ARE OUT. We only do entertainment.
+# - Publish industry/work content (trailers, OTT drops, theatrical releases,
+#   box office) and on-air reality-show drama. Pure off-camera gossip is dropped.
+# - Legal/PR-hot items (FIRs, arrests, accusations, censorship spats) carry
+#   neutral tone + attribution (handled by summarizer wrappers).
+# - Sanitizer is the ONLY publisher to the public feed and performs dedupe.
 #
-#   workers    → THIS FILE (rq worker "events")
-#                 - normalize_event(): AdapterEventDict → canonical story dict
-#                 - enqueue that story onto the "sanitize" queue
+# OUTPUT (per story):
+#   id, kind, kind_meta, title, summary, verticals, tags, timestamps,
+#   url, source, source_domain, thumb_url/poster_url (+ aliases),
+#   safety flags: is_risky (bool), gossip_only (bool), drama_signal (float ≥ 0)
 #
-#   sanitizer  → rq worker "sanitize"
-#                 - final safety gate before public feed
-#                 - rejects pure gossip (gossip_only == True)
-#                 - BUT allows high-drama on-air reality content
-#                   (onscreen_drama == True, gossip_only forced False)
-#                 - fuzzy topic dedupe (first one wins)
-#                 - pushes accepted stories to Redis FEED_KEY
-#                 - trims FEED_KEY
-#                 - realtime fanout + optional push
-#
-#   api        → /v1/feed reads FEED_KEY to serve the app
-#
-# RULES:
-# - workers do NOT write directly to FEED_KEY
-# - workers do NOT dedupe
-# - workers do NOT send push notifications
-# - workers just normalize + forward to sanitizer
-#
-# SAFETY / TONE:
-# - We never publish raw scraped hype / accusations / personal drama.
-# - We run summarize_story_safe() and generate_safe_title():
-#     - remove clickbait / hype
-#     - soften or attribute unverified claims
-#     - inject "According to <domain> ..." for sensitive items
-# - We attach THREE booleans to every story now:
-#     - is_risky        → True if there's legal/PR heat (accusations, FIRs, verbal fights on air)
-#     - gossip_only     → True if it's purely off-camera personal-life gossip (airport looks, who-was-seen-with-who)
-#                          sanitizer will DROP these 100%, never hits feed.
-#     - onscreen_drama  → True if it's televised/streamed reality show drama (fight, walkout, eviction, nomination, etc.)
-#                          that clearly happened ON CAMERA / IN EPISODE.
-#                          This is allowed to publish even if spicy, but must be attributed.
-#
-# CRITICAL:
-# - onscreen_drama implies: gossip_only must be False (even if it's spicy),
-#   and is_risky must be True so summarizer/title stay attributional.
-#
-# MAINTENANCE:
-# - backfill_repair_recent() can patch older feed items already in Redis
-#   (timestamps, thumbnails). It's manual / not in the live loop.
+# CHANGELOG (vs previous):
+# - Removed the 'sports' vertical entirely — classification can only yield ["entertainment"].
+# - Replaced boolean 'onscreen_drama' with numeric 'drama_signal' for sanitizer gate.
+# - Tougher pre-summary cleanup; better image scoring; robust timestamp normalization.
 
 from __future__ import annotations
 
@@ -105,15 +78,13 @@ YT_MAX_ITEMS = int(os.getenv("YT_MAX_ITEMS", "50"))
 RSS_MAX_ITEMS = int(os.getenv("RSS_MAX_ITEMS", "30"))
 
 # =============================================================================
-# Vertical config
+# Vertical config (ENTERTAINMENT ONLY)
 # =============================================================================
 
 # Fallback vertical if nothing matches
 FALLBACK_VERTICAL = os.getenv("FALLBACK_VERTICAL", "entertainment")
 
-# We map stories to vertical buckets via lightweight keyword sniffing.
-# Shape:
-#   "vertical-slug": { "keywords": [ ...lowercase substrings... ] }
+# Only entertainment — sports keywords removed so it cannot leak in.
 VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
     "entertainment": {
         "keywords": [
@@ -131,18 +102,7 @@ VERTICAL_RULES: Dict[str, Dict[str, List[str]]] = {
             "evicted", "eliminated", "finale", "winner",
             "khatron ke khiladi", "indian idol", "reality show",
         ]
-    },
-    "sports": {
-        "keywords": [
-            "ipl", "t20", "odi", "test match", "wicket", "wickets",
-            "runs", "run chase", "century", "fifty",
-            "premier league", "la liga", "champions league", "goal",
-            "world cup", "trophy", "final whistle",
-            "wins by", "beats", "defeats", "edges past", "thrashes", "clinches win",
-            "nba", "nfl", "touchdown", "super bowl", "grand slam",
-            "cricket", "football", "soccer", "basketball", "tennis",
-        ]
-    },
+    }
 }
 
 # deterministic-ish ordering when we emit story["verticals"]
@@ -215,36 +175,12 @@ _BOX_OFFICE_RE = re.compile(
     r"\bbox\s*office\b|collection[s]?\b|opening\s+weekend\b|crore\b|gross(?:ed|es)?\b|earned\s+₹",
     re.I,
 )
-# sports tags
-_SPORT_RESULT_RE = re.compile(
-    r"\b(beats|defeats|thrashes|edges\s+past|stuns|wins\s+by|clinches\s+(?:win|victory)|"
-    r"scores\s+(?:a\s+)?hat[- ]?trick|scores\s+late\s+winner)\b",
-    re.I,
-)
 
-_MONTHS = {
-    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
-    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
-    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
-    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
-}
-_MN = (
-    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
-    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-)
-
-DAY_MON_YR = re.compile(rf"\b(\d{{1,2}})\s+({_MN})\s*(\d{{2,4}})?\b", re.I)
-MON_DAY_YR = re.compile(rf"\b({_MN})\s+(\d{{1,2}})(?:,\s*(\d{{2,4}}))?\b", re.I)
-MON_YR     = re.compile(rf"\b({_MN})\s+(\d{{4}})\b", re.I)
-
-# known-safe-ish CDNs for hero art
-_IMG_HOSTS_FRIENDLY = {"i0.wp.com", "i1.wp.com", "images.ctfassets.net"}
-
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------\
 # NEW heuristics for on-screen drama vs off-camera gossip vs legal heat
 # -----------------------------------------------------------------------------
 
-# Reality-TV on-air drama signals. These imply "this happened ON SHOW"
+# Reality-TV on-air drama signals => happened ON SHOW
 _ONSCREEN_CONTEXT_RE = re.compile(
     r"\b("
     r"bigg boss|khatron ke khiladi|indian idol|reality show|in the house|on stage|during the episode|"
@@ -266,7 +202,7 @@ _PRIVATE_GOSSIP_RE = re.compile(
     re.I,
 )
 
-# Stuff that implies legal / PR heat / accusations
+# Legal / PR heat / accusations
 _LEGAL_HEAT_RE = re.compile(
     r"\b("
     r"fir\b|f\.i\.r\.|arrested|custody|detained|raid|raided|ed raid|ed\braid|"
@@ -277,27 +213,20 @@ _LEGAL_HEAT_RE = re.compile(
     re.I,
 )
 
-def _looks_like_on_air_drama(title: str, body: str) -> bool:
-    """
-    Heuristic: True if this is in-show / on-episode confrontation / eviction /
-    nomination / walkout / breakdown that aired publicly.
-    """
+def _drama_signal_strength(title: str, body: str) -> float:
+    """Scale up with the count of on-air drama indicators (capped)."""
     hay = f"{title}\n{body}".lower()
-    return bool(_ONSCREEN_CONTEXT_RE.search(hay))
+    count = len(list(_ONSCREEN_CONTEXT_RE.finditer(hay)))
+    if count <= 0:
+        return 0.0
+    # 0.75 per hit, cap at 3.0 to stay bounded
+    return min(3.0, 0.75 * count)
 
 def _looks_like_private_gossip(title: str, body: str) -> bool:
-    """
-    Heuristic: True if this is purely off-screen paparazzi / relationship /
-    airport / outfit / party spotting etc.
-    """
     hay = f"{title}\n{body}".lower()
     return bool(_PRIVATE_GOSSIP_RE.search(hay))
 
 def _looks_like_legal_heat(title: str, body: str) -> bool:
-    """
-    Heuristic: True if story involves legal/PR exposure areas:
-    FIR, arrest, boycott, censorship fight, accusation, etc.
-    """
     hay = f"{title}\n{body}".lower()
     return bool(_LEGAL_HEAT_RE.search(hay))
 
@@ -375,27 +304,35 @@ def _hash_link(link: str) -> str:
 # Release date / kind classification
 # =============================================================================
 
+_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+_MN = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+)
+
+DAY_MON_YR = re.compile(rf"\b(\d{{1,2}})\s+({_MN})\s*(\d{{2,4}})?\b", re.I)
+MON_DAY_YR = re.compile(rf"\b({_MN})\s+(\d{{1,2}})(?:,\s*(\d{{2,4}}))?\b", re.I)
+MON_YR     = re.compile(rf"\b({_MN})\s+(\d{{4}})\b", re.I)
+
 def _month_to_num(m: str) -> int | None:
     return _MONTHS.get(m.lower()[:3]) or _MONTHS.get(m.lower())
 
-
 def _nearest_future(year: int, month: int, day: int | None) -> datetime:
-    """
-    Try to interpret ambiguous "Oct 2025" / "Nov 5" etc. as
-    a sane future-ish release date.
-    """
+    """Interpret ambiguous 'Oct 2025' / 'Nov 5' as a sane future-ish date."""
     now = datetime.now(timezone.utc)
     d = 1 if day is None else max(1, min(28, day))
 
     if year < 100:
-        # Handle "25" → 2025 style two-digit years.
         year = 1900 + year if year >= 70 else 2000 + year
 
     candidate = datetime(year, month, d, tzinfo=timezone.utc)
 
     if candidate < now:
-        # If it's already in the past, and it was vague,
-        # bump one year forward.
         if day is None or len(str(year)) <= 2:
             try:
                 candidate = datetime(year + 1, month, d, tzinfo=timezone.utc)
@@ -404,10 +341,9 @@ def _nearest_future(year: int, month: int, day: int | None) -> datetime:
 
     return candidate
 
-
 def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
     """
-    Look for "in theatres Oct 25", "releasing 5 Nov", etc.
+    Look for 'in theatres Oct 25', 'releasing 5 Nov', etc.
     Returns (release_date_iso, is_theatrical, is_upcoming).
     """
     t = title or ""
@@ -447,7 +383,6 @@ def _parse_release_from_title(title: str) -> Tuple[Optional[str], bool, bool]:
     iso = rd.strftime("%Y-%m-%dT%H:%M:%SZ") if rd else None
     return (iso, is_theatrical, is_upcoming)
 
-
 def _detect_ott_provider(text: str) -> Optional[str]:
     """If text says 'now streaming on Netflix', pull 'Netflix'."""
     if not text:
@@ -456,7 +391,6 @@ def _detect_ott_provider(text: str) -> Optional[str]:
     if m:
         return m.group(1)
     return None
-
 
 def _classify(title: str, fallback: str = "news") -> Tuple[str, Optional[str], Optional[str], bool, bool]:
     """
@@ -478,7 +412,6 @@ def _classify(title: str, fallback: str = "news") -> Tuple[str, Optional[str], O
 
     return (fallback, None, None, False, False)
 
-
 def _build_kind_meta(
     kind: str,
     ott_platform: Optional[str],
@@ -486,9 +419,7 @@ def _build_kind_meta(
     is_upcoming: bool,
     rd_iso: Optional[str],
 ) -> Dict[str, Any]:
-    """
-    Metadata for frontend badges / chips.
-    """
+    """Metadata for frontend badges / chips."""
     if kind == "trailer":
         return {
             "kind": "trailer",
@@ -633,16 +564,12 @@ def _industry_tags(
 
     return [t for t in INDUSTRY_ORDER if t in cand]
 
-
 def _classify_verticals(
     title: str,
     body_text: str,
     source_domain: str,
 ) -> List[str]:
-    """
-    Map story → vertical(s) like ["entertainment"] or ["sports"].
-    Basically substring search against VERTICAL_RULES.
-    """
+    """Map story → vertical(s). Only 'entertainment' is supported."""
     blob = f"{title}\n{body_text}\n{source_domain}".lower()
 
     hits: set[str] = set()
@@ -665,7 +592,6 @@ def _classify_verticals(
             ordered.append(v)
     return ordered
 
-
 def _content_tags(
     base_industry_tags: List[str],
     title: str,
@@ -675,7 +601,8 @@ def _content_tags(
 ) -> List[str]:
     """
     Build story["tags"] for frontend chips / filters.
-    e.g. ["bollywood","box-office","trailer","ott","now-streaming","match-result"]
+    e.g. ["bollywood","box-office","trailer","ott","now-streaming"]
+    (No sports tags.)
     """
     tags = set(base_industry_tags or [])
     hay = f"{title}\n{body_text or ''}"
@@ -689,9 +616,6 @@ def _content_tags(
 
     if _BOX_OFFICE_RE.search(hay):
         tags.add("box-office")
-
-    if _SPORT_RESULT_RE.search(hay):
-        tags.add("match-result")
 
     return sorted(tags)
 
@@ -711,12 +635,8 @@ def _youtube_thumb(link: str | None) -> str | None:
     vid = m.group(1)
     return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
 
-
 def _images_from_html_block(html_str: Optional[str], base_url: str) -> List[Tuple[str, int]]:
-    """
-    Small wrapper for extractors._images_from_html_block().
-    Returns [(url, size_bias), ...].
-    """
+    """Thin wrapper around extractors._images_from_html_block()."""
     from apps.workers.extractors import _images_from_html_block as _imgs  # lazy import
     return _imgs(html_str, base_url)
 
@@ -727,10 +647,7 @@ _BAD_IMG_RE = re.compile(
 )
 
 def _looks_bad_brand_card(u: str) -> bool:
-    """
-    Try to filter social cards / watermarked promo thumbs we don't want
-    to ship in the app.
-    """
+    """Filter social cards / watermarked promo thumbs we don't want."""
     l = u.lower()
 
     if _BAD_IMG_RE.search(l):
@@ -746,12 +663,8 @@ def _looks_bad_brand_card(u: str) -> bool:
 
     return False
 
-
 def _numeric_size_hint(u: str) -> int:
-    """
-    Approximate resolution from the URL.
-    Bigger = probably a hero still.
-    """
+    """Approximate resolution from the URL. Bigger = probably a hero still."""
     size = 0
     m = re.search(r'(\d{3,5})[xX_ -](\d{3,5})', u)
     if m:
@@ -769,12 +682,10 @@ def _numeric_size_hint(u: str) -> int:
                 pass
     return size
 
+_IMG_HOSTS_FRIENDLY = {"i0.wp.com", "i1.wp.com", "images.ctfassets.net"}
 
 def _same_origin_bonus(img_url: str, page_url: str) -> int:
-    """
-    Reward images hosted on the same domain or on "friendly" CDNs,
-    because those tend to be real article stills rather than ad tiles.
-    """
+    """Reward same domain or friendly CDNs."""
     try:
         host_img = urlparse(img_url).netloc.lower().removeprefix("www.")
         host_pg  = urlparse(page_url).netloc.lower().removeprefix("www.")
@@ -786,12 +697,10 @@ def _same_origin_bonus(img_url: str, page_url: str) -> int:
         pass
     return 0
 
-
 def _is_tiny_wp_thumb(u: str) -> bool:
     """
-    Detect classic sidebar thumbs like ...-150x79.jpg or ...-300x169.png.
-    Those are usually unrelated recirculation widgets.
-    We'll call it "tiny" if both dims < ~320.
+    Detect classic sidebar thumbs like ...-150x79.jpg. We'll call it "tiny"
+    if both dims < ~320.
     """
     m = re.search(
         r'[-_](\d{2,4})x(\d{2,4})\.(?:jpe?g|png|webp|gif|avif|bmp|jfif|pjpeg)(?:[?#].*)?$',
@@ -807,14 +716,8 @@ def _is_tiny_wp_thumb(u: str) -> bool:
         return False
     return max(w, h) < 320
 
-
 def _score_image_for_card(img_url: str, page_url: str) -> int:
-    """
-    Score each candidate image:
-      + hero stills / posters / real gallery shots
-      - generic OG/social share cards
-      - tiny sidebar promos
-    """
+    """Score candidates: prefer hero stills; penalize generic/social/too small."""
     score = 0
     l = img_url.lower()
 
@@ -863,11 +766,10 @@ def _score_image_for_card(img_url: str, page_url: str) -> int:
 
     return score
 
-
 def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[str]) -> Optional[str]:
     """
-    Build a list of ALL candidate images for this story, score them,
-    pick the best. We never just blindly trust og:image.
+    Build a list of ALL candidate images for this story, score them, pick the best.
+    We never just blindly trust og:image.
     """
     def _norm_one(u: Optional[str]) -> Optional[str]:
         if not u:
@@ -928,7 +830,6 @@ def _pick_image_from_payload(payload: dict, page_url: str, thumb_hint: Optional[
     _best_score, best_url = scored[0]
     return best_url or None
 
-
 def _has_any_image(obj: Dict[str, Any]) -> bool:
     """Does this story already have ANY usable artwork field set?"""
     return bool(
@@ -951,15 +852,16 @@ def normalize_event(event: AdapterEventDict) -> dict:
     Steps:
       1. Gather basic source info (rss/youtube), title, timestamps.
       2. Clean body text.
-      3. Detect onscreen_drama / gossip_only / legal heat.
+      3. Compute drama_signal / gossip_only / legal heat.
       4. summarize_story_safe() → safe summary paragraph.
       5. generate_safe_title() → safe headline.
-      6. Merge risk & gossip flags with onscreen_drama policy.
-      7. Classify story.kind (trailer / ott / release / news).
-      8. Build kind_meta for frontend.
-      9. Derive verticals & tags.
-     10. Score images and pick a hero photo.
-     11. Enqueue the final story (with flags) to "sanitize".
+      6. Merge risk & gossip with policy:
+           - is_risky escalates if (legal_heat or drama_signal>0)
+           - gossip_only True unless drama_signal>0 (on-air content)
+      7. Classify story.kind (trailer / ott / release / news) + kind_meta.
+      8. Derive verticals & tags (entertainment-only).
+      9. Score images and pick a hero photo.
+     10. Enqueue the final story to "sanitize".
     """
     conn = _redis()
 
@@ -1015,20 +917,13 @@ def normalize_event(event: AdapterEventDict) -> dict:
     final_best = image_url or thumb_hint
 
     # ----------------------------------------------------------------
-    # NEW: internal classification BEFORE summarization
+    # Policy classification BEFORE summarization
     # ----------------------------------------------------------------
-    # We want these booleans regardless of what summarizer says.
-    # - onscreen_drama: on-air fights / nominations / evictions on reality TV.
-    # - private_gossip_only: off-camera paparazzi / airport / who's-dating-who.
-    # - legal_heat: FIRs, arrests, boycott, accusations, censorship fights.
-    #
-    # We'll use these below to force is_risky / gossip_only.
-    onscreen_drama_flag = _looks_like_on_air_drama(title, raw_text)
+    drama_signal = _drama_signal_strength(title, raw_text)
     private_gossip_flag = _looks_like_private_gossip(title, raw_text)
     legal_heat_flag     = _looks_like_legal_heat(title, raw_text)
 
     # --- safe summary / title --------------------------------------
-    # summarize_story_safe() → (summary_text, is_risky_s, gossip_only_s)
     summary_text, is_risky_s, gossip_only_s = summarize_story_safe(
         title,
         raw_text,
@@ -1036,7 +931,6 @@ def normalize_event(event: AdapterEventDict) -> dict:
         source_type=source,
     )
 
-    # generate_safe_title() → (clean_title, is_risky_t, gossip_only_t)
     clean_title, is_risky_t, gossip_only_t = generate_safe_title(
         title,
         raw_text,
@@ -1045,33 +939,26 @@ def normalize_event(event: AdapterEventDict) -> dict:
     )
 
     # --- merge risk & gossip ---------------------------------------
-    # Base from summarizer/title
     merged_is_risky = bool(is_risky_s or is_risky_t)
     merged_gossip   = bool(gossip_only_s or gossip_only_t)
 
-    # Escalate is_risky for legal heat, accusations, or reality show confrontations.
-    if legal_heat_flag or onscreen_drama_flag:
+    if legal_heat_flag or drama_signal > 0.0:
         merged_is_risky = True
 
-    # If it's obvious paparazzi personal-life content, mark gossip_only True.
+    # If obvious paparazzi personal-life content, mark gossip_only True…
     if private_gossip_flag:
         merged_gossip = True
 
-    # BUT: if this is onscreen_drama (happened on camera in a show episode),
-    # we explicitly allow it through the pipeline. So:
-    # - onscreen_drama_flag True → gossip_only MUST be False
-    #   (this is not "off-screen gossip", it's "what aired on TV")
-    if onscreen_drama_flag:
+    # …but if this clearly aired on camera (drama_signal>0), it is NOT "gossip_only".
+    if drama_signal > 0.0:
         merged_gossip = False
 
     final_is_risky = merged_is_risky
     final_gossip_only = merged_gossip
-    final_onscreen_drama = bool(onscreen_drama_flag)
 
     # --- tags / verticals / kind_meta ------------------------------
     industry_base = _industry_tags(source, source_domain, title, raw_text, payload)
     final_tags = _content_tags(industry_base, title, raw_text, kind, ott_platform)
-
     verticals = _classify_verticals(title, raw_text, source_domain)
 
     kind_meta = _build_kind_meta(
@@ -1094,38 +981,30 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "title":         clean_title,
         "summary":       summary_text or None,
 
-        # safety flags (sanitizer uses these)
-        # is_risky: True  → always write w/ attribution tone, may be legal/PR hot
-        # gossip_only: True → sanitizer will DROP (pure off-screen personal gossip)
-        # onscreen_drama: True → it's loud reality TV drama that aired on camera.
-        #   sanitizer SHOULD ALLOW this even if spicy, because it's not off-screen gossip.
-        "is_risky":        final_is_risky,
-        "gossip_only":     final_gossip_only,
-        "onscreen_drama":  final_onscreen_drama,
+        # safety flags for sanitizer
+        "is_risky":       final_is_risky,
+        "gossip_only":    final_gossip_only,
+        "drama_signal":   float(drama_signal),   # numeric, sanitizer expects this
 
-        # timestamps:
-        # published_at  -> source's publish timestamp (site / YouTube)
-        # ingested_at   -> when we pulled it
-        # normalized_at -> same as ingested_at here
+        # timestamps
         "published_at":  published_at,
         "ingested_at":   now_ts,
         "normalized_at": now_ts,
 
-        # release info:
+        # release info
         "release_date":  rd_iso,
         "is_theatrical": True if is_theatrical else None,
         "is_upcoming":   True if is_upcoming else None,
 
-        # source / deeplink:
+        # source / deeplink
         "url":           link or None,
         "source":        source,
         "source_domain": source_domain,
 
-        # OTT / platform info if relevant:
+        # OTT / platform info
         "ott_platform":  ott_platform,
 
-        # hero artwork for cards:
-        # fill ALL common keys so downstream never ends up blank-thumbed
+        # hero artwork (set all common keys so downstream never ends up blank)
         "thumb_url":     final_best,
         "poster_url":    final_best,
         "image":         final_best,
@@ -1133,7 +1012,7 @@ def normalize_event(event: AdapterEventDict) -> dict:
         "poster":        final_best,
         "media":         final_best,
 
-        # topical chips:
+        # topical chips
         "tags":          final_tags or None,
 
         # repair/debug payload for backfill_repair_recent()
@@ -1174,9 +1053,7 @@ def youtube_rss_poll(
     published_after: Optional[Union[str, datetime]] = None,
     max_items: int = YT_MAX_ITEMS,
 ) -> int:
-    """
-    Poll a YouTube channel's Atom feed, enqueue normalize_event() for new videos.
-    """
+    """Poll a YouTube channel's Atom feed, enqueue normalize_event() for new videos."""
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 
     conn = _redis()
@@ -1277,15 +1154,12 @@ def youtube_rss_poll(
     print(f"[youtube_rss_poll] channel={channel_id} emitted={emitted}")
     return emitted
 
-
 def rss_poll(
     url: str,
     kind_hint: str = "news",
     max_items: int = RSS_MAX_ITEMS,
 ) -> int:
-    """
-    Poll a generic RSS/Atom feed, enqueue normalize_event() for recent entries.
-    """
+    """Poll a generic RSS/Atom feed, enqueue normalize_event() for recent entries."""
     conn = _redis()
     etag_key = f"rss:etag:{url}"
     mod_key  = f"rss:mod:{url}"
@@ -1373,9 +1247,6 @@ def backfill_repair_recent(scan: int = None) -> int:
       - guarantee ingested_at exists
       - re-run improved hero image scoring and overwrite bad thumbs
         (tiny sidebar junk, generic OG cards, etc.)
-
-    This lets you retro-fix ugly images in the live feed without waiting
-    for new ingest.
     """
     conn = _redis()
     window = int(scan or REPAIR_SCAN)
