@@ -20,7 +20,7 @@ import os
 import re
 from typing import Iterable, Optional, Tuple, List, Dict, Any
 from urllib.parse import (
-    urljoin, urlparse, urlunparse, urlencode, parse_qsl, ParseResult
+    urljoin, urlparse, urlunparse, urlencode, parse_qsl
 )
 
 __all__ = [
@@ -44,9 +44,9 @@ OG_ALLOWED_DOMAINS = {
         "OG_ALLOWED_DOMAINS",
         (
             "bollywoodhungama.com,koimoi.com,pinkvilla.com,filmfare.com,"
-            "deadline.com,indiewire.com,slashfilm.com,"
+            "deadline.com,indiewire.com,slashfilm.com,vulture.com,"
             "tellyupdates.com,wordpress.com,wp.com,wordpress.org,wpengine.com,"
-            "cloudfront.net,akamaized.net"
+            "cloudfront.net,akamaized.net,images.ctfassets.net"
         ),
     ).split(",")
     if d.strip()
@@ -70,7 +70,8 @@ BAD_IMAGE_HOSTS = {
 }
 BAD_IMAGE_PATTERNS = re.compile(
     r"(?:sprite|favicon|logo[-_]?|watermark|default[-_]?og|default[-_]?share|"
-    r"social[-_]?share|generic[-_]?share|breaking[-_]?news[-_]?card)", re.I
+    r"social[-_]?share|generic[-_]?share|breaking[-_]?news[-_]?card)",
+    re.I,
 )
 
 # ============================== Debug helper =========================
@@ -129,7 +130,6 @@ def _unwrap_if_wpcom_proxy(u: str) -> str:
     if host not in {"i0.wp.com", "i1.wp.com", "i2.wp.com", "s0.wp.com", "s1.wp.com", "s2.wp.com"}:
         return u
     # Path looks like /www.koimoi.com/wp-content/...  — just return unchanged.
-    inner = p.path.lstrip("/").split("/", 1)[0].lower()
     if any(bad in p.path.lower() for bad in ("demo.tagdiv.com", "/newspaper/")):
         return ""
     return u
