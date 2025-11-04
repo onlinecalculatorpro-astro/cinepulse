@@ -6,31 +6,27 @@ import re
 from typing import List, Tuple, Optional
 
 # =====================================================================
-# Config / knobs
+# Summary/Tone targets (tight, single paragraph, industry-neutral)
 # =====================================================================
 
-# Target CinePulse tone:
-# - calm, factual, industry-style
-# - ~80-100 words, 1 tight paragraph
-# - numbers, dates, platforms, deltas are GOOD
-# - hype, clickbait, CTA are BAD
+# We want *consistent* blurbs: one paragraph, clean punctuation, 75–100 words.
+SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "85"))
+SUMMARY_MIN    = int(os.getenv("SUMMARY_MIN_WORDS", "75"))
+SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "100"))
 
-SUMMARY_TARGET = int(os.getenv("SUMMARY_TARGET_WORDS", "100"))
-SUMMARY_MIN    = int(os.getenv("SUMMARY_MIN_WORDS", "80"))
-SUMMARY_MAX    = int(os.getenv("SUMMARY_MAX_WORDS", "120"))  # keep it tight
+# Passthrough is only for extremely short bodies; keep thresholds low
+# so we still aim for the 75–100 word band whenever possible.
+PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "45"))
+PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "320"))
 
-# "passthrough mode" basically never fires unless it's extremely short
-PASSTHROUGH_MAX_WORDS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_WORDS", "60"))
-PASSTHROUGH_MAX_CHARS = int(os.getenv("SUMMARY_PASSTHROUGH_MAX_CHARS", "400"))
-
-# Headline constraints
-HEADLINE_MAX_CHARS = int(os.getenv("HEADLINE_MAX_CHARS", "110"))
+# Headline constraints + optional hedging for risky items
+HEADLINE_MAX_CHARS   = int(os.getenv("HEADLINE_MAX_CHARS", "110"))
+HEDGE_RISKY_TITLES   = os.getenv("HEDGE_RISKY_TITLES", "0").lower() not in ("0", "", "false", "no")
 
 # =====================================================================
 # Regex library
 # =====================================================================
 
-# Sentences that start like YouTube / promo hooks.
 _PROMO_PREFIX_RE = re.compile(
     r"^(watch|watch\s+now|check\s+(this|it)\s+out|don['’]t\s+miss|"
     r"don['’]t\s+forget|follow\s+us|subscribe|hit\s+the\s+bell|"
@@ -38,7 +34,6 @@ _PROMO_PREFIX_RE = re.compile(
     re.I,
 )
 
-# Soft fluff / fanbait intros that sound like "As fans eagerly await..."
 _SOFT_FLUFF_RE = re.compile(
     r"^(as\s+fans\s+(eagerly\s+)?await|"
     r"fans\s+are\s+(now\s+)?excited|"
@@ -51,7 +46,6 @@ _SOFT_FLUFF_RE = re.compile(
     re.I,
 )
 
-# Filler/redundant words that add no value
 _FILLER_WORDS_RE = re.compile(
     r"\b(recently|currently|actually|basically|essentially|"
     r"literally|really|very|quite|rather|somewhat|"
@@ -59,7 +53,6 @@ _FILLER_WORDS_RE = re.compile(
     re.I,
 )
 
-# CTA phrases we never want in summary.
 _CTA_NOISE_RE = re.compile(
     r"\b(get\s+tickets?|book\s+now|buy\s+now|pre[- ]?order|"
     r"link\s+in\s+bio|watch\s+now|stream\s+now|order\s+now|"
@@ -67,7 +60,6 @@ _CTA_NOISE_RE = re.compile(
     re.I,
 )
 
-# Overhype / gossip / fan-reaction framing that we penalize hard.
 _HYPE_RE = re.compile(
     r"\b(buzz(?:ing)?|internet\s+is\s+buzzing|fans\s+are\s+going\s+crazy|"
     r"fans\s+can['’]t\s+keep\s+calm|internet\s+reacts|"
@@ -79,14 +71,12 @@ _HYPE_RE = re.compile(
     re.I,
 )
 
-# Future hype / predictions we don't want in final paragraph.
 _FUTURE_HYPE_RE = re.compile(
     r"\b(poised\s+to|expected\s+to|set\s+to\s+dominate|"
     r"all\s+set\s+to\s+take\s+over|will\s+set\s+the\s+box\s+office\s+on\s+fire)\b",
     re.I,
 )
 
-# Noise chunks / scrape artefacts to strip pre-split.
 _NOISE_CHUNK_RE_LIST = [
     re.compile(r"\(\s*photo\s+credit[^)]*\)", re.I),
     re.compile(r"\(\s*image(?:s)?\s+credit[^)]*\)", re.I),
@@ -96,33 +86,27 @@ _NOISE_CHUNK_RE_LIST = [
     re.compile(r"(read\s+(also|more)\s*:[^\.!?]+[\.!?])", re.I),
 ]
 
-# Sentence splitter: ".", "!" or "?" followed by whitespace.
 _SENT_SPLIT_RE = re.compile(r"(?<=[\.!?])\s+")
 
-# Weak tail that feels cut-off / unfinished.
 _AUX_TAIL_RE = re.compile(
     r"\b(?:has|have|had|is|are|was|were|will|can|could|should|may|"
     r"might|do|does|did)\b[\.…]*\s*$",
     re.I,
 )
 
-# Ending words we don't want to end the whole summary on.
 _BAD_END_WORD = re.compile(
     r"\b(?:and|but|or|so|because|since|although|though|while|as)\.?$",
     re.I,
 )
 
-# Trim dangling ellipsis.
 _DANGLING_ELLIPSIS_RE = re.compile(r"(?:…|\.{3})\s*$")
 
-# Words we allow uppercase (acronyms/platforms).
 _PROTECTED_ACRONYMS = {
     "IPL", "FIFA", "UCL", "UFC", "NBA", "NFL",
     "OTT", "IMAX", "UHD", "4K", "VFX", "CGI",
     "PVR", "INOX", "SRK", "JIO", "HOTSTAR", "NETFLIX",
 }
 
-# We like factual / numeric / distributional info → bonus.
 _FACTUAL_BONUS_RE = re.compile(
     r"(\bday\s+\d+\b|"
     r"\bfirst\s+sunday\b|"
@@ -145,9 +129,7 @@ _FACTUAL_BONUS_RE = re.compile(
     re.I,
 )
 
-# =====================================================================
-# EXTRA REGEX FOR TITLE CLEANUP
-# =====================================================================
+# --- Headline cleanup -------------------------------------------------
 
 _HEADLINE_TAIL_RE = re.compile(
     r"\s*(--|—|–|:|\|)\s*(how\s+it\s+stacks\s+up.*|"
@@ -178,10 +160,9 @@ _HEADLINE_SPLIT_RE = re.compile(r"\s+(--|—|–|-{2,}|\||:)\s+")
 _HEADLINE_FILLER_RE = _FILLER_WORDS_RE
 
 # =====================================================================
-# LEGAL / DEFAMATION / GOSSIP RISK + ON-AIR DRAMA
+# Legal / defamation / gossip risk + on-air drama + minors/private
 # =====================================================================
 
-# Crime / lawsuit / scandal / morality play.
 _RISKY_RE = re.compile(
     r"\b("
     r"accused|allegations?|allegedly|arrested|detained|custody|in\s+custody|"
@@ -190,13 +171,13 @@ _RISKY_RE = re.compile(
     r"drug\s+case|drugs?\s+case|narcotics|money\s+laundering|scam|fraud|"
     r"cheating\s+case|cheated|extortion|tax\s+evasion|"
     r"harass(?:ment|ed)?|misconduct|assault|violence|molestation|"
-    r"backlash|boycott|trolled|slammed|controversy|controversial|leaked\s+chat|"
-    r"leaked\s+video|leaked\s+audio|private\s+video|affair"
+    r"backlash|boycott|trolled|slammed|controversy|controversial|"
+    r"leaked\s+chat|leaked\s+video|private\s+video|"
+    r"minor|under[-\s]?18"
     r")\b",
     re.I,
 )
 
-# Pure off-camera gossip / personal-life / outrage bait
 _GOSSIP_RE = re.compile(
     r"\b("
     r"affair|relationship|dating|spotted\s+together|"
@@ -207,7 +188,6 @@ _GOSSIP_RE = re.compile(
     re.I,
 )
 
-# Signals that the story is about work / release / business (lets us keep it).
 _WORK_INFO_RE = re.compile(
     r"(box\s*office|collection[s]?\b|opening\s+weekend|₹\s?\d|"
     r"\b\d+(\.\d+)?\s*(crore|cr)\b|day\s+\d+\b|"
@@ -218,7 +198,6 @@ _WORK_INFO_RE = re.compile(
     re.I,
 )
 
-# === ON-AIR DRAMA: reality shows / televised moments (allowed content)
 _ON_AIR_SHOWS_RE = re.compile(
     r"\b("
     r"bigg\s*boss(?:\s*ott)?|khatron\s+ke\s+khi?ladi|indian\s+idol|roadies|splitsvilla|"
@@ -237,13 +216,11 @@ _ON_AIR_TERMS_RE = re.compile(
 )
 
 def _detect_on_air_drama(title: str, body_text: str) -> Tuple[bool, Optional[str]]:
-    """Detect onscreen (televised) drama and return (is_on_air, show_name?)."""
     hay = f"{title or ''}\n{body_text or ''}"
     show = None
     m = _ON_AIR_SHOWS_RE.search(hay)
     if m:
         show = re.sub(r"\s+", " ", m.group(0)).strip().title()
-    # Consider it on-air if we have a show OR strong on-air terms (episode/eviction/etc.)
     if m or _ON_AIR_TERMS_RE.search(hay):
         return True, show
     return False, None
@@ -267,13 +244,11 @@ def _preclean_body_text(raw: str) -> str:
     text = re.sub(r"(will\s+it\s+[^?]+\?\s*)$", " ", text, flags=re.I | re.M)
     text = re.sub(r"(what\s+does\s+this\s+mean[^?]*\?\s*)$", " ", text, flags=re.I | re.M)
 
-    # Remove social handle fluff like "(Photo Credit – Instagram)".
+    # Remove social handle fluff and generic noise.
     text = re.sub(r"\(\s*(photo|image|pic)[^)]+\)", " ", text, flags=re.I)
-
-    # Remove obvious social plugs mid-body.
     text = re.sub(r"(follow\s+us\s+on\s+instagram[^\.!?]*[\.!?])", " ", text, flags=re.I)
 
-    # Remove vague time refs
+    # Vague time refs → drop
     text = re.sub(r"\b(recently|in\s+recent\s+times|lately)\b", "", text, flags=re.I)
 
     text = re.sub(r"[\r\n\t]+", " ", text)
@@ -303,7 +278,6 @@ def _polish_sentence(s: str) -> str:
 
     # Normalize phrasings
     s = re.sub(r"\b(\d+)-day\s+([A-Z][a-z]+)\s+schedule\b", r"\1-day schedule in \2", s, re.I)
-    s = re.sub(r"\btoo\s+slow\s+and\s+logistically\s+complex\b", "too complex to execute", s, re.I)
     s = re.sub(r"\brecently\s+completed\b", "completed", s, re.I)
     s = re.sub(r"\bcurrently\s+targeted[;,]?\s*the\s+date\s+is\s+not\s+yet\s+officially\s+confirmed\b", "targeted", s, re.I)
     s = re.sub(r"\bcurrently\s+targeted\b", "targeted", s, re.I)
@@ -374,8 +348,6 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
     redundancy_penalty = 0
     if re.search(r"\b(currently\s+targeted|not\s+yet\s+officially\s+confirmed)\b", s, re.I):
         redundancy_penalty -= 2
-    if re.search(r"\b(too\s+slow\s+and\s+logistically|too\s+slow\s+and)\b", s, re.I):
-        redundancy_penalty -= 1
 
     wc = len(s.split())
     length_penalty = (-2 if wc < 6 else 0) + (-2 if wc > 60 else 0)
@@ -389,6 +361,18 @@ def _score_sentence(title_kw: set[str], s: str) -> int:
         + length_penalty
         + redundancy_penalty
     )
+
+def _clamp_to_word_band(text: str, min_w: int, max_w: int) -> str:
+    words = text.split()
+    if not words:
+        return text
+    if len(words) > max_w:
+        words = words[:max_w]
+        text = " ".join(words).rstrip(",;:—–- ")
+        if text and text[-1] not in ".!?":
+            text += "."
+    # If below min, we cannot manufacture content here; keep as-is.
+    return text
 
 def _assemble_paragraph(chosen_sentences: List[str]) -> str:
     if not chosen_sentences:
@@ -413,6 +397,8 @@ def _assemble_paragraph(chosen_sentences: List[str]) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if text and text[-1] not in ".!?":
         text += "."
+    # Hard clamp to the 75–100 band (upper clamp only; lower is best-effort)
+    text = _clamp_to_word_band(text, SUMMARY_MIN, SUMMARY_MAX)
     return text
 
 def _select_sentences(title: str, body_text: str) -> List[str]:
@@ -440,7 +426,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
         scored.append((score, i, s))
     scored.sort(key=lambda x: (-x[0], x[1]))
 
-    candidate_idx = {i for _, i, _ in scored[:12]}
+    candidate_idx = {i for _, i, _ in scored[:14]}  # slightly larger pool
 
     chosen: List[Tuple[int, str]] = []
     total_words = 0
@@ -463,6 +449,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
             chosen.append((i, s))
             total_words += wc
 
+        # Prefer to land near target, within [MIN, MAX]
         if total_words >= SUMMARY_MIN and total_words >= SUMMARY_TARGET:
             break
 
@@ -502,7 +489,7 @@ def _select_sentences(title: str, body_text: str) -> List[str]:
             continue
         break
 
-    # trim if too long
+    # trim if too long (final safety before assemble)
     while True:
         words_now = sum(len(s.split()) for _, s in chosen)
         if words_now <= SUMMARY_MAX or len(chosen) <= 1:
@@ -537,34 +524,27 @@ def _clean_source_title(raw_title: str) -> str:
         return ""
     t = raw_title.strip()
 
-    # keep only first chunk before crazy splitters / pipes / ":" etc
+    # keep first chunk before pipes/colons/double-dash
     parts = _HEADLINE_SPLIT_RE.split(t)
     if parts:
         t = parts[0].strip()
 
-    # remove generic tails like "Explained", "Full Report"
+    # remove generic tails + hype + filler
     t = _HEADLINE_TAIL_RE.sub("", t).strip()
-
-    # de-hype
     t = _HEADLINE_HYPE_RE.sub("", t)
-
-    # remove filler words (basically, currently, etc.)
     t = _HEADLINE_FILLER_RE.sub("", t)
 
-    # squeeze spaces
+    # squeeze spaces + trim noisy trailing punctuation
     t = re.sub(r"\s{2,}", " ", t).strip()
-    # trim noisy trailing punctuation / separators
     t = re.sub(r"[\s\-\|:]+$", "", t).strip()
 
-    # fix weird ALL CAPS
+    # Fix ALL CAPS except protected acronyms
     fixed_words = [_clean_caps(w) for w in t.split()]
     t = " ".join(fixed_words).strip()
 
-    # Capitalize first letter if needed
+    # Capitalize first letter; strip clickbait trailing "?"
     if t and t[0].islower():
         t = t[0].upper() + t[1:]
-
-    # strip trailing "?" because it often comes from clickbait Q
     if t.endswith("?"):
         t = t[:-1].strip()
 
@@ -621,18 +601,21 @@ def generate_clean_title(raw_title: str, body_text: str) -> str:
     return base
 
 # =====================================================================
-# LEGAL / SAFETY WRAPPERS
+# LEGAL / SAFETY WRAPPERS (attribution + flags)
 # =====================================================================
+
+def _detect_on_air(title: str, body_text: str) -> bool:
+    is_on_air, _show = _detect_on_air_drama(title, body_text)
+    return is_on_air
 
 def _detect_risk_flags(title: str, body_text: str) -> Tuple[bool, bool, bool, Optional[str]]:
     """
     Returns:
         (is_risky, gossip_only, is_on_air, on_air_show_name)
 
-    - is_risky: legal/PR heat or on-air confrontation
-                (marked so sanitizer can force attribution elsewhere)
+    - is_risky: legal/PR heat or on-air confrontation or minors/private mentions
     - gossip_only: pure off-camera personal drama → sanitizer will drop
-    - is_on_air: TV/OTT on-air drama (still allowed content)
+    - is_on_air: TV/OTT on-air drama (allowed content; still marked risky in tone)
     """
     hay = f"{title or ''}\n{body_text or ''}"
 
@@ -642,21 +625,16 @@ def _detect_risk_flags(title: str, body_text: str) -> Tuple[bool, bool, bool, Op
 
     is_on_air, show = _detect_on_air_drama(title, body_text)
 
-    # Off-camera gossip becomes "gossip_only" only if it's not about work AND not on-air.
+    # Off-camera gossip → gossip_only only if not about work AND not on-air
     gossip_only = gossip_hit and not has_work_info and not is_on_air
 
-    # On-air drama is allowed, but it's still "risky" in tone,
-    # so we keep is_risky True for downstream handling.
+    # On-air drama and minors/private contexts are treated as risky tone
     if is_on_air:
         is_risky = True
 
     return (bool(is_risky), bool(gossip_only), bool(is_on_air), show)
 
 def _soften_phrases(text: str) -> str:
-    """
-    Take spicy/criminal/attack wording and soften it
-    to "reportedly", "according to", etc.
-    """
     if not text:
         return text or ""
     repls: List[Tuple[re.Pattern, str]] = [
@@ -681,10 +659,6 @@ def _soften_phrases(text: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip()
 
 def _summary_attribution_prefix(source_domain: Optional[str], source_type: Optional[str]) -> str:
-    """
-    For risky stories only (legal heat), prepend attribution in SUMMARY.
-    Titles will NOT carry attribution anymore.
-    """
     st = (source_type or "").lower()
     dom = (source_domain or "").strip()
     if st.startswith("youtube"):
@@ -700,10 +674,9 @@ def summarize_story_safe(
     source_type: Optional[str] = None,
 ) -> Tuple[str, bool, bool]:
     """
-    Safer wrapper around summarize_story().
-    - Build neutral ~100-word paragraph.
-    - Detect (is_risky, gossip_only, is_on_air).
-    - If risky (including on-air), soften phrasing + prepend attribution.
+    Build neutral ~85-word paragraph (75–100 band).
+    Detect (is_risky, gossip_only, is_on_air).
+    If risky (including on-air/minors/private hints), soften phrasing + prepend attribution.
     Returns: (safe_summary, is_risky, gossip_only)
     """
     base_summary = summarize_story(title, body_text)
@@ -713,10 +686,11 @@ def summarize_story_safe(
     if is_risky:
         safe_summary = _soften_phrases(safe_summary)
         prefix = _summary_attribution_prefix(source_domain, source_type)
-        # don't double-prepend
-        if not re.match(r"^(According to|A YouTube video claims:)", safe_summary, re.I):
+        if safe_summary and not re.match(r"^(According to|A YouTube video claims:)", safe_summary, re.I):
             safe_summary = f"{prefix} {safe_summary}"
 
+    # Final clamp to max words in case attribution pushes it over 100
+    safe_summary = _clamp_to_word_band(safe_summary, SUMMARY_MIN, SUMMARY_MAX)
     safe_summary = re.sub(r"\s{2,}", " ", safe_summary).strip()
     return (safe_summary, bool(is_risky), bool(gossip_only))
 
@@ -727,17 +701,18 @@ def generate_safe_title(
     source_type: Optional[str] = None,
 ) -> Tuple[str, bool, bool]:
     """
-    Build a clean, professional headline with NO attribution/prefix.
-    We still compute (is_risky, gossip_only) so sanitizer can decide
-    what to drop or mark, but we ALWAYS return a prefix-free title.
+    Build a clean, professional headline.
+    Default: no attribution/prefix. If HEDGE_RISKY_TITLES=1, prepend
+    a light hedge for risky items (“Report:” / “Video claims:”).
+    Returns (title, is_risky, gossip_only).
     """
     base_headline = generate_clean_title(raw_title, body_text)
 
-    # detect risk for downstream flags
     is_risky, gossip_only, _is_on_air, _show = _detect_risk_flags(raw_title, body_text)
 
     safe_headline = base_headline.strip()
+    if HEDGE_RISKY_TITLES and is_risky:
+        prefix = "Video claims: " if (source_type or "").lower().startswith("youtube") else "Report: "
+        safe_headline = _shorten_title_chars(prefix + safe_headline, HEADLINE_MAX_CHARS)
 
-    # DO NOT prepend "koimoi.com:", "YouTube video claims:", "On-air episode:", etc.
-    # UI will show "Source: ..." separately, so title must stay pure.
     return (safe_headline, bool(is_risky), bool(gossip_only))
